@@ -2,6 +2,15 @@
   "name": "@mars.liu/dsh-cybernetics",
   "version": "0.6.0",
   "private": false,
+  "files": [
+    "src",
+    "lib",
+    "workflows",
+    "docs",
+    "locale",
+    "cordis.patch.yml",
+    "README.md"
+  ],
   "description": "Cybernetic work protocol for DSH: the session goal (dsh-goal) driven loop of task -> verify -> triage agents, implicitly advanced via one workflow run per round. Server plugin + client goal tab.",
   "type": "module",
   "main": "src/index.ts",
