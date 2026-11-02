@@ -13,7 +13,9 @@ task agent → verify agent → triage agent，controller 在轮间推进，用�
     无多 goal 数据时回退到 dsh-goal 的 `goal` projection 单 goal 渲染；
   - 「控制」读 session list store（control stream 实时推送），递归展示本会话全部
     agent（主控 + subagent catalog）的运行状态与各自 goal projection
-    （objective / phase / rounds / 受阻原因），顶部汇总运行中数量。
+    （objective / phase / rounds / 受阻原因），顶部汇总运行中数量；v0.6 起顶部还列出
+    每个 goal 的**执行者行**（状态 + 标题 + executor 临时/持久 + 持久 teammate 名称 +
+    第 N 轮，未完成在前、已完成在后），数据源与「目标」页签同一份 `cyberneticsGoals` 投影。
 - 轮脚本：`workflows/round.js`（每次 run = 一轮；`roles` 表支持按角色覆盖 sub agent 模型）
 
 ## 状态
@@ -32,6 +34,13 @@ v0.6 追加：**只新增目标模型（append-only goals）**——goal 一经�
 true 时复用 cancel 路径。每次修订追加 `.cybernetics/revisions-<新goalId>.jsonl`。页签按两段排序
 （未完成在前、已完成 met/cancelled/superseded 在后，组内 `updatedAt` 倒序；服务端排序、客户端不重排），
 并显示「已被 <新标题> 取代」/「修订自 <旧标题>」；`GoalStatus` 增加 `superseded`。
+v0.6 追加：**板持久化与 rehydrate**——controller 的 goal 板在每个写点整值快照到
+`<workspace>/.cybernetics/board-<sessionId>.json`（`{version, sessionId, savedAt, goals}`，
+同目录临时文件 + rename 原子替换，失败不阻断）；重启后首次工具调用拿到空内存板时从快照恢复
+（缺失/损坏/版本不符/非法记录一律空板，不抛错）并立即重推一次 `cyberneticsGoals` 投影，
+「目标」页签因此不再在重启后清空。同一版「控制」页签新增每个 goal 的执行者行
+（状态 + 标题 + executor 临时/持久 + 持久 teammate 名称 + 轮次，未完成在前、已完成在后）；
+`GoalView` 增加可选 `memberName`，投影折叠保留。快照是当前状态而非事件日志，`updatedAt` 不持久化。
 v0.5：双档轮次（depth）——轻量分析 quick 单 agent 一轮直接反馈；复杂分析与变更走完整工作-验证循环。
 v0.4.1：硬门增加 allowlist 模式（只保留读+编排工具，挡住 farm_unregister 类长尾变更工具）。
 v0.4：可选硬门（`hardGate: true`）——装配期从顶层 session agent 物理摘除执行工具
@@ -75,6 +84,14 @@ preset-standard 恢复原样、无 patch 警告。
 children 必须放进 `props.children`（对照 dsh-client-ui-trajectory 编译产物），
 否则所有文本静默丢失、元素塌缩成空胶囊。修复后「目标 / 控制」两页签均完整
 渲染（2026-11-02：goal 徽章/objective/轮次 + 1/11 agent 树与各自 goal 状态）。
+
+第五次实测修正（改名后的回归）：`@mars.liu` 改名把包名从 `dsh-cybernetics` 变成
+`@mars.liu/dsh-cybernetics`，loader 行名同步了，但 `lib/client.js` 里
+`__ModuleLoader__.load({ id })` 仍是短名 → boot 报
+`could not load "@mars.liu/dsh-cybernetics": … loaded without registering`。
+规则：客户端 bundle 的注册 id 必须等于 package.json 的 `name`（client-modules
+boot graph 以包名为行键，`dsh.client.inject` 里的依赖同样按包名解析）；短名只用于
+loader 行 id（`- id: dsh-cybernetics`）。离线测试已加断言锁死这条不变量。
 
 ## 与 dsh 现有机制的关系
 

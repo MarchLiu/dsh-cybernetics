@@ -62,9 +62,45 @@ projection 纯折叠后由宿主把整值推给客户端，页签按**两段顺�
 固定 ephemeral / 空数组）：`executor` 待 Executor 适配层接入，`revisions` 在下面的 append-only
 模型下仅作兼容占位。
 
-已知边界：goal 板仍是**进程内存态**（`boards`），宿主重启后 projection 会重放会话日志里的
-`cybernetics/goals` 事件、页签仍显示旧 goal，而 controller 的板已为空——两者要等「首次触碰时
-从 projection 状态回灌 board」的 rehydrate 步骤落地后才完全一致（后续轮次）。
+已知边界：goal 板是**进程内存态**（`boards`），所以每个写点同时把整板快照到
+`<workspace>/.cybernetics/board-<sessionId>.json`，首次触碰空板时再 rehydrate（见下节
+「板持久化与 rehydrate」）；重启后「目标」页签与 controller 板由此重新一致。
+
+### v0.6 已实现：板持久化与 rehydrate
+
+问题：`boards` 是进程内存态，而 projection 只能重放**某个进程写过**的
+`plugin:cybernetics/goals` 事件。宿主重启后（尤其旧进程从未写过事件时）controller 板为空、
+页签也没有历史，用户无法再「分别跟踪」各 goal。
+
+- **快照文件**：`<workspace>/.cybernetics/board-<sessionId>.json`，每 session 一份，JSON 为
+  `{ version, sessionId, savedAt, goals: LoopState[] }`，`version` 当前为 `1`。
+  `sessionId` 取 `exec.agent.session.id`；文件名只保留 `[A-Za-z0-9._-]`（其余替换为 `_`），
+  避免任何路径逃逸。`LoopState` 的 `goalId`/`title`/`objective`/`round`/`doneSummary`/
+  `subgoal`/`role`/`depth`/`executor`/`memberName`/`status`/`paused`/`parentGoalId`/
+  `supersededBy`/`revisions`（以及 `brief`）都随快照保存。
+- **写点**：所有 board 变更（goal 创建、adopt dsh-goal 焦点 goal、`revise`/`supersede`、
+  `cancel`、`round`/`start` 启动前、`collect`/阻塞轮结算决策后）都经过
+  `publishBoard()`：先推 projection 事件，再原子落盘（同目录临时文件 + `rename`，
+  读方永远看不到半截 JSON）。落盘失败只吞掉（`try/catch`），只读工作区照样能跑轮次。
+- **读点**：工具 `execute` 首次拿到某个 session 的空内存板时，从快照恢复；文件不存在 /
+  非法 JSON / `version` 不符 / sessionId 不符 / goal 记录不可用 → 一律视为空板，绝不抛错
+  （半手改或半写入的快照只丢坏记录）。恢复成功后立即 `publishBoard()` 一次，把整板作为一条
+  `plugin:cybernetics/goals` 事件写回——页签不用等下一轮就显示历史 goal。
+- 边界：快照是**当前状态**，不是事件日志（事件日志仍在 session 里）；`updatedAt` 不持久化，
+  恢复后按本次 publish 重新计时，因此跨进程的组内排序在时间戳相同时按 `goalId` 兜底。
+  中途被杀死的轮会以 `status: 'running'` 恢复但已无运行句柄（`list` 的 `running` 为 false），
+  下一次 `round`/`start` 会正常重新启动。
+
+### v0.6 已实现：控制页签执行者行
+
+「控制 / Control」页签保留原有的 agent 树（主控 + subagent catalog 的运行状态与各自
+dsh-goal 视图），并在顶部新增 **goal 执行者行**：每个 goal 显示 状态徽标 + 标题 +
+执行者（临时/持久）+ 持久 teammate 名称（`GoalView.memberName`，仅 `executor: 'persistent'`
+且已投生时出现）+ 第 N 轮。顺序与「目标」页签同一规则：未完成组在前、已完成组
+（met/cancelled/superseded）在后；组内保持服务端投影顺序，客户端只做一次稳定分组、
+不重排。数据源就是同一份 `cyberneticsGoals` 整值投影（实时推送），没有第二套状态。
+`GoalView.memberName` 为可选字段，投影 `normalizeGoal` 折叠时保留，无成员时不出现在
+wire 上。
 
 ### v0.6 已实现：只新增目标模型（append-only goals）
 
@@ -230,6 +266,9 @@ Config `roles` 表把角色名映射到 `{provider, model}` 覆盖，round 脚�
   goalId 进文件名，防止多 goal 各自从 1 计轮互相覆盖——v0.3 实机实测发现并修复）。
 - v0.6 追加式目标模型：每次修订落 `<workspace>/.cybernetics/revisions-<新goalId>.jsonl`，
   一行 `{from, to, reason, at}`；旧 goal 的 round 日志保持不变，修订前后都可追溯。
+- v0.6 板持久化：每个 session 的 goal 板整值快照落
+  `<workspace>/.cybernetics/board-<sessionId>.json`（`{version, sessionId, savedAt, goals}`），
+  重启后首次工具调用即 rehydrate 并重推 projection（见「板持久化与 rehydrate」）。
 - goal 状态由 dsh-goal 的 session projection（`goal` 投影）承载，客户端「目标 / Goal」页签
   （`lib/client.js`，conversation.view slot）实时读取渲染：objective 文本 + phase + rounds。
   v0.2 为纯文本渲染；后续演进：任务分解、状态跟踪、verdict 历史可视化（参照 dsh-context 范式）。

@@ -57,6 +57,12 @@ export interface GoalView {
   status: GoalStatus
   depth: 'quick' | 'full'
   executor: GoalExecutor
+  /**
+   * Name of the durable Agent Teams teammate executing this goal (v0.6
+   * `executor: 'persistent'`). Present only once a persistent round has
+   * provisioned the member; ephemeral goals never carry it.
+   */
+  memberName?: string
   /** Rounds completed (the next round is `round + 1`). */
   round: number
   /** Current subgoal of the inner correction loop. */
@@ -154,6 +160,9 @@ function normalizeGoal(goal: GoalView): GoalView {
     status: goal.status,
     depth: goal.depth === 'quick' ? 'quick' : 'full',
     executor: goal.executor === 'persistent' ? 'persistent' : 'ephemeral',
+    ...(typeof goal.memberName === 'string' && goal.memberName.length > 0
+      ? { memberName: goal.memberName }
+      : {}),
     round: Number.isFinite(goal.round) ? Number(goal.round) : 0,
     ...(typeof goal.subgoal === 'string' && goal.subgoal.length > 0 ? { subgoal: goal.subgoal } : {}),
     ...(typeof goal.parentGoalId === 'string' && goal.parentGoalId.length > 0
@@ -227,6 +236,7 @@ function toGoalView(loop: LoopState, now: number): GoalView {
     status: statusOf(loop),
     depth: loop.depth === 'quick' ? 'quick' : 'full',
     executor: loop.executor === 'persistent' ? 'persistent' : 'ephemeral',
+    ...(loop.memberName ? { memberName: loop.memberName } : {}),
     round: Number.isFinite(loop.round) ? loop.round : 0,
     ...(loop.subgoal ? { subgoal: loop.subgoal } : {}),
     ...(loop.parentGoalId ? { parentGoalId: loop.parentGoalId } : {}),

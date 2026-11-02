@@ -22,11 +22,15 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  createGoal, foldRound, runRound, startRound, supersedeGoal, writeRevisionLog,
+  STATE_DIR, createGoal, foldRound, runRound, startRound, supersedeGoal, writeRevisionLog,
 } from './controller.ts'
-import type { ControllerConfig, ControllerDecision, LoopState, RoundResult, RolesConfig } from './controller.ts'
+import type {
+  ControllerConfig, ControllerDecision, LoopState, ResumableReason, RoundResult, RolesConfig,
+} from './controller.ts'
 import { startTeamRound, teamExecutorAvailable } from './executor.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals } from './projection.ts'
 
@@ -123,6 +127,154 @@ async function disposeOnce(handle: RunningRound): Promise<void> {
     await handle.run.dispose()
   } catch {
     // An already-settled or torn-down run must not fail the calling action.
+  }
+}
+
+// --- v0.6 board persistence / rehydrate -------------------------------------
+// The `boards` map above is process memory, and the `cyberneticsGoals`
+// projection only replays session events written by SOME process. After a host
+// restart the map is empty and — when the previous process never published (or
+// the log was not yet replayed) — so is the tab: every historical goal seems to
+// have vanished and the user can no longer track goals separately. Each
+// session's board therefore snapshots itself next to the round logs at
+// `<workspace>/.cybernetics/board-<sessionId>.json`, and the first tool call of
+// a session with an empty memory board restores it and republishes once.
+//
+// Persistence is durability, never workflow control: both directions swallow
+// their errors (a read-only workspace still runs rounds; a corrupt snapshot
+// degrades to a fresh board instead of failing the call).
+
+/** Snapshot format version; a mismatch is treated as "no snapshot". */
+export const BOARD_FILE_VERSION = 1
+
+/** On-disk board snapshot: the controller's whole goal board for one session. */
+export interface BoardFile {
+  version: number
+  sessionId: string
+  /** Epoch milliseconds of the snapshot write. */
+  savedAt: number
+  goals: LoopState[]
+}
+
+const BOARD_STATUSES: ReadonlySet<string> = new Set(['running', 'paused', 'met', 'cancelled', 'superseded'])
+const PAUSE_REASONS: ReadonlySet<string> = new Set([
+  'goal-questionable', 'human-input', 'round-cap', 'failed', 'no-goal',
+])
+const UNSAFE_FILENAME = /[^a-zA-Z0-9._-]/g
+
+/** Snapshot file name for one session (ids are slugged: never a path escape). */
+export function boardFileName(sessionId: string): string {
+  return `board-${sessionId.replace(UNSAFE_FILENAME, '_')}.json`
+}
+
+/** Absolute snapshot path under the workspace root. */
+export function boardFilePath(root: string, sessionId: string): string {
+  return join(root, STATE_DIR, boardFileName(sessionId))
+}
+
+/**
+ * Normalize one persisted goal back into a LoopState. Anything that is not a
+ * usable goal record (no goalId, wrong shape) is dropped, so a partially
+ * hand-edited or half-written snapshot still yields a usable board.
+ */
+function restoreLoop(raw: unknown): LoopState | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const g = raw as Record<string, unknown>
+  if (typeof g.goalId !== 'string' || g.goalId.length === 0) return undefined
+  const loop: LoopState = {
+    goalId: g.goalId,
+    round: typeof g.round === 'number' && Number.isFinite(g.round) ? g.round : 0,
+    doneSummary: typeof g.doneSummary === 'string' ? g.doneSummary : '',
+    subgoal: typeof g.subgoal === 'string' ? g.subgoal : '',
+    role: typeof g.role === 'string' && g.role.length > 0 ? g.role : 'default',
+  }
+  if (typeof g.title === 'string') loop.title = g.title
+  if (typeof g.objective === 'string') loop.objective = g.objective
+  if (typeof g.brief === 'string') loop.brief = g.brief
+  if (g.depth === 'quick' || g.depth === 'full') loop.depth = g.depth
+  if (g.executor === 'ephemeral' || g.executor === 'persistent') loop.executor = g.executor
+  if (typeof g.memberName === 'string' && g.memberName.length > 0) loop.memberName = g.memberName
+  if (typeof g.status === 'string' && BOARD_STATUSES.has(g.status)) loop.status = g.status as LoopState['status']
+  if (g.paused !== null && typeof g.paused === 'object' && !Array.isArray(g.paused)) {
+    const p = g.paused as Record<string, unknown>
+    if (typeof p.reason === 'string' && PAUSE_REASONS.has(p.reason) && typeof p.note === 'string') {
+      loop.paused = { reason: p.reason as ResumableReason, note: p.note }
+    }
+  }
+  if (typeof g.parentGoalId === 'string' && g.parentGoalId.length > 0) loop.parentGoalId = g.parentGoalId
+  if (typeof g.supersededBy === 'string' && g.supersededBy.length > 0) loop.supersededBy = g.supersededBy
+  if (Array.isArray(g.revisions)) {
+    loop.revisions = []
+    for (const entry of g.revisions) {
+      if (entry === null || typeof entry !== 'object') continue
+      const r = entry as Record<string, unknown>
+      loop.revisions.push({
+        version: typeof r.version === 'number' && Number.isFinite(r.version) ? r.version : 0,
+        reason: typeof r.reason === 'string' ? r.reason : '',
+        at: typeof r.at === 'number' && Number.isFinite(r.at) ? r.at : 0,
+      })
+    }
+  }
+  return loop
+}
+
+/**
+ * Read one session's board snapshot. Missing file, unreadable file, invalid
+ * JSON, a different format version or a foreign session id all mean "no
+ * history" — this function never throws.
+ */
+export async function loadBoardFile(root: string, sessionId: string): Promise<LoopState[] | undefined> {
+  let text: string
+  try {
+    text = await readFile(boardFilePath(root, sessionId), 'utf8')
+  } catch {
+    return undefined // no snapshot: a genuinely fresh session
+  }
+  try {
+    const parsed = JSON.parse(text) as Partial<BoardFile> | null
+    if (parsed === null || typeof parsed !== 'object') return undefined
+    if (parsed.version !== BOARD_FILE_VERSION) return undefined
+    if (typeof parsed.sessionId === 'string' && parsed.sessionId !== sessionId) return undefined
+    if (!Array.isArray(parsed.goals)) return undefined
+    const out: LoopState[] = []
+    const seen = new Set<string>()
+    for (const raw of parsed.goals) {
+      const loop = restoreLoop(raw)
+      if (loop === undefined || loop.goalId === undefined || seen.has(loop.goalId)) continue
+      seen.add(loop.goalId)
+      out.push(loop)
+    }
+    return out
+  } catch {
+    return undefined // corrupt snapshot: behave like an empty board
+  }
+}
+
+/**
+ * Atomically snapshot one session's board (temp file + rename, so a concurrent
+ * reader never sees a half-written JSON). Returns the snapshot path, or
+ * undefined when the write failed — never throws.
+ */
+export async function saveBoardFile(
+  root: string,
+  sessionId: string,
+  loops: Iterable<LoopState>,
+): Promise<string | undefined> {
+  const file = boardFilePath(root, sessionId)
+  const payload: BoardFile = {
+    version: BOARD_FILE_VERSION,
+    sessionId,
+    savedAt: Date.now(),
+    goals: [...loops],
+  }
+  const tmp = `${file}.${process.pid}-${randomUUID().slice(0, 8)}.tmp`
+  try {
+    await mkdir(join(root, STATE_DIR), { recursive: true })
+    await writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
+    await rename(tmp, file)
+    return file
+  } catch {
+    return undefined
   }
 }
 
@@ -442,6 +594,9 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       const root = workingDirectory.get(parent.session)
       const action = args.action ?? 'round'
 
+      const sessionId = typeof parent.session?.id === 'string' && parent.session.id.length > 0
+        ? parent.session.id
+        : undefined
       const board = boards.get(parent.session) ?? new Map<string, LoopState>()
       boards.set(parent.session, board)
 
@@ -449,8 +604,27 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       // `cybernetics/goals` event, so the「目标」tab tracks every goal of this
       // session (dsh-goal's single-slot `goal` projection cannot). Idempotent:
       // republishing an unchanged board appends nothing and never throws.
-      const publishBoard = (): void => {
+      // Then snapshot the same board to `<workspace>/.cybernetics/board-<id>.json`
+      // so a restarted controller can rehydrate it (see loadBoardFile).
+      const publishBoard = async (): Promise<void> => {
         publishGoals(parent.session, goalsFromBoard(board.values()))
+        if (sessionId !== undefined && typeof root === 'string' && root.length > 0) {
+          await saveBoardFile(root, sessionId, board.values())
+        }
+      }
+
+      // v0.6 read point: first touch of a session after a host restart (empty
+      // memory board). Restore the snapshot and republish it once, so the tab
+      // shows the recovered history immediately instead of waiting for the next
+      // round. A missing/corrupt/foreign snapshot leaves the board empty.
+      if (board.size === 0 && sessionId !== undefined && typeof root === 'string' && root.length > 0) {
+        const restored = await loadBoardFile(root, sessionId)
+        if (restored !== undefined && restored.length > 0) {
+          for (const restoredLoop of restored) {
+            if (restoredLoop.goalId !== undefined) board.set(restoredLoop.goalId, restoredLoop)
+          }
+          await publishBoard()
+        }
       }
 
       // 'list' needs no goal resolution and no workflow engine.
@@ -459,6 +633,9 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           board: [...board.values()].map((g) => ({
             goalId: g.goalId, title: g.title, objective: g.objective, status: g.status ?? 'paused',
             running: running.has(g.goalId!), round: g.round, subgoal: g.subgoal,
+            depth: g.depth ?? 'full',
+            executor: g.executor ?? 'ephemeral',
+            ...(g.memberName ? { memberName: g.memberName } : {}),
             ...(g.parentGoalId ? { parentGoalId: g.parentGoalId } : {}),
             ...(g.supersededBy ? { supersededBy: g.supersededBy } : {}),
           })),
@@ -507,7 +684,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         board.set(goalId, loop)
         // Goal creation is a projection write point: the tab gains the goal
         // immediately, before the first round settles.
-        publishBoard()
+        await publishBoard()
         if (!goalView || goalView.phase !== 'active') {
           try { goals.create(parent, { objective: `${args.title}\n\n${objective}` }) } catch { /* focus sync is best-effort */ }
         }
@@ -541,7 +718,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
 
       // A goal adopted from the dsh-goal focus slot joins the board here; make
       // it visible in the tab even when this call changes nothing else.
-      publishBoard()
+      await publishBoard()
 
       const controllerConfig: ControllerConfig = {
         roundScriptPath: config.roundScriptPath ?? fileURLToPath(new URL('../workflows/round.js', import.meta.url)),
@@ -649,7 +826,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         if (args.brief ?? previous.brief) next.brief = args.brief ?? previous.brief
         board.set(newGoalId, next)
         supersedeGoal(previous, newGoalId)
-        publishBoard()
+        await publishBoard()
         const at = Date.now()
         let revisionLog: string | undefined
         try {
@@ -685,7 +862,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         if (!h) return { goalId: loop.goalId, cancelled: '该 goal 当前没有运行中的轮' }
         loop.status = 'cancelled'
         h.run.cancel(args.brief ?? 'session agent 决定终止（用户修正）')
-        publishBoard()
+        await publishBoard()
         return { goalId: loop.goalId, round: h.round, cancelled: '已请求中止；完成通知到达后请 collect 折叠结果' }
       }
 
@@ -699,7 +876,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         running.delete(loop.goalId!)
         await disposeOnce(h)
         // Round settlement decision applied — republish (round / status / subgoal).
-        publishBoard()
+        await publishBoard()
         return { goalId: loop.goalId, round: h.round, decision, result }
       }
 
@@ -711,7 +888,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       // In-flight visibility: the blocking 'round' path can run for minutes, so
       // publish before awaiting it (the async path needs no second publish —
       // the state did not change).
-      publishBoard()
+      await publishBoard()
 
       if (action === 'start') {
         const { round } = await launchBackground(loop)
@@ -729,7 +906,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       const { result, decision } = await foldRound(root, handle.round, settled, loop, controllerConfig)
       applyDecision(loop, result.round, result, decision)
       // Round settlement decision applied — republish (round / status / subgoal).
-      publishBoard()
+      await publishBoard()
       return { goalId: loop.goalId, round: result.round, decision, result }
     },
   })

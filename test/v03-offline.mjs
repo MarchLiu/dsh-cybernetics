@@ -4,10 +4,10 @@
 // Run: node test/v03-offline.mjs
 
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { apply } from '../src/index.ts'
+import { apply, loadBoardFile, saveBoardFile } from '../src/index.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setRecordAppender, EVENT_TYPE, LEGACY_EVENT_TYPE } from '../src/projection.ts'
 
 // --- fake workflow engine ---------------------------------------------------
@@ -37,12 +37,15 @@ function fakeEngine() {
 }
 
 // --- fake host ctx ------------------------------------------------------------
-function fakeHost(engine, { activeGoal } = {}) {
+// Each host gets its own session id by default so board persistence (v0.6) is
+// scoped per session: reusing one id across independent hosts would rehydrate
+// the previous host's goals from the shared workspace snapshot.
+function fakeHost(engine, { activeGoal, sessionId = 'sess-test' } = {}) {
   const tools = []
   const followups = []
   const createdGoals = []
   const parent = {
-    session: { id: 'sess-test' },
+    session: { id: sessionId },
     followup(message) { followups.push(message) },
   }
   const rootPromise = mkdtemp(join(tmpdir(), 'cyb-test-'))
@@ -541,13 +544,21 @@ let goalId
 
 // --- offline client render harness (shared by the client render checks) ------
 // Loads lib/client.js exactly as the ModuleLoader would, with stubbed
-// react/jsx-runtime, and returns the registered「目标」tab plus the locale dict.
+// react/jsx-runtime, and returns the registered「目标 / 控制」tabs, the locale
+// dict and the mutable session-list snapshot the control tab subscribes to.
 async function loadClientTab() {
   const src = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
   let loaded
   globalThis.window = { __ModuleLoader__: { load: (m) => { loaded = m } } }
   new Function('window', src)(globalThis.window)
   assert.ok(loaded, 'client module registered with the ModuleLoader')
+  // The registration id must be the package manifest name: the client-modules
+  // boot graph keys every row by that name and materializes a row only when its
+  // bundle registered under exactly that id. The short plugin row id
+  // (`dsh-cybernetics`) is not it — a stale id loads the script and then fails
+  // boot with `could not load "@mars.liu/dsh-cybernetics": loaded without registering`.
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.equal(loaded.id, pkg.name, 'bundle registration id equals the package name (boot graph row id)')
 
   const flatten = (node, out = []) => {
     if (node === null || node === undefined || typeof node === 'boolean') return out
@@ -575,6 +586,8 @@ async function loadClientTab() {
     return text
   }
   const registered = []
+  // Session-list snapshot the control tab renders its agent tree from.
+  const listSnapshot = { byId: {}, projectionsBySession: {} }
   mod.apply({
     effect: (fn) => fn(),
     locale: { register: (_ns, dictionaries) => Object.assign(dict, dictionaries.zh), bind: () => t },
@@ -583,11 +596,17 @@ async function loadClientTab() {
       binding: () => ({
         session: { projections: { faceOf: (key) => ({ getSnapshot: () => values[key], subscribe: () => () => {} }) } },
       }),
+      list: { subscribe: () => () => {}, getSnapshot: () => listSnapshot },
     },
   })
   const tab = registered.find((entry) => entry.spec.id === 'cybernetics-goal')
   assert.ok(tab, '目标 tab registered')
-  return { src, flatten, values, dict, t, tab, injected: tab.spec.inject('sess-client') }
+  const control = registered.find((entry) => entry.spec.id === 'cybernetics-control')
+  assert.ok(control, '控制 tab registered')
+  return {
+    src, flatten, values, dict, t, tab, injected: tab.spec.inject('sess-client'),
+    control, injectedControl: control.spec.inject('sess-client'), listSnapshot,
+  }
 }
 
 // 22. v0.6 client tab render (offline, stubbed react/jsx-runtime): the multi-goal
@@ -626,7 +645,7 @@ async function loadClientTab() {
 //     starts the successor's first round — also when the old goal was completed
 {
   const engine23 = fakeEngine()
-  const host = fakeHost(engine23)
+  const host = fakeHost(engine23, { sessionId: 'sess-test-23' })
   host.ctx.workingDirectory = { get: () => root }
   apply(host.ctx, {})
   const tool23 = host.tools[0]
@@ -701,7 +720,7 @@ async function loadClientTab() {
 //     in-flight task agent is interrupted (default false); bad revisions are rejected
 {
   const engine24 = fakeEngine()
-  const host = fakeHost(engine24)
+  const host = fakeHost(engine24, { sessionId: 'sess-test-24' })
   host.ctx.workingDirectory = { get: () => root }
   apply(host.ctx, {})
   const tool24 = host.tools[0]
@@ -1031,4 +1050,196 @@ async function loadClientTab() {
   console.log('✓ 33 execution gate: root mutation calls denied at dispatch; children unaffected')
 }
 
-console.log('\nALL 33 CHECKS PASSED')
+// 34. v0.6 board persistence: every publish snapshots the session board to
+//     <workspace>/.cybernetics/board-<sessionId>.json — creation and settlement
+//     are both write points, and the snapshot carries the full LoopState
+let boardSnapshot
+{
+  const persistRoot = await mkdtemp(join(tmpdir(), 'cyb-board-'))
+  const engine34 = fakeEngine()
+  const host34 = fakeHost(engine34, { sessionId: 'sess-persist' })
+  host34.ctx.workingDirectory = { get: () => persistRoot }
+  apply(host34.ctx, {})
+  const tool34 = host34.tools[0]
+  const exec34 = { agent: host34.parent, signal: undefined }
+
+  const started = await tool34.execute({
+    action: 'start', title: '持久化任务', brief: '委托书P', depth: 'quick',
+  }, exec34)
+  const boardFile = join(persistRoot, '.cybernetics', 'board-sess-persist.json')
+  const saved = JSON.parse(await readFile(boardFile, 'utf8'))
+  assert.equal(saved.version, 1, 'snapshot carries a format version')
+  assert.equal(saved.sessionId, 'sess-persist')
+  assert.equal(typeof saved.savedAt, 'number')
+  const entry = saved.goals.find((g) => g.goalId === started.goalId)
+  assert.ok(entry, 'created goal is on disk')
+  assert.equal(entry.title, '持久化任务')
+  assert.equal(entry.objective, '委托书P')
+  assert.equal(entry.depth, 'quick')
+  assert.equal(entry.status, 'running', 'in-flight round persisted as running')
+  assert.equal(entry.round, 0)
+
+  engine34.runs[0].settle({
+    stopReason: 'completed',
+    value: {
+      round: 1,
+      report: { summary: 'P 半成', done: false, artifacts: [], evidence: 'e', nextStepThoughts: [] },
+      verdict: { met: false, criteria: [], gaps: ['缺口P'], goalItselfQuestionable: false },
+      triage: { auto: [], defer: [], reject: [], human: [] },
+    },
+  })
+  await new Promise((r) => setImmediate(r))
+  await tool34.execute({ action: 'collect', goalId: started.goalId }, exec34)
+  const after = JSON.parse(await readFile(boardFile, 'utf8'))
+  const settled = after.goals.find((g) => g.goalId === started.goalId)
+  assert.equal(settled.round, 1, 'settlement write point persists the advanced round')
+  assert.equal(settled.status, 'paused')
+  assert.match(settled.subgoal, /缺口P/)
+  boardSnapshot = { root: persistRoot, sessionId: 'sess-persist', goalId: started.goalId }
+  console.log('✓ 34 board persistence: create + settle write .cybernetics/board-<session>.json')
+}
+
+// 35. v0.6 rehydrate round-trip: a fresh process (new ctx, empty memory board,
+//     same workspace + session id) recovers the history from disk AND
+//     republishes it, so the「目标」tab is not empty after a host restart
+{
+  assert.ok(boardSnapshot, 'prior test wrote a snapshot')
+  const appends = []
+  setRecordAppender((_session, type, data) => {
+    appends.push({ type, data: JSON.parse(JSON.stringify(data)) })
+  })
+  const host35 = fakeHost(fakeEngine(), { sessionId: boardSnapshot.sessionId })
+  const engine35 = host35.ctx.agentPresets.serviceFor(undefined, 'workflowEngine')
+  // A loggable session (publishGoals only writes to a real Session-shaped
+  // target); the appender above records the event it would append.
+  host35.parent.session.append = () => ({})
+  host35.ctx.workingDirectory = { get: () => boardSnapshot.root }
+  apply(host35.ctx, {})
+  const tool35 = host35.tools[0]
+  const exec35 = { agent: host35.parent, signal: undefined }
+
+  const out = await tool35.execute({ action: 'list' }, exec35)
+  assert.equal(out.board.length, 1, 'the whole history is rebuilt from the snapshot')
+  const restored = out.board.find((g) => g.goalId === boardSnapshot.goalId)
+  assert.ok(restored, 'historical goal recovered from disk')
+  assert.equal(restored.title, '持久化任务')
+  assert.equal(restored.objective, '委托书P')
+  assert.equal(restored.round, 1)
+  assert.equal(restored.status, 'paused')
+  assert.match(restored.subgoal, /缺口P/)
+  assert.equal(restored.executor, 'ephemeral', 'list reports the restored substrate')
+
+  const published = appends.filter((e) => e.type === EVENT_TYPE)
+  assert.equal(published.length, 1, 'rehydrate republishes the restored board exactly once')
+  assert.equal(published[0].data.goals.length, 1)
+  assert.equal(published[0].data.goals[0].goalId, boardSnapshot.goalId)
+  assert.equal(published[0].data.goals[0].round, 1, 'the recovered round reaches the tab')
+
+  // Idempotent: the board is no longer empty, so a second call neither
+  // rehydrates nor publishes again.
+  const out2 = await tool35.execute({ action: 'list' }, exec35)
+  assert.equal(out2.board.length, 1)
+  assert.equal(appends.filter((e) => e.type === EVENT_TYPE).length, 1)
+
+  // A restored goal must remain DRIVABLE: it continues at the next round with
+  // the persisted work order, not at round 1 with an empty brief.
+  const next = await tool35.execute({ action: 'start', goalId: boardSnapshot.goalId }, exec35)
+  assert.equal(next.round, 2, 'restored goal continues at round 2')
+  assert.equal(engine35.runs.at(-1).request.args.state.round, 2, 'workflow receives the next round')
+  assert.equal(engine35.runs.at(-1).request.args.brief, '委托书P', 'the persisted work order reaches the next round')
+  setRecordAppender(undefined)
+  console.log('✓ 35 rehydrate: fresh ctx recovers the board, republishes once, and stays drivable (round 2)')
+}
+
+// 36. v0.6 rehydrate is failure-tolerant: invalid JSON, a foreign format
+//     version, unusable goal records and a missing file all mean "empty board",
+//     never a throw
+{
+  const corruptRoot = await mkdtemp(join(tmpdir(), 'cyb-corrupt-'))
+  await mkdir(join(corruptRoot, '.cybernetics'), { recursive: true })
+  await writeFile(join(corruptRoot, '.cybernetics', 'board-sess-corrupt.json'), '{"version": 1, "goals": [ not json ,,,')
+  await writeFile(
+    join(corruptRoot, '.cybernetics', 'board-sess-oldver.json'),
+    JSON.stringify({ version: 99, sessionId: 'sess-oldver', savedAt: 1, goals: [{ goalId: 'g-old', round: 1 }] }),
+  )
+  await writeFile(
+    join(corruptRoot, '.cybernetics', 'board-sess-junk.json'),
+    JSON.stringify({ version: 1, sessionId: 'sess-junk', savedAt: 1, goals: [null, 42, { title: 'no id' }, { goalId: '' }] }),
+  )
+  for (const sessionId of ['sess-corrupt', 'sess-oldver', 'sess-junk', 'sess-missing']) {
+    const host36 = fakeHost(fakeEngine(), { sessionId })
+    host36.ctx.workingDirectory = { get: () => corruptRoot }
+    apply(host36.ctx, {})
+    const out = await host36.tools[0].execute({ action: 'list' }, { agent: host36.parent, signal: undefined })
+    assert.deepEqual(out.board, [], `${sessionId}: unusable snapshot degrades to an empty board`)
+  }
+  console.log('✓ 36 corrupt / foreign-version / junk / missing snapshot: empty board, no throw')
+}
+
+// 37. v0.6 GoalView.memberName: the durable teammate's name rides the wire,
+//     survives the projection fold and round-trips through the board snapshot
+{
+  const persistentLoop = {
+    goalId: 'g-member', title: '持久目标', objective: 'o', round: 2, doneSummary: '', subgoal: 's',
+    role: 'default', status: 'running', executor: 'persistent', memberName: 'cyb-member-1',
+  }
+  const ephemeralLoop = {
+    goalId: 'g-plain', title: '临时目标', objective: 'o', round: 1, doneSummary: '', subgoal: 's',
+    role: 'default', status: 'paused', executor: 'ephemeral',
+  }
+  const snap = goalsFromBoard([persistentLoop, ephemeralLoop], 500)
+  const member = snap.goals.find((g) => g.goalId === 'g-member')
+  const plain = snap.goals.find((g) => g.goalId === 'g-plain')
+  assert.equal(member.memberName, 'cyb-member-1', 'persistent goal exposes its teammate name')
+  assert.equal(member.executor, 'persistent')
+  assert.equal('memberName' in plain, false, 'no durable member ⇒ no field on the wire')
+
+  const unit = cyberneticsGoalsProjection()
+  const folded = unit.apply(unit.init(), {
+    type: EVENT_TYPE,
+    data: { goals: JSON.parse(JSON.stringify(snap.goals)) },
+  })
+  assert.equal(folded.goals.find((g) => g.goalId === 'g-member').memberName, 'cyb-member-1',
+    'projection fold keeps the member name')
+  assert.equal('memberName' in folded.goals.find((g) => g.goalId === 'g-plain'), false)
+
+  const memberRoot = await mkdtemp(join(tmpdir(), 'cyb-member-'))
+  await saveBoardFile(memberRoot, 'sess-m', [persistentLoop])
+  const loaded = await loadBoardFile(memberRoot, 'sess-m')
+  assert.equal(loaded.length, 1)
+  assert.equal(loaded[0].memberName, 'cyb-member-1', 'snapshot round-trip keeps the member name')
+  assert.equal(loaded[0].executor, 'persistent')
+  console.log('✓ 37 GoalView.memberName: wire + projection + snapshot round-trip preserve the teammate name')
+}
+
+// 38. v0.6 control tab executor rows: every goal listed with status, executor
+//     (ephemeral/persistent), the durable member name when present and the
+//     round; unfinished goals first, finished after
+{
+  const { flatten, values, t, control, injectedControl, dict } = await loadClientTab()
+  assert.ok(control, '控制 tab registered')
+  assert.ok(dict['goal.member'], 'zh locale has the member line')
+  assert.ok(dict['goal.executor.persistent'], 'zh locale has the persistent executor label')
+  assert.ok(dict['control.goals'], 'zh locale has the control goal header')
+
+  // Deliberately completed-first: the control tab must group, not trust order.
+  values.cyberneticsGoals = {
+    goals: [
+      { goalId: 'cyb-done', title: '已完成目标', objective: 'o', status: 'met', depth: 'full', executor: 'ephemeral', round: 3, revisions: [], updatedAt: 900 },
+      { goalId: 'cyb-live', title: '持久分析', objective: 'o', status: 'running', depth: 'full', executor: 'persistent', round: 2, memberName: 'cyb-live-1', revisions: [], updatedAt: 100 },
+    ],
+  }
+  const text = flatten(control.view({ ...injectedControl, t })).join('\n')
+  assert.ok(text.indexOf('持久分析') < text.indexOf('已完成目标'), 'unfinished goals render before completed ones')
+  assert.match(text, /持久执行者/)
+  assert.match(text, /临时执行者/)
+  assert.match(text, /成员 cyb-live-1/, 'the durable teammate name is shown')
+  assert.match(text, /第 2 轮/)
+  assert.match(text, /第 3 轮/)
+  assert.match(text, /已完成/)
+  assert.equal((text.match(/成员 /g) ?? []).length, 1, 'only goals with a durable member show the member tag')
+  assert.match(text, /主控|sess-client/, 'the agent tree stays rendered below the goal rows')
+  console.log('✓ 38 control tab: goal rows show executor + teammate name + round, unfinished first')
+}
+
+console.log('\nALL 38 CHECKS PASSED')
