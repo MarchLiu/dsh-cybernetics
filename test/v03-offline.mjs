@@ -12,7 +12,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { apply, loadBoardFile, saveBoardFile } from '../src/index.ts'
 import { agentTeamsOf, startTeamRound, teamExecutorAvailable } from '../src/executor.ts'
-import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setRecordAppender, EVENT_TYPE, LEGACY_EVENT_TYPE, resolveHostSessionCopy, hostSessionStatus, setPublishDebugRoot, DEBUG_DIR, DEBUG_FILE } from '../src/projection.ts'
+import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setRecordAppender, setAppenderCandidatesForTest, EVENT_TYPE, LEGACY_EVENT_TYPE, resolveHostSessionCopy, hostSessionStatus, setPublishDebugRoot, DEBUG_DIR, DEBUG_FILE, MAX_DEBUG_ERROR_CHARS } from '../src/projection.ts'
 
 // --- fake workflow engine ---------------------------------------------------
 function fakeEngine() {
@@ -1511,9 +1511,9 @@ let boardSnapshot
   console.log('✓ 43 subagent/end capture: lastAssistantMessage is the source; legacy `output` still works')
 }
 
-// 44. Host-copy resolver: the same file must SKIP the dynamic import (the
-//     static import already binds the host copy), and the one-shot resolution
-//     record lands in `<workspace>/.cybernetics/publish-debug.log`.
+// 44. Host-copy resolver: BOTH dynamic candidates are loaded unconditionally
+//     (the old "same path → skip" short-circuit is gone), and the one-shot
+//     resolution record lands in `<workspace>/.cybernetics/publish-debug.log`.
 //     Root cause this guards: the plugin's own copy lives under the profile's
 //     node_modules, while the running host's Session class comes from the copy
 //     bundled with the dsh install. `appendPluginRecord` commits through a
@@ -1523,24 +1523,33 @@ let boardSnapshot
 {
   const status = hostSessionStatus()
   assert.equal(status.needsHostImport, false,
-    'this process resolves one dsh-session copy: no dynamic import needed')
+    'this process resolves one dsh-session copy (both candidates are still loaded)')
   assert.equal(status.ownPath, status.hostPath, 'own and host resolution agree on the same file')
   assert.match(status.ownPath, /dsh-session[\\/]lib[\\/]index\.js$/,
     'ownPath points at the dsh-session entry file')
-  assert.equal(status.hostAppendReady, false, 'same-file case leaves the static import in charge')
+  // Policy change (v0.6+): the "same path → skip the dynamic import"
+  // short-circuit is GONE. Both dynamic candidates are loaded unconditionally
+  // (deduped by realpath), because the host copy resolving to the same file as
+  // our static import did NOT mean the host's Session class came from it.
+  assert.equal(status.hostAppendReady, true,
+    'dynamic candidates load even when they resolve to the static import copy')
+  assert.equal(status.pluginAppendReady, true, 'the plugin-package copy is loaded as the third candidate')
+  assert.match(status.pluginPath, /dsh-session[\\/]lib[\\/]index\.js$/,
+    'the third candidate is <packageRoot>/node_modules/@deepseek-ai/dsh-session/lib/index.js')
 
   // A fake host entry that cannot resolve the specifier: the failure is
-  // recorded, never thrown, and no dynamic import is attempted.
+  // recorded, never thrown, and only the static/plugin candidates remain.
   const missing = resolveHostSessionCopy('/tmp/cyb-no-such-host-entry.mjs')
-  assert.equal(missing.needsHostImport, false, 'unresolvable host copy: no import attempted')
+  assert.equal(missing.needsHostImport, false, 'unresolvable host copy: no host candidate')
   assert.equal(missing.hostPath, undefined)
   assert.equal(missing.resolvedFrom, undefined)
   assert.ok(typeof missing.error === 'string' && missing.error.length > 0,
     'resolution failure is captured for the debug record')
 
-  // A fake host entry inside this repo resolves the SAME copy → also skipped.
+  // A fake host entry inside this repo resolves the SAME copy — resolution
+  // still reports it truthfully; loading is no longer gated on that.
   const sameTree = resolveHostSessionCopy(fileURLToPath(new URL('../src/projection.ts', import.meta.url)))
-  assert.equal(sameTree.needsHostImport, false, 'same-file host entry: dynamic import skipped')
+  assert.equal(sameTree.needsHostImport, false, 'same-file host entry resolves one copy')
   assert.equal(sameTree.hostPath, sameTree.ownPath)
 
   // Launcher symlinks are followed: `node` keeps argv[1] as the INVOKED path
@@ -1553,11 +1562,12 @@ let boardSnapshot
   const viaLink = resolveHostSessionCopy(linkPath)
   assert.equal(realpathSync(viaLink.resolvedFrom), realpathSync(realScript),
     'a symlinked entry is resolved through its realpath')
-  assert.equal(viaLink.hostPath, viaLink.ownPath, 'still the same copy, so the import is skipped')
+  assert.equal(viaLink.hostPath, viaLink.ownPath, 'still the same copy')
   assert.equal(viaLink.needsHostImport, false)
   assert.equal(viaLink.error, undefined, 'following the launcher symlink leaves nothing to report')
 
-  // One-shot record: written once, under the workspace, with no payload data.
+  // Records: one one-shot resolution line per workspace root, plus one publish
+  // result line per publish. No payload data in either.
   const ws = await mkdtemp(join(tmpdir(), 'cyb-publish-debug-'))
   setPublishDebugRoot(ws)
   const injected = []
@@ -1569,28 +1579,38 @@ let boardSnapshot
   const logPath = join(ws, DEBUG_DIR, DEBUG_FILE)
   assert.equal(DEBUG_DIR, '.cybernetics')
   assert.equal(DEBUG_FILE, 'publish-debug.log')
-  assert.ok(existsSync(logPath), 'resolution record written under <workspace>/.cybernetics')
-  const lines = (await readFile(logPath, 'utf8')).trim().split('\n')
-  assert.equal(lines.length, 1, 'exactly one append-only line per workspace root')
-  const record = JSON.parse(lines[0])
-  assert.equal(record.event, 'host-session')
+  assert.ok(existsSync(logPath), 'records written under <workspace>/.cybernetics')
+  const lines = (await readFile(logPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
+  const hostLines = lines.filter((line) => line.event === 'host-session')
+  assert.equal(hostLines.length, 1, 'exactly one resolution line per workspace root')
+  const publishLines = lines.filter((line) => line.event === 'publish')
+  assert.equal(publishLines.length, 1, 'one publish-result line per publish')
+  const record = hostLines[0]
   assert.equal(record.specifier, '@deepseek-ai/dsh-session')
   assert.equal(record.needsHostImport, false)
-  assert.equal(record.hostAppendReady, false)
+  assert.equal(record.hostAppendReady, true)
+  assert.equal(record.pluginAppendReady, true)
   assert.equal(record.ownPath, record.hostPath)
   assert.equal(record.error, null)
+  assert.equal(publishLines[0].result, 'published')
+  assert.equal(publishLines[0].candidate, 'injected', 'the test-injected appender is labelled')
   assert.ok(!('data' in record) && !('state' in record), 'no goal payload in the debug record')
+  assert.ok(!('data' in publishLines[0]) && !('state' in publishLines[0]),
+    'no goal payload in the publish record')
 
-  // One line per workspace root, and revisiting a root never appends again.
+  // One resolution line per workspace root, and revisiting a root never
+  // appends another one (publish lines are per publish, by design).
   const otherWs = await mkdtemp(join(tmpdir(), 'cyb-publish-debug-other-'))
   setPublishDebugRoot(otherWs)
   const otherLines = (await readFile(join(otherWs, DEBUG_DIR, DEBUG_FILE), 'utf8')).trim().split('\n')
-  assert.equal(otherLines.length, 1, 'another workspace gets its own single line')
+  assert.equal(otherLines.length, 1, 'another workspace gets its own single resolution line')
   setPublishDebugRoot(ws)
-  assert.equal((await readFile(logPath, 'utf8')).trim().split('\n').length, 1,
-    'revisiting a recorded workspace root appends nothing')
+  const afterRevisit = (await readFile(logPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
+  assert.equal(afterRevisit.filter((line) => line.event === 'host-session').length, 1,
+    'revisiting a recorded workspace root appends no second resolution line')
+  assert.equal(afterRevisit.length, 2, 'resolution line + one publish line only')
   setRecordAppender(undefined)
-  console.log('✓ 44 host-copy resolver: same file skips the dynamic import; one line per workspace root')
+  console.log('✓ 44 host-copy resolver: both copies load unconditionally; resolution + publish records')
 }
 
 // 45. Production shape, end to end in a child process: `process.argv[1]` is the
@@ -1609,7 +1629,7 @@ let boardSnapshot
   if (!existsSync(DSH_BIN) || !existsSync(HOST_COPY)) {
     // Deterministic skip: another machine may have a single copy only.
     const solo = resolveHostSessionCopy(HOST_ENTRY)
-    assert.equal(solo.needsHostImport, false, 'no second copy: nothing to import (static import stays)')
+    assert.equal(solo.needsHostImport, false, 'no second copy: host and static candidates coincide')
     console.log('✓ 45 cross-copy publish: skipped (this machine has a single dsh-session copy)')
   } else {
     const ws = await mkdtemp(join(tmpdir(), 'cyb-host-copy-'))
@@ -1623,10 +1643,10 @@ const [workspace, projectionFile, hostEntry, hostCopy] = process.argv.slice(2)
 // Pretend to be the host process: the resolver starts from the entry script.
 process.argv[1] = hostEntry
 const projection = await import(pathToFileURL(projectionFile).href)
-// The host-copy import is fire-and-forget; wait until it settles.
+// Both dynamic candidates are fire-and-forget; wait until they settle.
 for (let i = 0; i < 300; i += 1) {
   const s = projection.hostSessionStatus()
-  if (s.hostAppendReady === true || s.loadError !== undefined) break
+  if ((s.hostAppendReady === true && s.pluginAppendReady === true) || s.loadError !== undefined) break
   await new Promise((resolve) => setTimeout(resolve, 10))
 }
 projection.setPublishDebugRoot(workspace)
@@ -1638,7 +1658,8 @@ const result = projection.publishGoals(session, { goals: [{
   executor: 'ephemeral', round: 1, revisions: [], updatedAt: 1,
 }] })
 const event = session.log.at(-1)
-const debug = await readFile(workspace + '/.cybernetics/publish-debug.log', 'utf8')
+const debug = (await readFile(workspace + '/.cybernetics/publish-debug.log', 'utf8'))
+  .trim().split('\\n').map((line) => JSON.parse(line))
 console.log(JSON.stringify({
   status,
   result,
@@ -1658,7 +1679,8 @@ console.log(JSON.stringify({
     assert.equal(out.status.needsHostImport, true,
       'host entry script resolves a DIFFERENT dsh-session copy')
     assert.equal(out.status.hostAppendReady, true, 'host-copy appendPluginRecord loaded')
-    assert.equal(out.status.loadError, undefined, 'host-copy import did not fail')
+    assert.equal(out.status.pluginAppendReady, true, 'the plugin-package copy loaded too')
+    assert.equal(out.status.loadError, undefined, 'dynamic candidate imports did not fail')
     assert.equal(out.status.argv1, HOST_ENTRY, 'resolution started from the invoked entry path')
     assert.equal(realpathSync(out.status.resolvedFrom), realpathSync(HOST_ENTRY),
       'the launcher symlink was followed to its real script')
@@ -1672,13 +1694,114 @@ console.log(JSON.stringify({
     assert.equal(out.event.seq, 0, 'first event in the session log')
     assert.equal(out.event.ignorable, true, 'plugin record stays ignorable (restart-safe)')
 
-    const debugLine = JSON.parse(out.debug.trim())
-    assert.equal(debugLine.needsHostImport, true, 'debug record shows the host copy was imported')
-    assert.equal(debugLine.hostAppendReady, true)
-    assert.equal(realpathSync(debugLine.hostPath), realpathSync(HOST_COPY))
-    assert.equal(realpathSync(debugLine.resolvedFrom), realpathSync(HOST_ENTRY))
-    console.log('✓ 45 cross-copy publish: launcher symlink followed, host copy loaded, event lands on a host Session')
+    const debugHost = out.debug.find((line) => line.event === 'host-session')
+    const debugPublish = out.debug.find((line) => line.event === 'publish')
+    assert.ok(debugHost !== undefined, 'resolution record present')
+    assert.ok(debugPublish !== undefined, 'publish-result record present')
+    assert.equal(debugHost.needsHostImport, true, 'debug record shows the host copy was imported')
+    assert.equal(debugHost.hostAppendReady, true)
+    assert.equal(realpathSync(debugHost.hostPath), realpathSync(HOST_COPY))
+    assert.equal(realpathSync(debugHost.resolvedFrom), realpathSync(HOST_ENTRY))
+    assert.equal(debugPublish.result, 'published')
+    assert.match(debugPublish.candidate, /^#1 host /,
+      'the host copy is the winning candidate (static import was candidate #0)')
+    assert.equal(realpathSync(debugPublish.candidate.replace(/^#\d+ \w+ /, '')), realpathSync(HOST_COPY),
+      'the winner label carries the host copy path')
+    assert.ok(Array.isArray(debugPublish.errors) && debugPublish.errors.length >= 1,
+      'the rejected static-import candidate left its error behind')
+    assert.match(debugPublish.errors[0], /Receiver must be an instance of class Session/,
+      'the recorded error is the exact cross-copy brand rejection')
+    assert.ok(!('data' in debugPublish) && !('state' in debugPublish),
+      'no goal payload in the publish record')
+    console.log('✓ 45 cross-copy publish: launcher symlink followed, host copy wins, event lands on a host Session')
   }
 }
 
-console.log('\nALL 45 CHECKS PASSED')
+// 46. Candidate chain: the static import rejects a foreign Session with the
+//     private-field brand error, the NEXT candidate accepts it. Publishing
+//     succeeds and the debug record names the winning candidate.
+{
+  const ws = await mkdtemp(join(tmpdir(), 'cyb-candidates-'))
+  setPublishDebugRoot(ws)
+  setRecordAppender(undefined)
+  const accepted = []
+  setAppenderCandidatesForTest([
+    {
+      kind: 'static',
+      path: '/fake/core/@deepseek-ai/dsh-session/lib/index.js',
+      append: () => { throw new TypeError('Receiver must be an instance of class Session') },
+    },
+    {
+      kind: 'host',
+      path: '/fake/profile/@deepseek-ai/dsh-session/lib/index.js',
+      append: (_session, type, data) => { accepted.push({ type, data }); return { ok: true } },
+    },
+  ])
+  const session = { id: 'candidate-session', append: () => ({}), header: { cwd: ws } }
+  const state = {
+    goals: [{
+      goalId: 'cyb-cand', title: 'C', objective: 'o', status: 'running', depth: 'full',
+      executor: 'ephemeral', round: 1, revisions: [], updatedAt: 1,
+    }],
+  }
+  assert.equal(publishGoals(session, state), 'published',
+    'second candidate accepts the record after the first rejects the brand')
+  assert.equal(accepted.length, 1, 'exactly one candidate landed the record')
+  assert.equal(accepted[0].type, EVENT_TYPE)
+
+  const lines = (await readFile(join(ws, DEBUG_DIR, DEBUG_FILE), 'utf8'))
+    .trim().split('\n').map((line) => JSON.parse(line))
+  const publish = lines.filter((line) => line.event === 'publish').at(-1)
+  assert.equal(publish.result, 'published')
+  assert.equal(publish.candidate, '#1 host /fake/profile/@deepseek-ai/dsh-session/lib/index.js',
+    'the debug record names the winning candidate (index + kind + path)')
+  assert.equal(publish.errors.length, 1, 'the rejected candidate is still reported')
+  assert.match(publish.errors[0], /^#0 static /)
+  assert.match(publish.errors[0], /Receiver must be an instance of class Session/)
+  assert.ok(!('data' in publish) && !('state' in publish), 'no goal payload in the publish record')
+  setAppenderCandidatesForTest(undefined)
+  setRecordAppender(undefined)
+  console.log('✓ 46 candidate chain: brand rejection falls through; winning candidate recorded')
+}
+
+// 47. Every candidate rejects: the publish degrades to `failed` (a publish must
+//     never break the round) and the debug record keeps each truncated error.
+{
+  const ws = await mkdtemp(join(tmpdir(), 'cyb-candidates-fail-'))
+  setPublishDebugRoot(ws)
+  setRecordAppender(undefined)
+  const long = 'x'.repeat(900)
+  setAppenderCandidatesForTest([
+    {
+      kind: 'static',
+      path: '/fake/a/lib/index.js',
+      append: () => { throw new TypeError('Receiver must be an instance of class Session') },
+    },
+    {
+      kind: 'host',
+      path: '/fake/b/lib/index.js',
+      append: () => { throw new Error(`host exploded ${long}`) },
+    },
+  ])
+  const session = { id: 'allfail-session', append: () => ({}), header: { cwd: ws } }
+  assert.equal(publishGoals(session, { goals: [] }), 'failed',
+    'all candidates rejecting is a failed publish, not a thrown round')
+  const lines = (await readFile(join(ws, DEBUG_DIR, DEBUG_FILE), 'utf8'))
+    .trim().split('\n').map((line) => JSON.parse(line))
+  const publish = lines.filter((line) => line.event === 'publish').at(-1)
+  assert.equal(publish.result, 'failed')
+  assert.equal(publish.candidate, null, 'no winning candidate when every candidate fails')
+  assert.equal(publish.errors.length, 2, 'one error excerpt per rejected candidate')
+  assert.match(publish.errors[0], /Receiver must be an instance of class Session/)
+  assert.match(publish.errors[1], /host exploded/)
+  for (const entry of publish.errors) {
+    const detail = entry.replace(/^#\d+ \w+ [^:]*: /, '')
+    assert.ok(detail.length <= MAX_DEBUG_ERROR_CHARS,
+      `error excerpt truncated to ${MAX_DEBUG_ERROR_CHARS} chars`)
+  }
+  setAppenderCandidatesForTest(undefined)
+  setRecordAppender(undefined)
+  console.log('✓ 47 all candidates reject: publish reports failed, debug record carries truncated errors')
+}
+
+console.log('\nALL 47 CHECKS PASSED')

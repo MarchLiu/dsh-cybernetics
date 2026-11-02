@@ -24,10 +24,10 @@
  * @module dsh-cybernetics/projection
  */
 
-import { appendFileSync, mkdirSync, realpathSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { appendPluginRecord } from '@deepseek-ai/dsh-session'
 import type { LoopState } from './controller.ts'
 
@@ -293,13 +293,19 @@ const published = new WeakMap<object, string>()
 export type RecordAppender = (session: unknown, type: string, data: unknown) => unknown
 
 const MODULE_SPECIFIER = '@deepseek-ai/dsh-session'
-/** Directory (inside a workspace root) that receives the one-shot record. */
+/** Directory (inside a workspace root) that receives the record. */
 export const DEBUG_DIR = '.cybernetics'
-/** File name of the one-shot host-copy resolution record. */
+/** File name of the resolution/publish record. */
 export const DEBUG_FILE = 'publish-debug.log'
+/** Longest error excerpt kept per candidate in the publish record. */
+export const MAX_DEBUG_ERROR_CHARS = 300
 
 function errorText(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+}
+
+function truncate(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`
 }
 
 /** Outcome of resolving the host's own copy of `@deepseek-ai/dsh-session`. */
@@ -310,7 +316,11 @@ export interface HostSessionResolution {
   ownPath: string | undefined
   /** File the host's entry script resolves `@deepseek-ai/dsh-session` to. */
   hostPath: string | undefined
-  /** True when the host copy is a DIFFERENT file → a dynamic import is required. */
+  /**
+   * True when the host copy is a DIFFERENT file from this module's static
+   * import. Diagnostic only: both dynamic candidates are loaded regardless
+   * (a same-file resolution never proved the Session brand matched).
+   */
   needsHostImport: boolean
   /** The base that actually resolved (differs from `argv1` for a launcher symlink). */
   resolvedFrom?: string
@@ -393,54 +403,254 @@ export function resolveHostSessionCopy(
 
 /** Resolution performed once, at module init, from the host's entry script. */
 const resolution = resolveHostSessionCopy()
-/** Host-copy appender; undefined until the dynamic import settles. */
-let hostAppend: RecordAppender | undefined
-let hostLoadError: string | undefined
-/** True once the host-copy import settled (or was correctly skipped). */
-let hostSettled = !resolution.needsHostImport
-/** Workspace root for the one-shot record; supplied by the caller. */
-let debugRoot: string | undefined
-/** Roots already recorded (one line per workspace root, never repeated). */
-const debugWritten = new Set<string>()
 
 /**
- * Append the resolution/load outcome to
- * `<workspace>/.cybernetics/publish-debug.log` (one JSON line, append mode).
- * Written at most once per workspace root, as soon as both the root and the
- * host-copy outcome are known — a multi-workspace host gets one line per
- * workspace, each readable after a restart. Observability only: any failure is
- * ignored.
+ * Resolve the copy of `@deepseek-ai/dsh-session` that sits under THIS package's
+ * own `node_modules` (this repo checks that path in as a symlink to the
+ * profile's install). It is a separate candidate from the host entry's copy:
+ * the Session instance the plugin is handed may come from either install, and
+ * only the copy that DEFINED the instance's class can pass
+ * `appendPluginRecord`'s private-field brand check.
+ *
+ * Zero-dep and pure: existence checks only, no import. Walks up to the package
+ * root (the first ancestor with a `package.json`) and then looks for the
+ * conventional nested path there.
+ * @param selfUrl - this module's URL; defaults to `import.meta.url`.
  */
-function flushPublishDebug(): void {
+export function resolvePluginSessionCopy(selfUrl: string = import.meta.url): string | undefined {
+  try {
+    let dir = dirname(fileURLToPath(selfUrl))
+    let packageRoot: string | undefined
+    for (let depth = 0; depth < 8; depth += 1) {
+      if (existsSync(join(dir, 'package.json'))) {
+        packageRoot = dir
+        break
+      }
+      const parent = dirname(dir)
+      if (parent === dir) break
+      dir = parent
+    }
+    if (packageRoot === undefined) return undefined
+    const candidate = join(packageRoot, 'node_modules', '@deepseek-ai', 'dsh-session', 'lib', 'index.js')
+    return existsSync(candidate) ? candidate : undefined
+  } catch {
+    // A virtual/foreign URL: no third candidate, the other two still try.
+    return undefined
+  }
+}
+
+/** One module copy loaded (or being loaded) for the appender candidates. */
+interface DynamicCopy {
+  /** The callable once the import settled successfully. */
+  appender?: RecordAppender
+  /** Load failure text (diagnostics only, never payload data). */
+  error?: string
+}
+
+/** Loaded copies by realpath: one import per distinct file. */
+const dynamicCopies = new Map<string, DynamicCopy>()
+/** Dynamic imports still in flight. */
+let dynamicPending = 0
+/** True once every dynamic candidate settled (successfully or not). */
+let hostSettled = false
+/** Workspace root for the records; supplied by the caller. */
+let debugRoot: string | undefined
+/** Roots already carrying the one-shot resolution line. */
+const debugWritten = new Set<string>()
+
+/** Append one JSON line to `<workspace>/.cybernetics/publish-debug.log`. */
+function appendDebugRecord(record: Record<string, unknown>): void {
   const root = debugRoot
-  if (root === undefined || !hostSettled || debugWritten.has(root)) return
-  debugWritten.add(root)
+  if (root === undefined) return
   try {
     mkdirSync(join(root, DEBUG_DIR), { recursive: true })
-    appendFileSync(
-      join(root, DEBUG_DIR, DEBUG_FILE),
-      `${JSON.stringify({
-        at: new Date().toISOString(),
-        event: 'host-session',
-        specifier: MODULE_SPECIFIER,
-        argv1: resolution.argv1 ?? null,
-        ownPath: resolution.ownPath ?? null,
-        hostPath: resolution.hostPath ?? null,
-        resolvedFrom: resolution.resolvedFrom ?? null,
-        needsHostImport: resolution.needsHostImport,
-        hostAppendReady: hostAppend !== undefined,
-        error: resolution.error ?? hostLoadError ?? null,
-      })}\n`,
-    )
+    appendFileSync(join(root, DEBUG_DIR, DEBUG_FILE), `${JSON.stringify(record)}\n`)
   } catch {
     // A read-only workspace still publishes; the record is best-effort.
   }
 }
 
+/** One appender candidate, tried in list order until one accepts the record. */
+export interface AppenderCandidate {
+  /** 0-based position in the active list (part of the debug label). */
+  index: number
+  /** Where the appender comes from. */
+  kind: 'static' | 'host' | 'plugin' | 'test'
+  /** Path summary of the module behind it (a path, never payload data). */
+  path: string
+  /** The callable, or undefined while its dynamic import is still pending. */
+  get(): RecordAppender | undefined
+}
+
+/** Test-only shape: one appender with the label it reports. */
+export interface AppenderCandidateInput {
+  kind?: 'static' | 'host' | 'plugin' | 'test'
+  path?: string
+  append: RecordAppender
+}
+
+function candidateLabel(candidate: AppenderCandidate): string {
+  return `#${candidate.index} ${candidate.kind} ${candidate.path}`
+}
+
 /**
- * Point the resolution record at a workspace root (only the caller knows it —
- * a session header's `cwd`, or dsh's working directory service). Idempotent:
- * each workspace root receives at most one line.
+ * Start the dynamic import of one module copy.
+ *
+ * Deliberately ungated: BOTH dynamic candidates are always attempted. The old
+ * `needsHostImport === false → skip` short-circuit is exactly what left the
+ * host copy unloaded (`needsHostImport:false, hostAppendReady:false` in
+ * publish-debug.log) while the statically imported copy kept rejecting the
+ * host's Session with `TypeError: Receiver must be an instance of class
+ * Session`. Distinct files are deduplicated by realpath so one file is
+ * imported at most once.
+ */
+function loadDynamicCopy(
+  path: string | undefined,
+  label: string,
+): { real: string; copy: DynamicCopy } | undefined {
+  if (typeof path !== 'string' || path.length === 0) return undefined
+  let real: string
+  try {
+    real = realpathSync(path)
+  } catch {
+    return undefined
+  }
+  const existing = dynamicCopies.get(real)
+  if (existing !== undefined) return { real, copy: existing }
+  const copy: DynamicCopy = {}
+  dynamicCopies.set(real, copy)
+  dynamicPending += 1
+  // Fire-and-forget: publishing must never wait on a module load; a candidate
+  // whose import is still pending is simply skipped for that publish.
+  import(pathToFileURL(real).href)
+    .then((loaded: { appendPluginRecord?: unknown }) => {
+      if (typeof loaded.appendPluginRecord === 'function') {
+        copy.appender = loaded.appendPluginRecord as RecordAppender
+      } else {
+        copy.error = `${label}: module exports no appendPluginRecord`
+      }
+    })
+    .catch((cause: unknown) => {
+      copy.error = `${label}: ${errorText(cause)}`
+    })
+    .finally(() => {
+      dynamicPending -= 1
+      settleDynamicImports()
+    })
+  return { real, copy }
+}
+
+function settleDynamicImports(): void {
+  if (hostSettled || dynamicPending > 0) return
+  hostSettled = true
+  flushPublishDebug()
+}
+
+/** Load errors across the dynamic candidates (diagnostics only). */
+function dynamicLoadError(): string | undefined {
+  const errors: string[] = []
+  for (const copy of dynamicCopies.values()) {
+    if (typeof copy.error === 'string') errors.push(copy.error)
+  }
+  return errors.length > 0 ? errors.join('; ') : undefined
+}
+
+// Both dynamic candidates are loaded unconditionally (dedup is by realpath,
+// inside `loadDynamicCopy`); the static import stays first in the list.
+const pluginSessionCopyPath = resolvePluginSessionCopy()
+const hostCopy = loadDynamicCopy(resolution.hostPath, 'host copy')
+const pluginCopy = loadDynamicCopy(pluginSessionCopyPath, 'plugin copy')
+
+function buildProductionCandidates(): AppenderCandidate[] {
+  const raw: Array<Pick<AppenderCandidate, 'kind' | 'path' | 'get'>> = [
+    {
+      kind: 'static',
+      path: resolution.ownPath ?? 'static import',
+      get: () => appendPluginRecord as unknown as RecordAppender,
+    },
+  ]
+  if (hostCopy !== undefined) {
+    raw.push({ kind: 'host', path: hostCopy.real, get: () => hostCopy.copy.appender })
+  }
+  if (pluginCopy !== undefined) {
+    raw.push({ kind: 'plugin', path: pluginCopy.real, get: () => pluginCopy.copy.appender })
+  }
+  return raw.map((candidate, index) => ({ ...candidate, index }))
+}
+
+const productionCandidates: AppenderCandidate[] = buildProductionCandidates()
+
+// No dynamic candidate at all → the resolution record is ready immediately;
+// otherwise it is flushed when the last in-flight import settles.
+settleDynamicImports()
+
+/** Test-only candidate override; `undefined` restores production. */
+let testCandidates: AppenderCandidate[] | undefined
+
+/**
+ * Test seam: replace the candidate sequence (pass undefined to restore the
+ * production list). Lets a test prove the fallback chain — first candidate
+ * rejects the Session brand, second accepts — without a second real install.
+ */
+export function setAppenderCandidatesForTest(inputs: readonly AppenderCandidateInput[] | undefined): void {
+  if (inputs === undefined) {
+    testCandidates = undefined
+    return
+  }
+  testCandidates = inputs.map((input, index) => ({
+    index,
+    kind: input.kind ?? 'test',
+    path: input.path ?? input.kind ?? `candidate-${index}`,
+    get: () => input.append,
+  }))
+}
+
+function activeCandidates(): AppenderCandidate[] {
+  return testCandidates ?? productionCandidates
+}
+
+interface AttemptReport {
+  /** Debug label of the candidate that accepted the record (null on failure). */
+  candidate: string | null
+  /** One truncated error excerpt per rejected candidate. */
+  errors: string[]
+}
+
+/** Outcome of the last `defaultAppender` call (read by `publishGoals`). */
+let lastAttempt: AttemptReport | undefined
+
+/**
+ * Append the resolution/load outcome to
+ * `<workspace>/.cybernetics/publish-debug.log` (one JSON line, append mode).
+ * Written at most once per workspace root, as soon as both the root and the
+ * dynamic-candidate outcome are known — a multi-workspace host gets one line
+ * per workspace, each readable after a restart. Observability only: any
+ * failure is ignored.
+ */
+function flushPublishDebug(): void {
+  const root = debugRoot
+  if (root === undefined || !hostSettled || debugWritten.has(root)) return
+  debugWritten.add(root)
+  appendDebugRecord({
+    at: new Date().toISOString(),
+    event: 'host-session',
+    specifier: MODULE_SPECIFIER,
+    argv1: resolution.argv1 ?? null,
+    ownPath: resolution.ownPath ?? null,
+    hostPath: resolution.hostPath ?? null,
+    resolvedFrom: resolution.resolvedFrom ?? null,
+    needsHostImport: resolution.needsHostImport,
+    hostAppendReady: hostCopy?.copy.appender !== undefined,
+    pluginPath: pluginSessionCopyPath ?? null,
+    pluginAppendReady: pluginCopy?.copy.appender !== undefined,
+    error: resolution.error ?? dynamicLoadError() ?? null,
+  })
+}
+
+/**
+ * Point the records at a workspace root (only the caller knows it — a session
+ * header's `cwd`, or dsh's working directory service). The resolution line is
+ * idempotent per root; publish lines are appended per publish.
  */
 export function setPublishDebugRoot(root: string | undefined): void {
   if (typeof root !== 'string' || root.length === 0) return
@@ -448,53 +658,47 @@ export function setPublishDebugRoot(root: string | undefined): void {
   flushPublishDebug()
 }
 
-/** Diagnostic view of the host-copy resolution (no side effects). */
-export function hostSessionStatus(): HostSessionResolution & { hostAppendReady: boolean; loadError?: string } {
+/** Diagnostic view of the copy resolution / load state (no side effects). */
+export function hostSessionStatus(): HostSessionResolution & {
+  hostAppendReady: boolean
+  pluginAppendReady: boolean
+  pluginPath?: string
+  loadError?: string
+} {
+  const loadError = dynamicLoadError()
   return {
     ...resolution,
-    hostAppendReady: hostAppend !== undefined,
-    ...(hostLoadError !== undefined ? { loadError: hostLoadError } : {}),
+    hostAppendReady: hostCopy?.copy.appender !== undefined,
+    pluginAppendReady: pluginCopy?.copy.appender !== undefined,
+    ...(pluginSessionCopyPath !== undefined ? { pluginPath: pluginSessionCopyPath } : {}),
+    ...(loadError !== undefined ? { loadError } : {}),
   }
-}
-
-if (resolution.needsHostImport && resolution.hostPath !== undefined) {
-  // Fire-and-forget: publishing must never wait on a module load, and the
-  // static import keeps working until (and unless) this settles.
-  import(pathToFileURL(resolution.hostPath).href)
-    .then((loaded: { appendPluginRecord?: unknown }) => {
-      if (typeof loaded.appendPluginRecord !== 'function') {
-        hostLoadError = 'host copy exports no appendPluginRecord'
-        return
-      }
-      hostAppend = loaded.appendPluginRecord as RecordAppender
-    })
-    .catch((cause: unknown) => {
-      hostLoadError = errorText(cause)
-    })
-    .finally(() => {
-      hostSettled = true
-      flushPublishDebug()
-    })
 }
 
 /**
- * Production appender: the host's own copy first (the only copy that can
- * satisfy the Session private-field brand), this module's static import as the
- * fallback. A rejected host-copy call falls back so a publish is never lost.
+ * Production appender: try every candidate in order, first success wins. The
+ * Session class comes from exactly one module copy, so the static import can
+ * reject the host's Session while the host copy accepts it (or vice versa).
+ * Only when every candidate rejects do we throw the LAST error — the publish
+ * contract (`failed`, round unaffected) is unchanged.
  */
 const defaultAppender: RecordAppender = (session, type, data) => {
-  if (hostAppend !== undefined) {
+  const errors: string[] = []
+  let lastError: unknown
+  for (const candidate of activeCandidates()) {
+    const append = candidate.get()
+    if (append === undefined) continue
     try {
-      return hostAppend(session, type, data)
-    } catch (hostError) {
-      try {
-        return appendPluginRecord(session as never, type as never, data as never)
-      } catch {
-        throw hostError
-      }
+      const result = append(session, type, data)
+      lastAttempt = { candidate: candidateLabel(candidate), errors }
+      return result
+    } catch (cause) {
+      lastError = cause
+      errors.push(`${candidateLabel(candidate)}: ${truncate(errorText(cause), MAX_DEBUG_ERROR_CHARS)}`)
     }
   }
-  return appendPluginRecord(session as never, type as never, data as never)
+  lastAttempt = { candidate: null, errors }
+  throw lastError ?? new Error('no appender candidate is available')
 }
 let recordAppender: RecordAppender = defaultAppender
 /** Test seam: replace the plugin-record appender (pass undefined to restore). */
@@ -504,6 +708,20 @@ export function setRecordAppender(appender: RecordAppender | undefined): void {
 
 /** Outcome of one publish attempt. */
 export type PublishResult = 'published' | 'unchanged' | 'skipped' | 'failed'
+
+/**
+ * Record the outcome of one publish. Paths/results only: the goal payload is
+ * never written to the log.
+ */
+function appendPublishRecord(result: 'published' | 'failed', report: AttemptReport | undefined): void {
+  appendDebugRecord({
+    at: new Date().toISOString(),
+    event: 'publish',
+    result,
+    candidate: report?.candidate ?? null,
+    errors: report?.errors ?? [],
+  })
+}
 
 /**
  * Append the whole goal board as one `cybernetics/goals` session event. The
@@ -521,20 +739,25 @@ export function publishGoals(session: unknown, state: CyberneticsGoalsState): Pu
   if (target === null || target === undefined || typeof target !== 'object') return 'skipped'
   // A real Session exposes `append`; anything else is not a log we may write.
   if (typeof target.append !== 'function') return 'skipped'
-  // Best-effort workspace hint for the one-shot host-copy record: a real
-  // Session carries its cwd in the header, so the log lands in the right
-  // `.cybernetics/` even when the caller cannot pass the root itself.
+  // Best-effort workspace hint for the debug records: a real Session carries
+  // its cwd in the header, so the log lands in the right `.cybernetics/` even
+  // when the caller cannot pass the root itself.
   const cwd = target.header?.cwd
   if (typeof cwd === 'string') setPublishDebugRoot(cwd)
   const json = JSON.stringify(state)
   if (published.get(target) === json) return 'unchanged'
+  const usingCandidates = recordAppender === defaultAppender
   try {
     recordAppender(target, EVENT_TYPE, state)
-  } catch {
+  } catch (cause) {
     // A non-loggable payload (or a session mid-teardown) must not fail the
     // round that produced it; the tab simply keeps the previous snapshot.
+    appendPublishRecord('failed', usingCandidates
+      ? lastAttempt
+      : { candidate: null, errors: [`injected: ${truncate(errorText(cause), MAX_DEBUG_ERROR_CHARS)}`] })
     return 'failed'
   }
   published.set(target, json)
+  appendPublishRecord('published', usingCandidates ? lastAttempt : { candidate: 'injected', errors: [] })
   return 'published'
 }
