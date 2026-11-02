@@ -324,4 +324,27 @@ let goalId
   console.log('✓ 15 full depth (default): task→verify→triage complete loop')
 }
 
-console.log('\nALL 15 CHECKS PASSED')
+// 16. gateAllowlistExtra unions onto the default survival set
+{
+  const rootAgent = { id: 'agent-root' }
+  const listeners4 = []
+  const ctx5 = {
+    tools: { register: () => () => {} },
+    systemPrompt: { section() {}, getSectionOrder: () => 0 },
+    goals: { get: () => null },
+    workingDirectory: { get: () => root },
+    agentPresets: { serviceFor: () => undefined },
+    agents: { roots: () => [rootAgent] },
+    on: (event, fn) => { listeners4.push({ event, fn }); return () => {} },
+  }
+  apply(ctx5, { hardGate: true, gateMode: 'allowlist', gateAllowlistExtra: ['spawn_teammate', 'send_message'] })
+  const gate4 = listeners4.find((l) => l.event === 'system-prompt/assemble')
+  const assembly = {
+    tools: [{ name: 'spawn_teammate' }, { name: 'send_message' }, { name: 'farm_unregister' }, { name: 'read' }, { name: 'cybernetics' }],
+  }
+  await gate4.fn(assembly, { scope: rootAgent }, () => assembly)
+  assert.deepEqual(assembly.tools.map((t) => t.name).sort(), ['cybernetics', 'read', 'send_message', 'spawn_teammate'].sort())
+  console.log('✓ 16 gateAllowlistExtra: team verbs join the default allowlist')
+}
+
+console.log('\nALL 16 CHECKS PASSED')

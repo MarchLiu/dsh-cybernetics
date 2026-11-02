@@ -75,6 +75,8 @@ export interface Config extends ControllerConfig {
   gateMode?: 'denylist' | 'allowlist'
   /** Allowlist-mode survival set; defaults to DEFAULT_GATE_ALLOWLIST. */
   gateAllowlist?: string[]
+  /** Extra tool names unioned onto the allowlist (default or gateAllowlist). */
+  gateAllowlistExtra?: string[]
 }
 
 // No `Config` export: this cordis requires a schemastery schema there// (Config.validate), which a zero-dependency plugin cannot import. The raw
@@ -204,7 +206,11 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
     // (task/verify/triage) and team teammates are never in agents.roots(),
     // so their assemblies pass through untouched with full tool access.
     const allowlistMode = config.gateMode === 'allowlist'
-    const keep = new Set([...(config.gateAllowlist ?? DEFAULT_GATE_ALLOWLIST), toolName])
+    const keep = new Set([
+      ...(config.gateAllowlist ?? DEFAULT_GATE_ALLOWLIST),
+      ...(config.gateAllowlistExtra ?? []),
+      toolName,
+    ])
     const gated = new Set(config.gatedTools ?? DEFAULT_GATED_TOOLS)
     const listenerDisposer = ctx.on('system-prompt/assemble', (assembly: any, context: any, next: () => unknown) => {
       const scope = context?.scope

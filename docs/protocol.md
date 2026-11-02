@@ -1,6 +1,36 @@
-# Cybernetics 工作协议 v0.5
+# Cybernetics 工作协议 v0.6（设计稿）
 
 目标-行动-测量-校准的迭代回路，构建在 DSH 的 `dsh-workflow` 编排与 `dsh-goal` 持久目标之上。
+
+## v0.6 设计（未实现）：与 Agent Teams 集成
+
+2026-11-02 与用户逐条定稿的设计决策。尚未写代码；第 0 步验证实验先行（见文末）。
+
+1. **双层修正回路**。内环（行动修正）：本轮 subgoal / 委托书，由 session agent 依据 verdict
+   自动调整，每轮记账（现有）。外环（目标修正）：goal 的 objective / 范围，**agent 只能提案，
+   用户确认后才生效**——与 dsh-goal「edit 需直接人类输入」的权柄设计一致；修订记录版本号、
+   原因、前后对比、触发轮次。多轮迭代中 goal 保持稳定身份，迭代细化的是 subgoal；
+   仅当反馈证明目标本身错误时才走外环。目标被悄悄改写会摧毁「经 goal 跟踪 agent」的价值。
+2. **委托书修订协议**（持久执行者的消息语义）：`send_message` 只允许投递**委托书修订**
+   （新增约束 / 验收标准变化 / 范围收窄），禁止开放式对话；每条修订同样进入 round 日志。
+3. **控制页签合并，不替换**：保留 goal 板作为控制面——外环入口（对某 goal 提交修订意见 →
+   提案 + 确认）与内环观察面（每轮 subgoal 变化与 verdict）。执行者作为 goal 下的行展示
+   （状态 running / 静默 / persistent），数据源为 Lead 会话日志的 `team/member` 事件；
+   团队面板是执行者视角，两者互补。
+4. **上下文不变量（核心）**：所有二级上下文都是**被配给**的，不是被继承的——
+   task agent 只拿委托书；verify agent 只拿 goal + 任务报告 + 证据（绝不拿 task agent 的叙述，
+   否则验证被污染）；triage 只拿 verdict；持久队员必须 `context: 'fresh'` 投生、消息只许携带
+   委托书修订。**cybernetics 永远不使用 `context: 'fork'`**。持久的是身份和 goal 边界，不是会话历史。
+5. **执行者基质二选一**（`executor: 'ephemeral' | 'persistent'`，与 depth 正交）：
+   一次性/变更类 goal → workflow 临时 agent（schema 校验报告、最省、已验证）；
+   迭代型（多轮分析）goal → 持久 teammate（记忆是特性），verify 仍每轮临时、独立。
+6. **软集成**：运行时探测 `ctx.get('agentTeams')`，缺失则回退 workflow（不硬绑实验包）。
+   `spawnTeammate` 仅 Team Lead 可调——cybernetics 作为 Lead 的工具调用天然满足；
+   goal 板保持唯一真相，不双写 team task 板；每 goal 至多一个执行者；
+   goal 完成/cancel 时 `interrupt` + 清理常驻队员。
+7. **分步**：第 0 步（验证）：allowlist 加入 `spawn_teammate`/`send_message`/`interrupt_agent`，
+   手工养一名分析师跑真实多轮知识库分析，验证协作形态；通过后再实现 Executor 适配层
+   （`LoopState.executor` + 外环 revision 记账 + 控制页签执行者行）。
 
 ## v0.5 变化：双档轮次（depth）——分析任务分级
 
