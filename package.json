@@ -1,7 +1,7 @@
 {
-  "name": "dsh-cybernetics",
-  "version": "0.2.0",
-  "private": true,
+  "name": "@mars.liu/dsh-cybernetics",
+  "version": "0.4.0",
+  "private": false,
   "description": "Cybernetic work protocol for DSH: the session goal (dsh-goal) driven loop of task -> verify -> triage agents, implicitly advanced via one workflow run per round. Server plugin + client goal tab.",
   "type": "module",
   "main": "src/index.ts",
