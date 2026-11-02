@@ -24,6 +24,7 @@
  * @module dsh-cybernetics/projection
  */
 
+import { appendPluginRecord } from '@deepseek-ai/dsh-session'
 import type { LoopState } from './controller.ts'
 
 /** One goal revision (v0.6 outer loop: agent proposes, the user confirms). */
@@ -78,14 +79,23 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
 // registered event type at runtime (`Session.append(type, data)`); the merge
 // keeps that call site typed instead of `any`.
 declare module '@deepseek-ai/dsh-session/types' {
-  interface SessionEventMap {
-    'cybernetics/goals': CyberneticsGoalsState
+  interface PluginRecordMap {
+    'plugin:cybernetics/goals': CyberneticsGoalsState
   }
 }
 
 /** Projection key; also the session event type (one key, one event). */
 export const PROJECTION_KEY = 'cyberneticsGoals' as const
-export const EVENT_TYPE = 'cybernetics/goals' as const
+/**
+ * The persisted record type. The host's persistence loader FAIL-CLOSES on an
+ * unknown, non-ignorable session event (validateStoredEvents →
+ * SessionFormatUnsupportedError), so this board must travel as a plugin
+ * record: `appendPluginRecord` writes `{type, data, ignorable: true}`, which
+ * every reader may safely skip when it does not know the type.
+ */
+export const EVENT_TYPE = 'plugin:cybernetics/goals' as const
+/** Pre-fix event name; accepted on restore so older logs still fold. */
+export const LEGACY_EVENT_TYPE = 'cybernetics/goals' as const
 /** Persisted-cache invalidation version of the fold. */
 export const STATE_VERSION = 1
 
@@ -158,7 +168,7 @@ export function cyberneticsGoalsProjection(): ProjectionDefinitionLike {
     stateSchema: passThrough<CyberneticsGoalsState>(),
     init: () => emptyGoalsState(),
     apply(state, event) {
-      if (event?.type !== EVENT_TYPE) return state
+      if (event?.type !== EVENT_TYPE && event?.type !== LEGACY_EVENT_TYPE) return state
       const data = event.data as CyberneticsGoalsState | undefined
       if (data === null || typeof data !== 'object' || !Array.isArray(data.goals)) return state
       const goals = data.goals.filter(isGoalView).map(normalizeGoal)
@@ -231,6 +241,20 @@ export function goalsFromBoard(loops: Iterable<LoopState>, now = Date.now()): Cy
 /** Last successfully published JSON per session (idempotence guard). */
 const published = new WeakMap<object, string>()
 
+/**
+ * Record appender seam. Production writes through the host's
+ * `appendPluginRecord` (the only API that marks a record ignorable); the
+ * offline harness swaps in a fake so the write points stay testable.
+ */
+export type RecordAppender = (session: unknown, type: string, data: unknown) => unknown
+const defaultAppender: RecordAppender = (session, type, data) =>
+  appendPluginRecord(session as never, type as never, data as never)
+let recordAppender: RecordAppender = defaultAppender
+/** Test seam: replace the plugin-record appender (pass undefined to restore). */
+export function setRecordAppender(appender: RecordAppender | undefined): void {
+  recordAppender = appender ?? defaultAppender
+}
+
 /** Outcome of one publish attempt. */
 export type PublishResult = 'published' | 'unchanged' | 'skipped' | 'failed'
 
@@ -246,13 +270,14 @@ export type PublishResult = 'published' | 'unchanged' | 'skipped' | 'failed'
  * @param state - the complete post-change board.
  */
 export function publishGoals(session: unknown, state: CyberneticsGoalsState): PublishResult {
-  const target = session as { append?: (type: string, data: unknown) => unknown } | null | undefined
+  const target = session as { append?: unknown } | null | undefined
   if (target === null || target === undefined || typeof target !== 'object') return 'skipped'
+  // A real Session exposes `append`; anything else is not a log we may write.
   if (typeof target.append !== 'function') return 'skipped'
   const json = JSON.stringify(state)
   if (published.get(target) === json) return 'unchanged'
   try {
-    target.append(EVENT_TYPE, state)
+    recordAppender(target, EVENT_TYPE, state)
   } catch {
     // A non-loggable payload (or a session mid-teardown) must not fail the
     // round that produced it; the tab simply keeps the previous snapshot.

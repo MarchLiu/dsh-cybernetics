@@ -8,7 +8,7 @@ import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply } from '../src/index.ts'
-import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals } from '../src/projection.ts'
+import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setRecordAppender, EVENT_TYPE, LEGACY_EVENT_TYPE } from '../src/projection.ts'
 
 // --- fake workflow engine ---------------------------------------------------
 function fakeEngine() {
@@ -376,7 +376,7 @@ let goalId
     executor: 'ephemeral', round: 1, subgoal: 'S', revisions: [], updatedAt: 123,
   }
   const state0 = unit.init()
-  const state1 = unit.apply(state0, { type: 'cybernetics/goals', data: { goals: [goalV] } })
+  const state1 = unit.apply(state0, { type: 'plugin:cybernetics/goals', data: { goals: [goalV] } })
   assert.notStrictEqual(state1, state0, 'owned event produces a new state')
   assert.equal(state1.goals.length, 1)
   assert.equal(state1.goals[0].goalId, 'cyb-1')
@@ -384,6 +384,8 @@ let goalId
     'unrelated event: same state reference (host zero-work fast path)')
   assert.strictEqual(unit.apply(state1, { type: 'goal/change', data: {} }), state1,
     'dsh-goal events are not ours')
+  const legacy = unit.apply(state0, { type: 'cybernetics/goals', data: { goals: [goalV] } })
+  assert.notStrictEqual(legacy, state0, 'pre-fix event name still folds (older logs restore)')
   assert.strictEqual(unit.wire.view(unit.wire.viewSchema.parse(state1)), state1, 'wire view is a passthrough')
   console.log('✓ 17 projection unit: key cyberneticsGoals, whole-value fold, unrelated events keep reference')
 }
@@ -415,9 +417,12 @@ let goalId
     sessionProjections: { register: () => () => {} },
   }
   apply(ctx8, {})
+  setRecordAppender((session, type, data) => {
+    appends.push({ type, data: JSON.parse(JSON.stringify(data)), seq: appends.length + 1 })
+  })
   const tool8 = tools8[0]
   const exec8 = { agent: parent8, signal: undefined }
-  const goalEvents = () => appends.filter((e) => e.type === 'cybernetics/goals')
+  const goalEvents = () => appends.filter((e) => e.type === EVENT_TYPE)
 
   // creation + background round start
   const a = await tool8.execute({ action: 'start', title: '投影任务A', brief: '委托书A' }, exec8)
@@ -476,9 +481,10 @@ let goalId
 {
   assert.equal(publishGoals(undefined, { goals: [] }), 'skipped', 'no session: no-op')
   assert.equal(publishGoals(null, { goals: [] }), 'skipped', 'null session: no-op')
-  assert.equal(publishGoals({ id: 'no-append' }, { goals: [] }), 'skipped', 'session without append: no-op')
+  assert.equal(publishGoals({ id: 'no-append' }, { goals: [] }), 'skipped', 'object without record seam: no-op')
   const written = []
-  const sess = { append: (type, data) => { written.push({ type, data }); return {} } }
+  setRecordAppender((session, type, data) => { written.push({ type, data }) })
+  const sess = { id: 'fake-session', append: () => ({}) }
   const state = {
     goals: [{
       goalId: 'cyb-x', title: 'X', objective: 'o', status: 'paused', depth: 'full',
@@ -489,7 +495,9 @@ let goalId
   assert.equal(publishGoals(sess, JSON.parse(JSON.stringify(state))), 'unchanged',
     'same state republished: no duplicate event')
   assert.equal(written.length, 1)
-  assert.equal(written[0].type, 'cybernetics/goals')
+  assert.equal(written[0].type, EVENT_TYPE)
+  assert.equal(EVENT_TYPE, 'plugin:cybernetics/goals', 'plugin-record namespace is loadable after restart')
+  assert.equal(LEGACY_EVENT_TYPE, 'cybernetics/goals')
   assert.equal(written[0].data.goals[0].goalId, 'cyb-x')
   console.log('✓ 19 publishGoals: session-less no-op, identical republish is a true no-op')
 }

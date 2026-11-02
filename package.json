@@ -29,5 +29,8 @@
       "platform": "web",
       "immediately": true
     }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-session": "*"
   }
 }
