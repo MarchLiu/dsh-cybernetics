@@ -4,12 +4,15 @@
 // Run: node test/v03-offline.mjs
 
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { existsSync, realpathSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, writeFile, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 import { apply, loadBoardFile, saveBoardFile } from '../src/index.ts'
 import { agentTeamsOf, startTeamRound, teamExecutorAvailable } from '../src/executor.ts'
-import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setRecordAppender, EVENT_TYPE, LEGACY_EVENT_TYPE } from '../src/projection.ts'
+import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setRecordAppender, EVENT_TYPE, LEGACY_EVENT_TYPE, resolveHostSessionCopy, hostSessionStatus, setPublishDebugRoot, DEBUG_DIR, DEBUG_FILE } from '../src/projection.ts'
 
 // --- fake workflow engine ---------------------------------------------------
 function fakeEngine() {
@@ -1508,4 +1511,174 @@ let boardSnapshot
   console.log('✓ 43 subagent/end capture: lastAssistantMessage is the source; legacy `output` still works')
 }
 
-console.log('\nALL 43 CHECKS PASSED')
+// 44. Host-copy resolver: the same file must SKIP the dynamic import (the
+//     static import already binds the host copy), and the one-shot resolution
+//     record lands in `<workspace>/.cybernetics/publish-debug.log`.
+//     Root cause this guards: the plugin's own copy lives under the profile's
+//     node_modules, while the running host's Session class comes from the copy
+//     bundled with the dsh install. `appendPluginRecord` commits through a
+//     module-private `#appendRecord`, so the other copy rejects a Session with
+//     `TypeError: Receiver must be an instance of class Session`; the event
+//     never lands and the tab falls back to dsh-goal's single slot.
+{
+  const status = hostSessionStatus()
+  assert.equal(status.needsHostImport, false,
+    'this process resolves one dsh-session copy: no dynamic import needed')
+  assert.equal(status.ownPath, status.hostPath, 'own and host resolution agree on the same file')
+  assert.match(status.ownPath, /dsh-session[\\/]lib[\\/]index\.js$/,
+    'ownPath points at the dsh-session entry file')
+  assert.equal(status.hostAppendReady, false, 'same-file case leaves the static import in charge')
+
+  // A fake host entry that cannot resolve the specifier: the failure is
+  // recorded, never thrown, and no dynamic import is attempted.
+  const missing = resolveHostSessionCopy('/tmp/cyb-no-such-host-entry.mjs')
+  assert.equal(missing.needsHostImport, false, 'unresolvable host copy: no import attempted')
+  assert.equal(missing.hostPath, undefined)
+  assert.equal(missing.resolvedFrom, undefined)
+  assert.ok(typeof missing.error === 'string' && missing.error.length > 0,
+    'resolution failure is captured for the debug record')
+
+  // A fake host entry inside this repo resolves the SAME copy → also skipped.
+  const sameTree = resolveHostSessionCopy(fileURLToPath(new URL('../src/projection.ts', import.meta.url)))
+  assert.equal(sameTree.needsHostImport, false, 'same-file host entry: dynamic import skipped')
+  assert.equal(sameTree.hostPath, sameTree.ownPath)
+
+  // Launcher symlinks are followed: `node` keeps argv[1] as the INVOKED path
+  // (dsh is started via /opt/homebrew/bin/dsh -> .../lib/bin.js), and resolving
+  // from the symlink's own directory cannot find the package.
+  const linkDir = await mkdtemp(join(tmpdir(), 'cyb-symlink-entry-'))
+  const linkPath = join(linkDir, 'dsh-launcher.mjs')
+  const realScript = fileURLToPath(new URL('../test/v03-offline.mjs', import.meta.url))
+  await symlink(realScript, linkPath)
+  const viaLink = resolveHostSessionCopy(linkPath)
+  assert.equal(realpathSync(viaLink.resolvedFrom), realpathSync(realScript),
+    'a symlinked entry is resolved through its realpath')
+  assert.equal(viaLink.hostPath, viaLink.ownPath, 'still the same copy, so the import is skipped')
+  assert.equal(viaLink.needsHostImport, false)
+  assert.equal(viaLink.error, undefined, 'following the launcher symlink leaves nothing to report')
+
+  // One-shot record: written once, under the workspace, with no payload data.
+  const ws = await mkdtemp(join(tmpdir(), 'cyb-publish-debug-'))
+  setPublishDebugRoot(ws)
+  const injected = []
+  setRecordAppender((_session, type, data) => { injected.push({ type, data }) })
+  const dbgSession = { id: 'dbg-session', append: () => ({}), header: { cwd: ws } }
+  assert.equal(publishGoals(dbgSession, { goals: [] }), 'published')
+  assert.equal(injected.length, 1, 'injected appender still receives publishGoals writes')
+
+  const logPath = join(ws, DEBUG_DIR, DEBUG_FILE)
+  assert.equal(DEBUG_DIR, '.cybernetics')
+  assert.equal(DEBUG_FILE, 'publish-debug.log')
+  assert.ok(existsSync(logPath), 'resolution record written under <workspace>/.cybernetics')
+  const lines = (await readFile(logPath, 'utf8')).trim().split('\n')
+  assert.equal(lines.length, 1, 'exactly one append-only line per workspace root')
+  const record = JSON.parse(lines[0])
+  assert.equal(record.event, 'host-session')
+  assert.equal(record.specifier, '@deepseek-ai/dsh-session')
+  assert.equal(record.needsHostImport, false)
+  assert.equal(record.hostAppendReady, false)
+  assert.equal(record.ownPath, record.hostPath)
+  assert.equal(record.error, null)
+  assert.ok(!('data' in record) && !('state' in record), 'no goal payload in the debug record')
+
+  // One line per workspace root, and revisiting a root never appends again.
+  const otherWs = await mkdtemp(join(tmpdir(), 'cyb-publish-debug-other-'))
+  setPublishDebugRoot(otherWs)
+  const otherLines = (await readFile(join(otherWs, DEBUG_DIR, DEBUG_FILE), 'utf8')).trim().split('\n')
+  assert.equal(otherLines.length, 1, 'another workspace gets its own single line')
+  setPublishDebugRoot(ws)
+  assert.equal((await readFile(logPath, 'utf8')).trim().split('\n').length, 1,
+    'revisiting a recorded workspace root appends nothing')
+  setRecordAppender(undefined)
+  console.log('✓ 44 host-copy resolver: same file skips the dynamic import; one line per workspace root')
+}
+
+// 45. Production shape, end to end in a child process: `process.argv[1]` is the
+//     real dsh launcher (a symlink, exactly as the host is started), so
+//     resolution follows it to the HOST copy of dsh-session; that copy's
+//     appendPluginRecord lands the event on a host-copy Session (this is the
+//     exact call that threw before the fix).
+{
+  const DSH_PKG = process.env.CYB_HOST_DSH_PKG
+    ?? '/opt/homebrew/lib/node_modules/@deepseek-ai/dsh'
+  const DSH_BIN = join(DSH_PKG, 'lib', 'bin.js')
+  // Prefer the launcher symlink (the real invocation path); fall back to bin.js.
+  const HOST_ENTRY = existsSync('/opt/homebrew/bin/dsh') ? '/opt/homebrew/bin/dsh' : DSH_BIN
+  const HOST_COPY = join(DSH_PKG, 'node_modules', '@deepseek-ai', 'dsh-session', 'lib', 'index.js')
+
+  if (!existsSync(DSH_BIN) || !existsSync(HOST_COPY)) {
+    // Deterministic skip: another machine may have a single copy only.
+    const solo = resolveHostSessionCopy(HOST_ENTRY)
+    assert.equal(solo.needsHostImport, false, 'no second copy: nothing to import (static import stays)')
+    console.log('✓ 45 cross-copy publish: skipped (this machine has a single dsh-session copy)')
+  } else {
+    const ws = await mkdtemp(join(tmpdir(), 'cyb-host-copy-'))
+    const script = join(ws, 'probe.mjs')
+    const projectionPath = fileURLToPath(new URL('../src/projection.ts', import.meta.url))
+    await writeFile(script, `
+import { pathToFileURL } from 'node:url'
+import { readFile } from 'node:fs/promises'
+
+const [workspace, projectionFile, hostEntry, hostCopy] = process.argv.slice(2)
+// Pretend to be the host process: the resolver starts from the entry script.
+process.argv[1] = hostEntry
+const projection = await import(pathToFileURL(projectionFile).href)
+// The host-copy import is fire-and-forget; wait until it settles.
+for (let i = 0; i < 300; i += 1) {
+  const s = projection.hostSessionStatus()
+  if (s.hostAppendReady === true || s.loadError !== undefined) break
+  await new Promise((resolve) => setTimeout(resolve, 10))
+}
+projection.setPublishDebugRoot(workspace)
+const status = projection.hostSessionStatus()
+const core = await import(pathToFileURL(hostCopy).href)
+const session = core.Session.create('host-copy-probe')
+const result = projection.publishGoals(session, { goals: [{
+  goalId: 'cyb-host', title: 'H', objective: 'o', status: 'running', depth: 'full',
+  executor: 'ephemeral', round: 1, revisions: [], updatedAt: 1,
+}] })
+const event = session.log.at(-1)
+const debug = await readFile(workspace + '/.cybernetics/publish-debug.log', 'utf8')
+console.log(JSON.stringify({
+  status,
+  result,
+  event: event === undefined ? null : { type: event.type, seq: event.seq, ignorable: event.ignorable },
+  debug,
+}))
+`, 'utf8')
+
+    const child = spawnSync(process.execPath, [script, ws, projectionPath, HOST_ENTRY, HOST_COPY], {
+      cwd: ws,
+      encoding: 'utf8',
+      timeout: 90_000,
+    })
+    assert.equal(child.status, 0, `cross-copy probe failed: ${child.stderr || child.stdout}`)
+    const out = JSON.parse(child.stdout.trim().split('\n').at(-1))
+
+    assert.equal(out.status.needsHostImport, true,
+      'host entry script resolves a DIFFERENT dsh-session copy')
+    assert.equal(out.status.hostAppendReady, true, 'host-copy appendPluginRecord loaded')
+    assert.equal(out.status.loadError, undefined, 'host-copy import did not fail')
+    assert.equal(out.status.argv1, HOST_ENTRY, 'resolution started from the invoked entry path')
+    assert.equal(realpathSync(out.status.resolvedFrom), realpathSync(HOST_ENTRY),
+      'the launcher symlink was followed to its real script')
+    assert.equal(realpathSync(out.status.hostPath), realpathSync(HOST_COPY),
+      'the loaded copy is the host install\'s own file')
+    assert.notEqual(realpathSync(out.status.ownPath), realpathSync(HOST_COPY),
+      'the plugin\'s static import binds the profile copy (the mismatch being fixed)')
+    assert.equal(out.result, 'published',
+      'publishGoals returns published (before the fix: cross-copy TypeError → failed)')
+    assert.equal(out.event.type, EVENT_TYPE, 'the cybernetics/goals event landed on the host session')
+    assert.equal(out.event.seq, 0, 'first event in the session log')
+    assert.equal(out.event.ignorable, true, 'plugin record stays ignorable (restart-safe)')
+
+    const debugLine = JSON.parse(out.debug.trim())
+    assert.equal(debugLine.needsHostImport, true, 'debug record shows the host copy was imported')
+    assert.equal(debugLine.hostAppendReady, true)
+    assert.equal(realpathSync(debugLine.hostPath), realpathSync(HOST_COPY))
+    assert.equal(realpathSync(debugLine.resolvedFrom), realpathSync(HOST_ENTRY))
+    console.log('✓ 45 cross-copy publish: launcher symlink followed, host copy loaded, event lands on a host Session')
+  }
+}
+
+console.log('\nALL 45 CHECKS PASSED')

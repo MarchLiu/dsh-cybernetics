@@ -32,7 +32,7 @@ import type {
   ControllerConfig, ControllerDecision, LoopState, ResumableReason, RoundResult, RolesConfig,
 } from './controller.ts'
 import { startTeamRound, teamExecutorAvailable, teamExecutorUnavailableError } from './executor.ts'
-import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals } from './projection.ts'
+import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setPublishDebugRoot } from './projection.ts'
 
 export const name = 'dsh-cybernetics'
 
@@ -607,6 +607,11 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       // Then snapshot the same board to `<workspace>/.cybernetics/board-<id>.json`
       // so a restarted controller can rehydrate it (see loadBoardFile).
       const publishBoard = async (): Promise<void> => {
+        // The workspace root is authoritative here (the working-directory
+        // service resolved it); hand it to the projection so the one-shot
+        // host-copy resolution record lands in `<workspace>/.cybernetics/`
+        // even if a session header carries no cwd.
+        if (typeof root === 'string' && root.length > 0) setPublishDebugRoot(root)
         publishGoals(parent.session, goalsFromBoard(board.values()))
         if (sessionId !== undefined && typeof root === 'string' && root.length > 0) {
           await saveBoardFile(root, sessionId, board.values())
