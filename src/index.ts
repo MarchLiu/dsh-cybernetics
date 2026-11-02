@@ -261,10 +261,17 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       const scope = context?.scope
       if (!scope) return next()
       let roots: unknown[] = []
-      try { roots = ctx.agents?.roots?.() ?? [] } catch { return next() }
+      try { roots = ctx.agents?.roots?.() ?? [] } catch { roots = [] }
       const isRoot = roots.some((r: any) =>
         r === scope || r?.id === scope || (r?.id && r.id === scope?.id))
-      if (!isRoot) return next()
+      // Fallback for agents the registry does not list as roots (a resumed
+      // session's agent, for example): a session with no parentSession is a
+      // top-level session and belongs on the orchestrator side of the gate.
+      // Delegated children (workflow subagents, team members) carry
+      // `origin: subagent` + `parentSession` and keep their full tool set.
+      const parentSession = (scope as any)?.session?.header?.parentSession
+      const isSessionRoot = parentSession === undefined
+      if (!isRoot && !isSessionRoot) return next()
       if (Array.isArray(assembly.tools)) {
         assembly.tools = allowlistMode
           ? assembly.tools.filter((t: any) => keep.has(t?.name))
@@ -273,6 +280,32 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       return next()
     })
     disposers.push(() => listenerDisposer?.())
+
+    // Execution-layer gate (the assembly filter above only hides names; the
+    // host resolves any registered tool by name, so an unadvertised call must
+    // be denied here too). Same root/child rule: a session with no
+    // parentSession is orchestrated by the gate; delegated children pass.
+    const isGatedAgent = (agent: any): boolean => {
+      if (agent === undefined || agent === null || typeof agent !== 'object') return false
+      let roots: unknown[] = []
+      try { roots = ctx.agents?.roots?.() ?? [] } catch { roots = [] }
+      if (roots.some((r: any) => r === agent || r?.id === agent || (r?.id && r.id === agent?.id))) return true
+      return agent?.session?.header?.parentSession === undefined
+    }
+    const preDisposer = ctx.on('tools/pre-execute', (exec: any, next: () => Promise<unknown>) => {
+      const name = exec?.name
+      if (typeof name !== 'string') return next()
+      if (!isGatedAgent(exec?.agent)) return next()
+      const blocked = allowlistMode ? !keep.has(name) : gated.has(name)
+      if (!blocked) return next()
+      return Promise.resolve({
+        kind: 'deny',
+        reason:
+          `cybernetics hard gate: tool "${name}" is not available to the session agent. ` +
+          'Delegate the change: create a cybernetics goal (action "start" with title+brief) and let a task agent execute it.',
+      })
+    })
+    disposers.push(() => preDisposer?.())
   }
 
   const disposer = (ctx.tools as { register: (d: unknown) => () => void }).register({

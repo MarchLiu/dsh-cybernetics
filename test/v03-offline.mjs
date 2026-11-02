@@ -206,7 +206,7 @@ let goalId
 // 11. hard gate: assemble waterfall strips execution tools from ROOT agents only
 {
   const rootAgent = { id: 'agent-root' }
-  const childAgent = { id: 'agent-child' }
+  const childAgent = { id: 'agent-child', session: { header: { parentSession: 'sess-root' } } }
   const listeners = []
   const ctx2 = {
     tools: { register: () => () => {} },
@@ -999,4 +999,36 @@ async function loadClientTab() {
   console.log('✓ 32 round.js taskReport: task agent skipped, verify/triage over the given report')
 }
 
-console.log('\nALL 32 CHECKS PASSED')
+// 33. v0.4 execution gate: an unadvertised mutation call from a ROOT agent is
+//     DENIED at dispatch (assembly filtering alone only hides the name)
+{
+  const rootAgent = { id: 'agent-root', session: { header: {} } }
+  const childAgent = { id: 'agent-child', session: { header: { parentSession: 'sess-root' } } }
+  const listeners5 = []
+  const ctx5 = {
+    tools: { register: () => () => {} },
+    systemPrompt: { section() {}, getSectionOrder: () => 0 },
+    goals: { get: () => null },
+    workingDirectory: { get: () => root },
+    agentPresets: { serviceFor: () => undefined },
+    agents: { roots: () => [rootAgent] },
+    on: (event, fn) => { listeners5.push({ event, fn }); return () => {} },
+    sessionProjections: { register: () => () => {} },
+  }
+  apply(ctx5, { hardGate: true, gateMode: 'allowlist' })
+  const gate5 = listeners5.find((l) => l.event === 'tools/pre-execute')
+  assert.ok(gate5, 'execution gate listener registered')
+  const allow = async () => ({ kind: 'allow' })
+  const run = (agent, name) => gate5.fn({ agent, name }, allow)
+  const bashDenied = await run(rootAgent, 'bash')
+  assert.equal(bashDenied.kind, 'deny', 'root agent: bash denied at dispatch')
+  assert.match(bashDenied.reason, /hard gate/, 'denial tells the model to delegate')
+  assert.equal((await run(rootAgent, 'farm_unregister')).kind, 'deny', 'root agent: mutation denied at dispatch')
+  assert.equal((await run(rootAgent, 'read')).kind, 'allow', 'root agent: read tools pass')
+  assert.equal((await run(rootAgent, 'cybernetics')).kind, 'allow', 'the orchestrator verb always passes')
+  assert.equal((await run(childAgent, 'bash')).kind, 'allow', 'delegated child agents keep full execution')
+  assert.equal((await run(undefined, 'bash')).kind, 'allow', 'calls without an agent identity are untouched')
+  console.log('✓ 33 execution gate: root mutation calls denied at dispatch; children unaffected')
+}
+
+console.log('\nALL 33 CHECKS PASSED')

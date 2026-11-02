@@ -21,7 +21,10 @@
 # mounting the whole plugin inside preset-standard silenced the client scan.
 - insert:
     - id: dsh-cybernetics
-      name: dsh-cybernetics
+      # The client-modules scan matches the loader entry name against the
+      # package manifest name; after the @mars.liu rename the two must agree
+      # or the browser half is silently skipped (tabs disappear).
+      name: '@mars.liu/dsh-cybernetics'
       config:
         # v0.4 hard gate: restrict top-level session agents to read/orchestration
         # tools at prompt-assembly time — every CHANGE must go through a
