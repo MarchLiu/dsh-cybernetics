@@ -1317,4 +1317,126 @@ let boardSnapshot
   console.log('✓ 40 startTeamRound guard: direct call refuses with the structured fallback error')
 }
 
-console.log('\nALL 40 CHECKS PASSED')
+// 41. v0.6 reflection seam (positive): a real Cordis ctx exposes an
+//     un-injected service ONLY through `ctx.reflect.get(name)` — the inject-free
+//     read — while the property access still throws. The probe must take the
+//     reflection seam, never touch the throwing property, and a persistent
+//     round must run end to end through the reflected service.
+{
+  const tools41 = []
+  const handlers41 = []
+  const spawned41 = []
+  const engine41 = fakeEngine()
+  const parent41 = { session: { id: 'sess-reflect-team' }, followup() {} }
+  const root41 = await mkdtemp(join(tmpdir(), 'cyb-reflect-team-'))
+
+  const messages41 = []
+  const team41 = {
+    spawnTeammate: async (_caller, req) => {
+      spawned41.push(req)
+      return { member: { id: 'child-reflect-1', name: req.name, status: 'running' } }
+    },
+    sendMessage: async (_caller, req) => { messages41.push(req); return { messageId: 'm-1' } },
+    interrupt: () => ({ previousStatus: 'running' }),
+    listMembers: () => [{ id: 'child-reflect-1', name: spawned41[0]?.name, status: 'inactive' }],
+  }
+  const reflected41 = []
+  let propertyProbes41 = 0
+  const ctx41 = {
+    tools: { register: (d) => { tools41.push(d); return () => {} } },
+    systemPrompt: { section() {}, getSectionOrder: () => 0 },
+    goals: { get: () => null, create: () => ({ id: 'goal-focused' }) },
+    workingDirectory: { get: () => root41 },
+    agentPresets: { serviceFor: () => engine41 },
+    on: (event, fn) => { if (event === 'subagent/end') handlers41.push(fn); return () => {} },
+    // Cordis' reflection read: get(name, strict = true) → service value | undefined,
+    // no `inject` required and no throw when nothing provides the service.
+    reflect: {
+      get(name) {
+        reflected41.push(name)
+        return name === 'agentTeams' ? team41 : undefined
+      },
+    },
+  }
+  Object.defineProperty(ctx41, 'agentTeams', {
+    configurable: true,
+    enumerable: false,
+    get() {
+      propertyProbes41++
+      throw new Error('cannot get property "agentTeams" without inject')
+    },
+  })
+  apply(ctx41, {})
+  const tool41 = tools41[0]
+  const exec41 = { agent: parent41, signal: undefined }
+
+  assert.equal(teamExecutorAvailable(ctx41), true, 'the reflection seam proves the service available')
+  assert.equal(agentTeamsOf(ctx41), team41, 'agentTeamsOf returns the reflected service value')
+  assert.ok(reflected41.includes('agentTeams'), 'the service was probed by name through reflect.get')
+  assert.equal(propertyProbes41, 0, 'the throwing property access is never reached when reflect answers')
+
+  const started41 = await tool41.execute(
+    { action: 'start', title: '反射团队任务', brief: '做 Z', executor: 'persistent', depth: 'quick' },
+    exec41,
+  )
+  assert.equal(spawned41.length, 1, 'persistent round spawned its teammate through the reflected service')
+  assert.equal(spawned41[0].context, 'fresh', 'teammates stay provisioned, never forked')
+  assert.ok(spawned41[0].name.startsWith('cyb-'), 'member name derives from the goal id')
+
+  for (const h of handlers41) h({ id: 'child-reflect-1', output: [{ type: 'text', text: '分析完成 {"done": true, "summary": "reflect ok", "evidence": "e"}' }] })
+  await new Promise((r) => setImmediate(r))
+  const collected41 = await tool41.execute({ action: 'collect', goalId: started41.goalId }, exec41)
+  assert.equal(collected41.decision.reason, 'met', 'quick verdict derives from the reflected teammate output')
+  assert.match(collected41.result.report.summary, /reflect ok/)
+  console.log('✓ 41 reflection seam: reflect.get supplies agentTeams (throwing property unused), persistent round completes')
+}
+
+// 42. v0.6 reflection seam (negative): `reflect.get` answers undefined (no
+//     provider) AND the property access throws. Availability must be false, the
+//     persistent request must fail with the structured fallback error, and the
+//     same ctx must still start an ephemeral round.
+{
+  const engine42 = fakeEngine()
+  const host42 = fakeHost(engine42, { sessionId: 'sess-reflect-absent' })
+  const root42 = await mkdtemp(join(tmpdir(), 'cyb-reflect-absent-'))
+  host42.ctx.workingDirectory = { get: () => root42 }
+  const reflected42 = []
+  host42.ctx.reflect = {
+    get(name) { reflected42.push(name); return undefined },
+  }
+  let propertyProbes42 = 0
+  Object.defineProperty(host42.ctx, 'agentTeams', {
+    configurable: true,
+    enumerable: false,
+    get() {
+      propertyProbes42++
+      throw new Error('cannot get property "agentTeams" without inject')
+    },
+  })
+  apply(host42.ctx, {})
+  const tool42 = host42.tools[0]
+  const exec42 = { agent: host42.parent, signal: undefined }
+
+  assert.equal(agentTeamsOf(host42.ctx), undefined, 'absent reflected service → undefined, not a throw')
+  assert.equal(teamExecutorAvailable(host42.ctx), false, 'availability false when reflect answers undefined')
+  assert.ok(reflected42.includes('agentTeams'), 'the reflection seam really was consulted first')
+  assert.ok(propertyProbes42 > 0, 'the compatibility property access was then attempted and swallowed')
+
+  let rejected42
+  try {
+    await tool42.execute({ action: 'round', title: '无团队任务', brief: '做 X', executor: 'persistent' }, exec42)
+  } catch (error) { rejected42 = error }
+  assert.ok(rejected42 instanceof Error, 'persistent on a service-less ctx rejects')
+  assert.match(rejected42.message, /needs Agent Teams/, 'structured soft-integration error')
+  assert.match(rejected42.message, /ephemeral/, 'the error points at the fallback executor')
+  assert.doesNotMatch(rejected42.message, /without inject/, 'never leaks the Cordis proxy exception')
+
+  const runsBefore42 = engine42.runs.length
+  const started42 = await tool42.execute({ action: 'start', title: '临时任务', brief: '做 Y' }, exec42)
+  assert.equal(started42.started, true)
+  assert.equal(engine42.runs.length, runsBefore42 + 1, 'ephemeral round still starts on the service-less ctx')
+  assert.match(started42.goalId, /^cyb-/)
+  console.log('✓ 42 reflection seam absent: structured error for persistent, ephemeral round still starts')
+}
+
+console.log('\nALL 42 CHECKS PASSED')

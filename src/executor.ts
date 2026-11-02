@@ -16,10 +16,21 @@
  * buffered by id until consumed.
  *
  * Soft integration: the Agent Teams service is probed at call time through
- * `agentTeamsOf()` — Cordis context proxies THROW on an un-injected service
- * property, so a plain `ctx.agentTeams` read turns "not mounted" into an
- * internal proxy error. The accessor swallows that and reports `undefined`, so
- * a session without Agent Teams keeps working with executor 'ephemeral';
+ * `agentTeamsOf()`. Two seams, in priority order:
+ *
+ * 1. `ctx.reflect.get('agentTeams')` — Cordis' reflection read ("Read a
+ *    service from the store without the inject requirement") returns the
+ *    service value or `undefined` and needs no `inject` declaration. This is
+ *    the correct seam for a soft/optional integration: it neither pends boot
+ *    nor throws when nothing provides the service.
+ * 2. `ctx.agentTeams` — an exception-safe fallback for older hosts and for
+ *    hand-built test contexts that have no `reflect` seam. Cordis' context
+ *    proxy THROWS on an un-injected service property ("cannot get property
+ *    ... without inject"), which would surface as an internal proxy error, so
+ *    the read is wrapped.
+ *
+ * Whichever seam answers, "not available" is reported as `undefined`: a
+ * session without Agent Teams keeps working with executor 'ephemeral';
  * requesting 'persistent' there fails with a pointed, structured error
  * (pointing at ephemeral) instead of a Cordis proxy exception or a hang.
  * @module dsh-cybernetics/executor
@@ -49,15 +60,43 @@ export interface TeamRunHandle {
 }
 
 /**
+ * Read a service through Cordis' reflection seam, if this context has one.
+ *
+ * `ctx.reflect.get(name)` is the documented read that bypasses the `inject`
+ * requirement (vendor/cordis/src/reflect.ts): it returns the service value, or
+ * `undefined` when no fiber currently provides it. It is deliberately called
+ * with the default `strict = true`, so only an ACTIVE provider counts — a
+ * service that is mid-teardown must not be handed to an executor.
+ *
+ * Contexts without a reflection seam (older hosts, plain test doubles) have no
+ * `reflect` at all; a malformed or throwing seam is treated the same way.
+ * Every failure mode means "no answer from this seam", never an error.
+ */
+function reflectedService(ctx: unknown, name: string): unknown {
+  try {
+    const reflect = (ctx as { reflect?: { get?: (name: string) => unknown } } | undefined)?.reflect
+    if (reflect === undefined || reflect === null || typeof reflect.get !== 'function') return undefined
+    return reflect.get(name)
+  } catch {
+    // Un-audited reflection implementation: soft integration ⇒ no answer.
+    return undefined
+  }
+}
+
+/**
  * Read the Agent Teams service without tripping Cordis' proxy guard.
  *
- * Cordis' context proxy throws `cannot get property "X" without inject` when a
- * service was not injected into this context. Accessing a soft/optional
- * integration must therefore be exception-safe: "not available" has to be
- * reported as `undefined`, not as a proxy error. Returns `any` on purpose —
- * the service shape is only known to the host that mounts it.
+ * The reflection seam is tried first — it answers "available" and "absent"
+ * without an `inject`, which is what a soft integration needs. The property
+ * read is only the compatibility fallback: Cordis' context proxy throws
+ * `cannot get property "X" without inject` for a service that was not injected,
+ * so "not available" must be reported as `undefined`, not as a proxy error.
+ * Returns `any` on purpose — the service shape is only known to the host that
+ * mounts it.
  */
 export function agentTeamsOf(ctx: unknown): any {
+  const reflected = reflectedService(ctx, 'agentTeams')
+  if (reflected !== undefined) return reflected
   try {
     return (ctx as { agentTeams?: unknown } | undefined)?.agentTeams
   } catch {
