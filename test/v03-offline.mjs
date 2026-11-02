@@ -252,4 +252,35 @@ let goalId
   console.log('✓ 12 hard gate off by default: no assemble listener')
 }
 
-console.log('\nALL 12 CHECKS PASSED')
+// 13. allowlist mode: only reads/orchestration survive on root agents;
+//     farm_unregister (the live-found gap) is hidden; cybernetics always survives
+{
+  const rootAgent = { id: 'agent-root' }
+  const listeners3 = []
+  const ctx4 = {
+    tools: { register: () => () => {} },
+    systemPrompt: { section() {}, getSectionOrder: () => 0 },
+    goals: { get: () => null },
+    workingDirectory: { get: () => root },
+    agentPresets: { serviceFor: () => undefined },
+    agents: { roots: () => [rootAgent] },
+    on: (event, fn) => { listeners3.push({ event, fn }); return () => {} },
+  }
+  apply(ctx4, { hardGate: true, gateMode: 'allowlist' })
+  const gate3 = listeners3.find((l) => l.event === 'system-prompt/assemble')
+  const assembly = {
+    tools: [
+      { name: 'farm_unregister' }, { name: 'farm_status' }, { name: 'taskboard_update' },
+      { name: 'taskboard_list' }, { name: 'knowledge_save' }, { name: 'knowledge_query' },
+      { name: 'bash' }, { name: 'edit' }, { name: 'read' }, { name: 'subagent' },
+      { name: 'cybernetics' }, { name: 'create_goal' }, { name: 'schedule_create' },
+    ],
+  }
+  await gate3.fn(assembly, { scope: rootAgent }, () => assembly)
+  const names = assembly.tools.map((t) => t.name)
+  assert.deepEqual(names.sort(), ['create_goal', 'cybernetics', 'farm_status', 'knowledge_query', 'read', 'taskboard_list'].sort(),
+    'mutations hidden, reads/orchestration survive')
+  console.log('✓ 13 allowlist mode: farm_unregister/subagent/bash hidden; reads+cybernetics survive')
+}
+
+console.log('\nALL 13 CHECKS PASSED')

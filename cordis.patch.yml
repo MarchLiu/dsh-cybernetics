@@ -23,8 +23,13 @@
     - id: dsh-cybernetics
       name: dsh-cybernetics
       config:
-        # v0.4 hard gate: strip execution tools (bash/edit/write) from top-level
-        # session agents at prompt-assembly time — every task MUST go through a
+        # v0.4 hard gate: restrict top-level session agents to read/orchestration
+        # tools at prompt-assembly time — every CHANGE must go through a
         # cybernetics goal + task agent. Task/verify/triage subagents unaffected.
         hardGate: true
-        # gatedTools: [bash, edit, write]   # default; extend to taste
+        # allowlist mode: keep ONLY reads + conversation + orchestration verbs
+        # (built-in DEFAULT_GATE_ALLOWLIST); robust against the long tail of
+        # mutation tools (farm_*, taskboard_*, knowledge_save, ...).
+        gateMode: allowlist
+        # gateAllowlist: [...]   # override the built-in survival set
+        # gateMode: denylist + gatedTools: [bash, edit, write]  # legacy stance

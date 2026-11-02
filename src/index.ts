@@ -66,6 +66,15 @@ export interface Config extends ControllerConfig {
   hardGate?: boolean
   /** Tool names hidden from gated agents (default ['bash', 'edit', 'write']). */
   gatedTools?: string[]
+  /**
+   * Gate semantics: 'denylist' hides `gatedTools`; 'allowlist' keeps ONLY
+   * `gateAllowlist` (default DEFAULT_GATE_ALLOWLIST) plus the cybernetics
+   * tool itself — the robust stance against the long tail of mutation tools
+   * (farm_*, taskboard_*, knowledge_save, schedule_*, ...).
+   */
+  gateMode?: 'denylist' | 'allowlist'
+  /** Allowlist-mode survival set; defaults to DEFAULT_GATE_ALLOWLIST. */
+  gateAllowlist?: string[]
 }
 
 // No `Config` export: this cordis requires a schemastery schema there// (Config.validate), which a zero-dependency plugin cannot import. The raw
@@ -122,12 +131,54 @@ Use action 'list' to see every goal on this session's board with its status, rou
 /** Tool names hidden from top-level session agents when the hard gate is on. */
 const DEFAULT_GATED_TOOLS = ['bash', 'edit', 'write']
 
+/**
+ * Allowlist-mode survival set for top-level orchestrator agents: pure reads,
+ * conversation, presentation and goal/orchestration verbs. Anything that
+ * changes the world — files, services, boards, knowledge, schedules, docs,
+ * other agents' work — is absent, so the session agent must delegate it to a
+ * cybernetics task agent. The cybernetics tool itself is always re-added.
+ */
+const DEFAULT_GATE_ALLOWLIST = [
+  // local reads & search
+  'read', 'read_image', 'read_pdf', 'glob', 'grep', 'working_directory',
+  // web reads
+  'web_fetch', 'web_search', 'websearch',
+  // conversation & presentation
+  'ask_user_question', 'skill', 'todo_write',
+  'render_ui', 'validate_dsh_ui', 'visualize', 'ui_present', 'present', 'sidebar_open',
+  // goal verbs (orchestrator's own)
+  'create_goal', 'update_goal', 'get_goal',
+  // knowledge reads
+  'knowledge_query', 'knowledge_get', 'knowledge_search', 'knowledge_graph',
+  'knowledge_status', 'knowledge_stats', 'knowledge_chart',
+  // photostory (read-only plugin)
+  'photostory_search', 'photostory_search_text', 'photostory_photo_get',
+  'photostory_photo_faces', 'photostory_person_get', 'photostory_person_query',
+  'photostory_person_search', 'photostory_tags', 'photostory_stats',
+  'photostory_status', 'photostory_zdisk_list', 'photostory_zdisk_file',
+  'photostory_download',
+  // service/board reads
+  'farm_status', 'farm_logs', 'taskboard_list', 'taskboard_get', 'taskboard_comments',
+  // team/session reads
+  'list_agents', 'wait_agent', 'team_task_list', 'team_task_get',
+  'graft_read', 'graft_search', 'graft_sessions', 'dsh_im_group_history', 'dsh_im_group_file',
+  // misc reads
+  'schedule_list', 'job_list', 'job_output', 'audit_status',
+  'config_list_snapshots', 'uno_read', 'uno_status',
+  'univer_api', 'univer_inspect', 'univer_status', 'univer_lint', 'univer_resources',
+  'browser_tabs', 'browser_snapshot', 'browser_console', 'browser_network',
+  'browser_screenshot', 'browser_navigate', 'browser_scroll',
+]
+
 const HARD_GATE_GUIDANCE = `
-HARD GATE ACTIVE: execution tools (bash/edit/write) are STRUCTURALLY unavailable to you — they are
-removed from your tool list at prompt-assembly time. You cannot edit files or run commands, no matter
-how small the task. Everything that changes the world MUST be delegated: create a cybernetics goal and
-let a task agent execute it. You keep: reading, searching, asking the user, and the cybernetics verbs.
-Do not tell the user a task is "too small for the loop" — the loop is the only way work gets done.`
+HARD GATE ACTIVE: your tool list is restricted to reading, searching, conversation, presentation and
+goal/orchestration verbs — every tool that CHANGES the world (edit/write/bash, service lifecycle,
+board/knowledge/schedule writes, spawning other workers, ...) is STRUCTURALLY unavailable to you.
+Answering a read-only question directly is fine and needs no goal; but the moment the user asks for a
+change — however small — that is your signal to delegate: create a cybernetics goal (action 'start'
+with title+brief) and let a task agent execute it. Never tell the user a change is "too small for the
+loop": the loop is the only way changes get done. If you look for a tool to perform a change and do
+not find it, that is the gate working as intended — delegate instead.`
 
 export function apply(ctx: any, config: Partial<Config> = {}) {
   const toolName = config.toolName ?? 'cybernetics'
@@ -147,6 +198,8 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
     // execution tools from TOP-LEVEL agents' assemblies. Workflow subagents
     // (task/verify/triage) and team teammates are never in agents.roots(),
     // so their assemblies pass through untouched with full tool access.
+    const allowlistMode = config.gateMode === 'allowlist'
+    const keep = new Set([...(config.gateAllowlist ?? DEFAULT_GATE_ALLOWLIST), toolName])
     const gated = new Set(config.gatedTools ?? DEFAULT_GATED_TOOLS)
     const listenerDisposer = ctx.on('system-prompt/assemble', (assembly: any, context: any, next: () => unknown) => {
       const scope = context?.scope
@@ -157,7 +210,9 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         r === scope || r?.id === scope || (r?.id && r.id === scope?.id))
       if (!isRoot) return next()
       if (Array.isArray(assembly.tools)) {
-        assembly.tools = assembly.tools.filter((t: any) => !gated.has(t?.name))
+        assembly.tools = allowlistMode
+          ? assembly.tools.filter((t: any) => keep.has(t?.name))
+          : assembly.tools.filter((t: any) => !gated.has(t?.name))
       }
       return next()
     })

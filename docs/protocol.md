@@ -21,6 +21,16 @@ v0.3 及以前，「session agent 不亲自执行」是系统提示里的劝告�
 - 已知边界：门在装配层（模型看不见工具），不在执行层（无公开拦截缝）；
   `subagent`/`workflow` 等其他派发工具默认不在门禁清单，如需收口加入 `gatedTools`。
 
+### v0.4.1：allowlist 模式（denylist 的覆盖缺口修复）
+
+实机暴露的缺口：denylist 默认只挡 bash/edit/write，session agent 用 `farm_unregister`
+直接删了服务而未建 goal——变更类工具是长尾（farm_*/taskboard_*/knowledge_save/schedule_*/uno_*…），
+逐名封堵永远补不完。`gateMode: 'allowlist'` 反转语义：顶层 agent 只保留
+**读 + 对话 + 展示 + goal/编排动词**（内置 DEFAULT_GATE_ALLOWLIST，可 `gateAllowlist` 覆盖），
+cybernetics 工具自身始终豁免。语义随之明确：**只读问答无需 goal 直接答；
+任何「改变世界」的请求——无论多小——都是委派信号**（找不到工具即硬门在起作用）。
+本部署 cordis.patch.yml 已启用 allowlist 模式。
+
 ## v0.3 变化：多 goal + 编排者 session agent
 
 - **同一 session 支持多个并发 goal**：插件维护自己的 goal 板（`boards: session -> goalId -> loop`）。

@@ -15,6 +15,7 @@ task agent → verify agent → triage agent，controller 在轮间推进，用�
 
 ## 状态
 
+v0.4.1：硬门增加 allowlist 模式（只保留读+编排工具，挡住 farm_unregister 类长尾变更工具）。
 v0.4：可选硬门（`hardGate: true`）——装配期从顶层 session agent 物理摘除执行工具
 （默认 bash/edit/write），编排从劝告变成结构；task agent 不受影响。
 v0.3：多 goal 板 + 编排者协议 + 异步轮（`start`/`collect`/`cancel`/`list`）+ task agent 工作委托书（brief）。
