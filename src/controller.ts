@@ -72,9 +72,21 @@ export interface LoopState {
   brief?: string
   /** Round depth: 'quick' = task agent only (lightweight analysis); 'full' = task→verify→triage (default). */
   depth?: 'quick' | 'full'
-  /** Lifecycle: running (a round in flight) / paused / met (verify passed, awaits user) / cancelled. */
-  status?: 'running' | 'paused' | 'met' | 'cancelled'
+  /**
+   * Lifecycle: running (a round in flight) / paused / met (verify passed, awaits
+   * user) / cancelled / superseded (a revision created a successor goal; this
+   * goal keeps its final state and is never driven again).
+   */
+  status?: 'running' | 'paused' | 'met' | 'cancelled' | 'superseded'
   paused?: { reason: ResumableReason; note: string }
+  /**
+   * Append-only goal lineage (v0.6, user 2026-11-02): a revision never edits the
+   * objective in place — it creates a NEW goal, and the old one keeps its final
+   * state. `parentGoalId` = the goal this one was revised from.
+   */
+  parentGoalId?: string
+  /** Set on a superseded goal: the id of the successor that replaced it. */
+  supersededBy?: string
   /**
    * Execution substrate (v0.6, orthogonal to depth): the Executor adapter is
    * not implemented yet, so every goal reports 'ephemeral' (workflow agent).
@@ -82,8 +94,39 @@ export interface LoopState {
    * needs no breaking change when the adapter lands.
    */
   executor?: 'ephemeral' | 'persistent'
-  /** Outer-loop goal revisions (v0.6: agent proposes, the user confirms). */
+  /**
+   * In-place revision log kept for wire compatibility (pre-append-only shape).
+   * v0.6 append-only model: a revision creates a successor goal instead, so new
+   * revisions are recorded as `parentGoalId`/`supersededBy` plus the
+   * `.cybernetics/revisions-<newGoalId>.jsonl` audit line, and this stays empty.
+   */
   revisions?: Array<{ version: number; reason: string; at: number }>
+}
+
+/** One `revise` transition as written to `.cybernetics/revisions-<newGoalId>.jsonl`. */
+export interface GoalRevisionRecord {
+  /** Superseded goal id. */
+  from: string
+  /** Newly created successor goal id. */
+  to: string
+  /** Why the goal changed (required on the `revise` action). */
+  reason: string
+  /** Epoch milliseconds of the revision. */
+  at: number
+}
+
+/** Input for the append-only goal creation path. */
+export interface GoalSeed {
+  goalId: string
+  title?: string
+  /** Overrides the inherited objective when present. */
+  objective?: string
+  /** Goal this one was revised from (lineage link). */
+  parentGoalId?: string
+  depth?: 'quick' | 'full'
+  executor?: 'ephemeral' | 'persistent'
+  role?: string
+  subgoal?: string
 }
 
 /** Append one round's structured result to the per-workspace audit log. */
@@ -94,6 +137,60 @@ async function writeRoundLog(root: string, goalId: string | undefined, round: nu
   // overwrite each other's audit trail (found in the v0.3 live test).
   const slug = (goalId ?? 'goal').replace(/[^a-zA-Z0-9._-]/g, '_')
   await writeFile(join(root, STATE_DIR, `round-${slug}-${round}.json`), JSON.stringify(result, null, 2))
+}
+
+/**
+ * Append one revision line to `.cybernetics/revisions-<newGoalId>.jsonl`.
+ * One line per transition, so a revision chain is readable (and greppable)
+ * without reconstructing it from per-goal fields. The directory is created
+ * lazily; the caller treats a write failure as non-fatal (see `revise`).
+ */
+export async function writeRevisionLog(root: string, newGoalId: string, record: GoalRevisionRecord): Promise<string> {
+  await mkdir(join(root, STATE_DIR), { recursive: true })
+  const slug = newGoalId.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const file = join(root, STATE_DIR, `revisions-${slug}.jsonl`)
+  await writeFile(file, `${JSON.stringify(record)}\n`, { flag: 'a' })
+  return file
+}
+
+/**
+ * Build the successor goal of an append-only revision. Everything the old goal
+ * owned that is not per-round state — title, objective, depth, executor, role —
+ * is inherited unless a seed field overrides it; the new goal starts at round 0
+ * and carries `parentGoalId`. Pure: it neither mutates nor registers anything.
+ */
+export function createGoal(previous: LoopState | undefined, seed: GoalSeed): LoopState {
+  const objective = seed.objective ?? previous?.objective ?? previous?.title ?? ''
+  const title = seed.title ?? previous?.title ?? objective.split('\n')[0].slice(0, 60)
+  const goal: LoopState = {
+    goalId: seed.goalId,
+    title,
+    objective,
+    round: 0,
+    doneSummary: '',
+    subgoal: seed.subgoal ?? (objective.length > 0 ? objective : title),
+    role: seed.role ?? previous?.role ?? 'default',
+    status: 'running',
+  }
+  const depth = seed.depth ?? previous?.depth
+  if (depth !== undefined) goal.depth = depth
+  const executor = seed.executor ?? previous?.executor
+  if (executor !== undefined) goal.executor = executor
+  const parentGoalId = seed.parentGoalId ?? previous?.goalId
+  if (parentGoalId !== undefined) goal.parentGoalId = parentGoalId
+  return goal
+}
+
+/**
+ * Freeze a goal as superseded by a successor. Mutates the loop in place (the
+ * registry holds the same object); the paused marker is dropped so the view
+ * does not mix "awaiting human" with "replaced".
+ */
+export function supersedeGoal(previous: LoopState, newGoalId: string): LoopState {
+  previous.status = 'superseded'
+  previous.supersededBy = newGoalId
+  previous.paused = undefined
+  return previous
 }
 
 /**

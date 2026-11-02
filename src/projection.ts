@@ -38,10 +38,16 @@ export interface GoalRevisionView {
 }
 
 /** Lifecycle as the tab renders it. */
-export type GoalStatus = 'running' | 'paused' | 'met' | 'cancelled' | 'failed' | 'pending'
+export type GoalStatus = 'running' | 'paused' | 'met' | 'cancelled' | 'superseded' | 'failed' | 'pending'
 
 /** Execution substrate (v0.6: orthogonal to depth). */
 export type GoalExecutor = 'ephemeral' | 'persistent'
+
+/**
+ * Statuses that END a goal's life. The tab's two-segment ordering puts the
+ * unfinished group first and this group last (user 2026-11-02 append-only model).
+ */
+export const COMPLETED_GOAL_STATUSES: ReadonlySet<GoalStatus> = new Set<GoalStatus>(['met', 'cancelled', 'superseded'])
 
 /** One goal as the client tab renders it (wire-safe plain JSON). */
 export interface GoalView {
@@ -55,6 +61,10 @@ export interface GoalView {
   round: number
   /** Current subgoal of the inner correction loop. */
   subgoal?: string
+  /** Append-only lineage: the goal this one was revised from. */
+  parentGoalId?: string
+  /** Set when a revision replaced this goal: the successor's goalId. */
+  supersededBy?: string
   revisions: GoalRevisionView[]
   /** Epoch milliseconds of the last content change (ordering key for the tab). */
   updatedAt: number
@@ -97,7 +107,7 @@ export const EVENT_TYPE = 'plugin:cybernetics/goals' as const
 /** Pre-fix event name; accepted on restore so older logs still fold. */
 export const LEGACY_EVENT_TYPE = 'cybernetics/goals' as const
 /** Persisted-cache invalidation version of the fold. */
-export const STATE_VERSION = 1
+export const STATE_VERSION = 2
 
 /** Duck-typed Zod stand-in: the host only calls `parse`. */
 interface SchemaLike<T> {
@@ -146,6 +156,12 @@ function normalizeGoal(goal: GoalView): GoalView {
     executor: goal.executor === 'persistent' ? 'persistent' : 'ephemeral',
     round: Number.isFinite(goal.round) ? Number(goal.round) : 0,
     ...(typeof goal.subgoal === 'string' && goal.subgoal.length > 0 ? { subgoal: goal.subgoal } : {}),
+    ...(typeof goal.parentGoalId === 'string' && goal.parentGoalId.length > 0
+      ? { parentGoalId: goal.parentGoalId }
+      : {}),
+    ...(typeof goal.supersededBy === 'string' && goal.supersededBy.length > 0
+      ? { supersededBy: goal.supersededBy }
+      : {}),
     revisions: Array.isArray(goal.revisions)
       ? goal.revisions.map((r) => ({
         version: Number.isFinite(r?.version) ? Number(r.version) : 0,
@@ -213,6 +229,8 @@ function toGoalView(loop: LoopState, now: number): GoalView {
     executor: loop.executor === 'persistent' ? 'persistent' : 'ephemeral',
     round: Number.isFinite(loop.round) ? loop.round : 0,
     ...(loop.subgoal ? { subgoal: loop.subgoal } : {}),
+    ...(loop.parentGoalId ? { parentGoalId: loop.parentGoalId } : {}),
+    ...(loop.supersededBy ? { supersededBy: loop.supersededBy } : {}),
     revisions: revisions.map((r) => ({ version: r.version, reason: r.reason, at: r.at })),
     updatedAt: 0,
   }
@@ -224,7 +242,23 @@ function toGoalView(loop: LoopState, now: number): GoalView {
 }
 
 /**
+ * Tab order (user 2026-11-02): unfinished goals first, finished goals after;
+ * inside each segment the most recently changed goal leads. Total and stable:
+ * `goalId` breaks exact `updatedAt` ties so the wire value never flips between
+ * publishes that carry identical timestamps.
+ */
+function compareGoals(a: GoalView, b: GoalView): number {
+  const groupA = COMPLETED_GOAL_STATUSES.has(a.status) ? 1 : 0
+  const groupB = COMPLETED_GOAL_STATUSES.has(b.status) ? 1 : 0
+  if (groupA !== groupB) return groupA - groupB
+  if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt
+  return a.goalId.localeCompare(b.goalId)
+}
+
+/**
  * Snapshot one session's whole goal board as the projection's wire value.
+ * The array is pre-sorted (two segments, see `compareGoals`) so the client can
+ * render it verbatim without re-ordering.
  * @param loops - every loop on the session's board.
  * @param now - epoch milliseconds (injectable for tests).
  */
@@ -234,7 +268,7 @@ export function goalsFromBoard(loops: Iterable<LoopState>, now = Date.now()): Cy
     if (loop.goalId === undefined) continue
     goals.push(toGoalView(loop, now))
   }
-  goals.sort((a, b) => b.updatedAt - a.updatedAt)
+  goals.sort(compareGoals)
   return { goals }
 }
 

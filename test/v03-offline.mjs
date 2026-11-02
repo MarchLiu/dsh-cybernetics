@@ -539,10 +539,10 @@ let goalId
   console.log('✓ 21 client tab: cyberneticsGoals face + goal fallback, live snapshots, status locales')
 }
 
-// 22. v0.6 client tab render (offline, stubbed react/jsx-runtime): the multi-goal
-//     list renders every goal newest-first with its badges, and an absent
-//     projection falls back to the dsh-goal single-goal rendering
-{
+// --- offline client render harness (shared by the client render checks) ------
+// Loads lib/client.js exactly as the ModuleLoader would, with stubbed
+// react/jsx-runtime, and returns the registered「目标」tab plus the locale dict.
+async function loadClientTab() {
   const src = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
   let loaded
   globalThis.window = { __ModuleLoader__: { load: (m) => { loaded = m } } }
@@ -587,17 +587,25 @@ let goalId
   })
   const tab = registered.find((entry) => entry.spec.id === 'cybernetics-goal')
   assert.ok(tab, '目标 tab registered')
-  const injected = tab.spec.inject('sess-client')
+  return { src, flatten, values, dict, t, tab, injected: tab.spec.inject('sess-client') }
+}
 
+// 22. v0.6 client tab render (offline, stubbed react/jsx-runtime): the multi-goal
+//     list renders every goal in the projection's order with its badges, and an
+//     absent projection falls back to the dsh-goal single-goal rendering
+{
+  const { flatten, values, t, tab, injected } = await loadClientTab()
+
+  // Server order: unfinished group first, newest inside the group.
   values.cyberneticsGoals = {
     goals: [
-      { goalId: 'cyb-old', title: '旧任务', objective: 'o', status: 'paused', depth: 'full', executor: 'ephemeral', round: 2, subgoal: '缺口X', revisions: [], updatedAt: 100 },
       { goalId: 'cyb-new', title: '新任务', objective: 'o', status: 'running', depth: 'quick', executor: 'persistent', round: 0, revisions: [], updatedAt: 300 },
+      { goalId: 'cyb-old', title: '旧任务', objective: 'o', status: 'paused', depth: 'full', executor: 'ephemeral', round: 2, subgoal: '缺口X', revisions: [], updatedAt: 100 },
     ],
   }
   values.goal = { current: null }
   const text = flatten(tab.view({ ...injected, t })).join('\n')
-  assert.ok(text.indexOf('新任务') < text.indexOf('旧任务'), 'goals render newest-updatedAt first')
+  assert.ok(text.indexOf('新任务') < text.indexOf('旧任务'), 'renders the server order verbatim')
   assert.match(text, /进行中/)
   assert.match(text, /已暂停/)
   assert.match(text, /第 2 轮/)
@@ -610,7 +618,258 @@ let goalId
   values.goal = { current: { goal: { objective: '单一焦点目标', phase: 'active', maxGoalRounds: 5 }, roundsStarted: 1 } }
   const fallback = flatten(tab.view({ ...injected, t })).join('\n')
   assert.match(fallback, /单一焦点目标/, 'absent projection falls back to dsh-goal rendering')
-  console.log('✓ 22 client render: multi-goal rows newest-first, fallback single goal intact')
+  console.log('✓ 22 client render: multi-goal rows in projection order, fallback single goal intact')
 }
 
-console.log('\nALL 22 CHECKS PASSED')
+// 23. v0.6 append-only revision: 'revise' creates a successor goal (lineage),
+//     freezes the old goal as superseded, records the revision audit line and
+//     starts the successor's first round — also when the old goal was completed
+{
+  const engine23 = fakeEngine()
+  const host = fakeHost(engine23)
+  host.ctx.workingDirectory = { get: () => root }
+  apply(host.ctx, {})
+  const tool23 = host.tools[0]
+  const exec23 = { agent: host.parent, signal: undefined }
+  const metRound = {
+    round: 1,
+    report: { summary: '完成', done: true, artifacts: [], evidence: 'e', nextStepThoughts: [] },
+    verdict: { met: true, criteria: [], gaps: [], goalItselfQuestionable: false },
+    triage: { auto: [], defer: [], reject: [], human: [] },
+  }
+
+  const a = await tool23.execute({ action: 'start', title: '修订前任务', brief: '旧委托书' }, exec23)
+  engine23.runs[0].settle({ stopReason: 'completed', value: metRound })
+  await new Promise((r) => setImmediate(r))
+  await tool23.execute({ action: 'collect', goalId: a.goalId }, exec23)
+
+  const runsBefore = engine23.runs.length
+  const r = await tool23.execute({
+    action: 'revise', goalId: a.goalId, reason: '用户校准：目标改为 Y',
+    objective: '新目标 Y', title: '修订后任务', depth: 'quick',
+  }, exec23)
+  assert.equal(r.revised, true)
+  assert.notEqual(r.goalId, a.goalId, 'revision mints a NEW goal id')
+  assert.equal(r.previousGoalId, a.goalId)
+  assert.equal(r.round, 1, 'successor starts its own round 1')
+  assert.equal(r.started, true)
+  assert.equal(engine23.runs.length, runsBefore + 1, 'successor round launched in the background')
+  const newRun = engine23.runs.at(-1)
+  assert.equal(newRun.request.args.goal.objective, '新目标 Y', 'new objective reaches the task agent')
+  assert.equal(newRun.request.args.depth, 'quick', 'depth override honored')
+  assert.equal(newRun.request.args.role, 'default', 'role inherited from the old goal')
+
+  const board = (await tool23.execute({ action: 'list' }, exec23)).board
+  const previous = board.find((g) => g.goalId === a.goalId)
+  const successor = board.find((g) => g.goalId === r.goalId)
+  assert.equal(previous.status, 'superseded', 'old goal keeps its final state as superseded')
+  assert.equal(previous.supersededBy, r.goalId, 'old goal points at its successor')
+  assert.equal(previous.objective, '旧委托书', 'old goal objective is never rewritten in place')
+  assert.equal(successor.parentGoalId, a.goalId, 'successor records its lineage')
+  assert.equal(successor.status, 'running')
+  assert.equal(successor.title, '修订后任务')
+  assert.equal(successor.objective, '新目标 Y')
+
+  const logPath = join(root, '.cybernetics', `revisions-${r.goalId}.jsonl`)
+  const lines = (await readFile(logPath, 'utf8')).trim().split('\n')
+  assert.equal(lines.length, 1, 'one revision audit line per transition')
+  const record = JSON.parse(lines[0])
+  assert.equal(record.from, a.goalId)
+  assert.equal(record.to, r.goalId)
+  assert.equal(record.reason, '用户校准：目标改为 Y')
+  assert.equal(typeof record.at, 'number', 'revision timestamp recorded')
+
+  // A COMPLETED goal revised → same append-only rule; unspecified fields inherit.
+  newRun.settle({ stopReason: 'completed', value: metRound })
+  await new Promise((r2) => setImmediate(r2))
+  const settled = await tool23.execute({ action: 'collect', goalId: r.goalId }, exec23)
+  assert.equal(settled.decision.reason, 'met')
+  const r2 = await tool23.execute({ action: 'revise', goalId: r.goalId, reason: '完成后发现目标需再调整' }, exec23)
+  const board2 = (await tool23.execute({ action: 'list' }, exec23)).board
+  const completedGoal = board2.find((g) => g.goalId === r.goalId)
+  const third = board2.find((g) => g.goalId === r2.goalId)
+  assert.equal(completedGoal.status, 'superseded', 'a completed goal is superseded, not edited')
+  assert.equal(completedGoal.supersededBy, r2.goalId)
+  assert.equal(third.parentGoalId, r.goalId)
+  assert.equal(third.objective, '新目标 Y', 'objective inherited when the revision omits it')
+  assert.equal(third.title, '修订后任务', 'title inherited when the revision omits it')
+  assert.equal(engine23.runs.at(-1).request.args.depth, 'quick', 'depth inherited across the revision')
+  console.log('✓ 23 revise: successor goal + lineage + superseded old goal + revision audit (completed goal included)')
+}
+
+// 24. v0.6 revise/abortPrevious: the SESSION agent decides whether the old goal's
+//     in-flight task agent is interrupted (default false); bad revisions are rejected
+{
+  const engine24 = fakeEngine()
+  const host = fakeHost(engine24)
+  host.ctx.workingDirectory = { get: () => root }
+  apply(host.ctx, {})
+  const tool24 = host.tools[0]
+  const exec24 = { agent: host.parent, signal: undefined }
+
+  const a = await tool24.execute({ action: 'start', title: '打断任务', brief: 'b' }, exec24)
+  const runA = engine24.runs[0]
+  const ra = await tool24.execute({
+    action: 'revise', goalId: a.goalId, reason: '方向错误', abortPrevious: true,
+  }, exec24)
+  assert.equal(runA.cancelled, true, 'abortPrevious=true cancels the old in-flight run')
+  assert.equal(runA.disposed, true, 'the cancelled run is disposed (no leaked handle)')
+  assert.match(ra.aborted ?? '', /中止/)
+
+  const b = await tool24.execute({ action: 'start', title: '等待任务', brief: 'b' }, exec24)
+  const runB = engine24.runs.at(-1)
+  const runsBefore = engine24.runs.length
+  const rb = await tool24.execute({ action: 'revise', goalId: b.goalId, reason: '补充要求' }, exec24)
+  assert.equal(runB.cancelled, false, 'default: the old task agent keeps running')
+  assert.equal(engine24.runs.length, runsBefore + 1, 'the successor still starts its own round')
+  assert.equal(rb.aborted, undefined)
+
+  await assert.rejects(
+    () => tool24.execute({ action: 'revise', goalId: b.goalId, objective: 'x' }, exec24),
+    /requires a non-empty "reason"/,
+    'reason is mandatory',
+  )
+  await assert.rejects(
+    () => tool24.execute({ action: 'revise', goalId: a.goalId, reason: '再改一次' }, exec24),
+    /already superseded/,
+    'a superseded goal cannot be revised again (no lineage forking)',
+  )
+
+  // The superseded goal's late round settles silently: no collect notice, and
+  // the frozen goal can no longer be collected/driven.
+  runB.settle({ stopReason: 'cancelled', error: 'user' })
+  await new Promise((r) => setImmediate(r))
+  assert.equal(
+    host.followups.filter((f) => f.source?.goalId === b.goalId).length, 0,
+    'a superseded goal queues no collect notice for its late round',
+  )
+  await assert.rejects(
+    () => tool24.execute({ action: 'collect', goalId: b.goalId }, exec24),
+    /superseded/,
+    'a superseded goal is frozen history: collect is rejected',
+  )
+  console.log('✓ 24 revise abortPrevious: true cancels the old run, default false leaves it running; guards hold')
+}
+
+// 25. v0.6 goalsFromBoard ordering: unfinished goals first, completed goals after,
+//     newest update first inside each segment
+{
+  const loop = (goalId, status, extra = {}) => ({
+    goalId, title: goalId, objective: 'o', round: 1, doneSummary: '', subgoal: 's', role: 'default',
+    status, ...extra,
+  })
+  const loops = [
+    loop('g-met', 'met'),
+    loop('g-running', 'running'),
+    loop('g-superseded', 'superseded', { supersededBy: 'g-running' }),
+    loop('g-pending', undefined),
+    loop('g-failed', 'paused', { paused: { reason: 'failed', note: 'boom' } }),
+    loop('g-paused', 'paused'),
+  ]
+  // Stamp distinct updatedAt values (per-object content fingerprints).
+  loops.forEach((l, i) => goalsFromBoard([l], 1000 + i))
+  const snap = goalsFromBoard(loops, 9000)
+  assert.deepEqual(
+    snap.goals.map((g) => g.goalId),
+    ['g-paused', 'g-failed', 'g-pending', 'g-running', 'g-superseded', 'g-met'],
+    'two segments: running/paused/pending/failed first, then cancelled/met/superseded; newest update first inside each',
+  )
+  const completed = new Set(['met', 'cancelled', 'superseded'])
+  let seenCompleted = false
+  for (const g of snap.goals) {
+    if (completed.has(g.status)) seenCompleted = true
+    else assert.equal(seenCompleted, false, `unfinished goal ${g.goalId} must precede the completed segment`)
+  }
+  for (let i = 1; i < snap.goals.length; i++) {
+    const prev = snap.goals[i - 1]
+    const cur = snap.goals[i]
+    if (completed.has(prev.status) !== completed.has(cur.status)) continue
+    assert.ok(prev.updatedAt >= cur.updatedAt, `segment order is updatedAt desc (${prev.goalId} -> ${cur.goalId})`)
+  }
+  assert.deepEqual(
+    goalsFromBoard(loops, 99999).goals.map((g) => g.goalId),
+    snap.goals.map((g) => g.goalId),
+    'unchanged board keeps a stable order across publishes',
+  )
+  console.log('✓ 25 goalsFromBoard order: unfinished segment first, completed after, updatedAt desc inside')
+}
+
+// 26. v0.6 projection GoalView lineage: parentGoalId/supersededBy survive the wire
+//     and 'superseded' maps through status normalization (absent lineage stays absent)
+{
+  const previousLoop = {
+    goalId: 'g-old', title: '旧', objective: 'o1', round: 2, doneSummary: '', subgoal: 's-old',
+    role: 'default', status: 'superseded', supersededBy: 'g-new',
+  }
+  const successorLoop = {
+    goalId: 'g-new', title: '新', objective: 'o2', round: 0, doneSummary: '', subgoal: 's-new',
+    role: 'default', status: 'running', parentGoalId: 'g-old', depth: 'quick', executor: 'persistent',
+  }
+  const snap = goalsFromBoard([previousLoop, successorLoop], 1000)
+  assert.equal(snap.goals[0].goalId, 'g-new', 'running goal precedes the superseded one')
+  const prevView = snap.goals.find((g) => g.goalId === 'g-old')
+  const nextView = snap.goals.find((g) => g.goalId === 'g-new')
+  assert.equal(prevView.status, 'superseded', "'superseded' is a first-class GoalStatus")
+  assert.equal(prevView.supersededBy, 'g-new')
+  assert.equal('parentGoalId' in prevView, false, 'absent lineage keys are omitted, not undefined')
+  assert.equal(nextView.parentGoalId, 'g-old')
+  assert.equal(nextView.status, 'running')
+  assert.equal(nextView.depth, 'quick')
+  assert.equal(nextView.executor, 'persistent')
+
+  const unit = cyberneticsGoalsProjection()
+  const folded = unit.apply(unit.init(), {
+    type: EVENT_TYPE,
+    data: { goals: [{ ...prevView, updatedAt: 100 }, { ...nextView, updatedAt: 200 }] },
+  })
+  assert.equal(folded.goals.find((g) => g.goalId === 'g-old').status, 'superseded')
+  assert.equal(folded.goals.find((g) => g.goalId === 'g-old').supersededBy, 'g-new')
+  assert.equal(folded.goals.find((g) => g.goalId === 'g-new').parentGoalId, 'g-old')
+  const plain = unit.apply(unit.init(), {
+    type: EVENT_TYPE,
+    data: {
+      goals: [{
+        goalId: 'g-plain', title: 'p', objective: 'o', status: 'running', depth: 'full',
+        executor: 'ephemeral', round: 0, revisions: [], updatedAt: 1,
+      }],
+    },
+  })
+  assert.equal('parentGoalId' in plain.goals[0], false, 'legacy payloads fold without invented lineage')
+  assert.equal('supersededBy' in plain.goals[0], false)
+  console.log('✓ 26 projection lineage: parentGoalId/supersededBy on the wire, superseded status folded')
+}
+
+// 27. v0.6 client lineage render: superseded/revised lines resolve titles, the
+//     superseded badge and locales exist, and the client never re-sorts
+{
+  const { src, flatten, values, t, tab, injected, dict } = await loadClientTab()
+  assert.ok(dict['goalStatus.superseded'], 'zh locale has the superseded badge')
+  assert.ok(dict['goal.supersededBy'], 'zh locale has the "superseded by" line')
+  assert.ok(dict['goal.revisedFrom'], 'zh locale has the "revised from" line')
+  assert.ok(!/\.slice\(\)\.sort/.test(src), 'client never re-sorts the projection order')
+
+  values.goal = { current: null }
+  // Deliberately NOT newest-first: a re-sorting client would flip this payload.
+  values.cyberneticsGoals = {
+    goals: [
+      { goalId: 'cyb-a', title: '甲任务', objective: 'o', status: 'paused', depth: 'full', executor: 'ephemeral', round: 1, revisions: [], updatedAt: 100 },
+      { goalId: 'cyb-b', title: '乙任务', objective: 'o', status: 'paused', depth: 'full', executor: 'ephemeral', round: 1, revisions: [], updatedAt: 900 },
+    ],
+  }
+  const ordered = flatten(tab.view({ ...injected, t })).join('\n')
+  assert.ok(ordered.indexOf('甲任务') < ordered.indexOf('乙任务'), 'client keeps the projection order verbatim')
+
+  values.cyberneticsGoals = {
+    goals: [
+      { goalId: 'cyb-2', title: '新目标', objective: 'o2', status: 'running', depth: 'full', executor: 'ephemeral', round: 0, parentGoalId: 'cyb-1', revisions: [], updatedAt: 300 },
+      { goalId: 'cyb-1', title: '旧目标', objective: 'o1', status: 'superseded', depth: 'full', executor: 'ephemeral', round: 2, supersededBy: 'cyb-2', revisions: [], updatedAt: 100 },
+    ],
+  }
+  const lineage = flatten(tab.view({ ...injected, t })).join('\n')
+  assert.match(lineage, /已被「新目标」取代/, 'superseded goal names its successor title')
+  assert.match(lineage, /修订自「旧目标」/, 'revised goal names its parent title')
+  assert.match(lineage, /已被取代/, 'superseded status badge rendered')
+  console.log('✓ 27 client lineage: successor/parent lines with titles, superseded badge, projection order preserved')
+}
+
+console.log('\nALL 27 CHECKS PASSED')

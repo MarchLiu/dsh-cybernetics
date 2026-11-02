@@ -11,6 +11,8 @@
    用户确认后才生效**——与 dsh-goal「edit 需直接人类输入」的权柄设计一致；修订记录版本号、
    原因、前后对比、触发轮次。多轮迭代中 goal 保持稳定身份，迭代细化的是 subgoal；
    仅当反馈证明目标本身错误时才走外环。目标被悄悄改写会摧毁「经 goal 跟踪 agent」的价值。
+   （2026-11-02 追加定稿：外环改为 **append-only**——修订创建新 goal 并取代旧 goal，不再原地
+   改 objective、不再用版本号记账；见下文「v0.6 已实现：只新增目标模型」。）
 2. **委托书修订协议**（持久执行者的消息语义）：`send_message` 只允许投递**委托书修订**
    （新增约束 / 验收标准变化 / 范围收窄），禁止开放式对话；每条修订同样进入 round 日志。
 3. **控制页签合并，不替换**：保留 goal 板作为控制面——外环入口（对某 goal 提交修订意见 →
@@ -37,14 +39,49 @@
 dsh-goal 的 `goal` 投影每 session 只有一个焦点槽，`cyb-*` 多 goal 板在「目标」页签里不可见。
 本版新增插件自有 session 投影 `cyberneticsGoals`：每个写点（goal 创建、轮次启动、轮次结算决策、
 cancel）把该 session **全部 goal 的整值快照** append 成一条 `cybernetics/goals` 事件，
-projection 纯折叠后由宿主把整值推给客户端，页签按 `updatedAt` 倒序渲染每个 goal
+projection 纯折叠后由宿主把整值推给客户端，页签按**两段顺序**渲染每个 goal
+（未完成组在前、已完成组在后，组内 `updatedAt` 倒序；见下节「只新增目标模型」）
 （标题 / 状态徽标 / 第 N 轮 / 当前 subgoal / depth、executor 小标签）并就地更新；
 空板回退到原有单 goal `goal` 投影渲染。`GoalView` 已预留 `executor` 与 `revisions` 字段（当前
-固定 ephemeral / 空数组），供 Executor 适配层与外环修订记账接入。
+固定 ephemeral / 空数组）：`executor` 待 Executor 适配层接入，`revisions` 在下面的 append-only
+模型下仅作兼容占位。
 
 已知边界：goal 板仍是**进程内存态**（`boards`），宿主重启后 projection 会重放会话日志里的
 `cybernetics/goals` 事件、页签仍显示旧 goal，而 controller 的板已为空——两者要等「首次触碰时
 从 projection 状态回灌 board」的 rehydrate 步骤落地后才完全一致（后续轮次）。
+
+### v0.6 已实现：只新增目标模型（append-only goals）
+
+2026-11-02 用户定稿，替代设计稿第 1 条中「多轮迭代 goal 保持稳定身份、修订记录版本号」的做法：
+**goal 一旦存在就不再被原地修改**。目标变了就换一个新 goal，旧 goal 保留其最终状态。身份与历史
+由 goal 链表达，而不是由同一 goal 的可变字段表达。
+
+- **修订 = 新建**。`cybernetics { action:'revise', goalId, reason, objective?, title?, depth?,
+  executor?, abortPrevious? }`：新 goal 继承旧 goal 的 `depth`/`executor`/`role`/`objective`
+  （`objective`/`title`/`depth`/`executor` 可用参数覆盖），写入 `parentGoalId = 旧goalId`，
+  状态 `running` 并**立即启动第 1 轮**（后台语义，返回值 `goalId` 为新 goal，`started: true`）；
+  旧 goal 状态置 `superseded`、写 `supersededBy = 新goalId`，此后不再是可驱动的 goal。
+  对**已完成（met/cancelled）的 goal 修正是同一条路径**——同样生成新 goal，旧 goal 被取代。
+- **`revise` 是唯一的改目标动词**，只有 session agent 在用户确认后调用；`reason` 必填。
+  工具不会原地改写 objective；被取代的 goal 再次 revise 会被拒绝（`already superseded`），
+  以免谱系分叉。
+- **旧轮是否中止由 session agent 裁定**：`abortPrevious: true` 时复用 cancel 路径中止旧 goal
+  在跑的 task agent 轮并释放句柄，`false`（默认）时让旧轮跑完——它结算后不再产生 collect
+  通知（该 goal 已被取代），句柄由结算回调清理。
+- **审计**：每次修订追加一行到 `<workspace>/.cybernetics/revisions-<新goalId>.jsonl`：
+  `{from, to, reason, at}`。旧 goal 的 per-round 日志（`round-<旧goalId>-<N>.json`）原样保留，
+  谱系两侧都能追溯。写审计失败不影响修订（只读工作区也不阻断）。
+- **页签排序（两段）**：未完成组（running/paused/pending/failed）在前，已完成组
+  （met/cancelled/superseded）在后；组内按 `updatedAt` 降序，`goalId` 兜底打破同毫秒平局。
+  排序在服务端 `goalsFromBoard` 完成，客户端按投影顺序渲染、不重排。
+- **派生的展示关系**：goal 有 `supersededBy` 时显示「已被 <新标题> 取代」小字；有
+  `parentGoalId` 时显示「修订自 <旧标题>」。`GoalView` 的 `parentGoalId`/`supersededBy` 是可
+  选字段（无谱系时不出现），`GoalStatus` 增加 `'superseded'`，投影 `stateVersion` 升到 2。
+- **`revisions` 字段**：保留在 `LoopState`/`GoalView` 作兼容占位，append-only 模型下不再写入
+  （修订历史在 goal 链 + revisions jsonl 里）。
+
+已知边界：`superseded` 只发生在插件自有 goal 板上；dsh-goal 的单槽焦点 goal 不会随之迁移
+（新建普通 goal 时的焦点同步逻辑未改），焦点槽里的旧 goal 需由 session agent 另行处理。
 
 ## v0.5 变化：双档轮次（depth）——分析任务分级
 
@@ -128,8 +165,10 @@ cybernetics 工具自身始终豁免。语义随之明确：**只读问答无需
 
 1. **新任务** → `cybernetics { action:'start', title, brief }` 建 goal 并后台启动 task agent；
    `brief` 是完整工作委托书（背景、路径、约束、验收标准），详细到 subagent 无需对话历史即可完成。
-2. **已有任务的修正** → 裁决打断或等待：打断 = `cancel` 该 goalId 后以修正内容重写 brief 重启一轮；
-   等待 = `collect` 收完当轮后，以 verdict gaps + 修正内容构造新一轮。
+2. **已有任务的修正** → `revise`（append-only）：`{ action:'revise', goalId, reason, objective?,
+   brief?, title?, depth?, executor?, abortPrevious? }` 创建新 goal（`parentGoalId`=旧）并立即启动
+   第 1 轮，旧 goal 置 `superseded`；`abortPrevious` 由 session agent 裁定是否中止旧轮（默认 false）。
+   仅想中止当前轮而不改目标时用 `cancel`，再对同一 goal 开修正轮。
 3. **反馈到达**（`round` 的返回值，或异步轮完成通知后的 `collect`）→ 三选一或组合：
    向用户总结；启动验证轮；以缺口为 brief 启动修正轮。
 
@@ -151,6 +190,8 @@ cybernetics 工具自身始终豁免。语义随之明确：**只读问答无需
 1. `met=true` → 报告完成，**等用户确认**；controller 不自行宣告、不代改 goal phase。
 2. `goalItselfQuestionable=true` 或存在 human 类目 → 暂停，回对话。
 3. 连续迭代上限（默认 3 轮/子目标，总轮数由 dsh-goal round cap 兜底）→ 暂停并汇报。
+4. goal 被修订取代（`superseded`）是 dsh-goal 视角之外的终态：该 goal 不再被驱动、不再收轮，
+   后续工作属于 `supersededBy` 指向的新 goal。
 
 ## 角色化 sub agent
 
@@ -171,11 +212,14 @@ Config `roles` 表把角色名映射到 `{provider, model}` 覆盖，round 脚�
 
 - 每轮结构化结果落 `<workspace>/.cybernetics/round-<goalId>-<N>.json`（追加式审计日志；
   goalId 进文件名，防止多 goal 各自从 1 计轮互相覆盖——v0.3 实机实测发现并修复）。
+- v0.6 追加式目标模型：每次修订落 `<workspace>/.cybernetics/revisions-<新goalId>.jsonl`，
+  一行 `{from, to, reason, at}`；旧 goal 的 round 日志保持不变，修订前后都可追溯。
 - goal 状态由 dsh-goal 的 session projection（`goal` 投影）承载，客户端「目标 / Goal」页签
   （`lib/client.js`，conversation.view slot）实时读取渲染：objective 文本 + phase + rounds。
   v0.2 为纯文本渲染；后续演进：任务分解、状态跟踪、verdict 历史可视化（参照 dsh-context 范式）。
 - v0.6 起该页签优先读插件自有投影 `cyberneticsGoals`：一个 session 的全部 goal（含 `cyb-*`）
-  逐条展示并就地更新；`goal` 投影保留为无多 goal 数据时的回退渲染。
+  逐条展示并就地更新（被取代的 goal 标注后继标题，修订来的 goal 标注来源标题）；
+  `goal` 投影保留为无多 goal 数据时的回退渲染。
 
 ## 第 0 步实验记录（2026-11-02）
 

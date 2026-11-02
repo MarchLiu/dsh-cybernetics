@@ -23,7 +23,9 @@
 
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { runRound, startRound, foldRound } from './controller.ts'
+import {
+  createGoal, foldRound, runRound, startRound, supersedeGoal, writeRevisionLog,
+} from './controller.ts'
 import type { ControllerConfig, ControllerDecision, LoopState, RoundResult, RolesConfig } from './controller.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals } from './projection.ts'
 
@@ -107,8 +109,21 @@ interface RunningRound {
   config: ControllerConfig
   run: { result: Promise<any>; cancel(reason?: string): void; dispose(): Promise<void> }
   settled?: { stopReason: string; value?: unknown; error?: unknown }
+  /** Set once the run has been disposed (cancel-by-revision and collect can race). */
+  disposed?: boolean
 }
 const running = new Map<string, RunningRound>()
+
+/** Dispose a run at most once; disposal is best-effort observability cleanup. */
+async function disposeOnce(handle: RunningRound): Promise<void> {
+  if (handle.disposed) return
+  handle.disposed = true
+  try {
+    await handle.run.dispose()
+  } catch {
+    // An already-settled or torn-down run must not fail the calling action.
+  }
+}
 
 /** Minimal required-field validation the omitted dsh-tools wrapper would do. */
 function requireFields(args: Record<string, unknown>, names: string[]): void {
@@ -129,9 +144,14 @@ yourself — you manage goals and the task agents that execute them. Classify ea
   a brief — the COMPLETE work order extracted from the request (background, paths, constraints, acceptance
   criteria). The task agent is an independent subagent with NO conversation history; the brief must be
   detailed enough for it to finish the work unaided. One session supports multiple concurrent goals.
-- CORRECTION to an existing task → decide: interrupt (action 'cancel' on that goalId, then start a fresh
-  round whose brief carries the correction) or wait (collect the running round, then start a corrective
-  round addressing it).
+- CORRECTION to an existing task → an APPEND-ONLY goal revision: call action 'revise' with the old goalId, a
+  required reason, the new objective when the goal itself changed (omit it to inherit), and optionally a new
+  title / depth / executor. 'revise' creates a NEW goal (parentGoalId = old goal) and starts its first round;
+  the old goal keeps its final state as 'superseded'. Pass abortPrevious: true only when the session agent
+  decides the old goal's in-flight task agent must be interrupted (default: let it finish; the abort reuses
+  the 'cancel' path, and 'cancel' on its own still stops a round without revising the goal).
+  NEVER edit a goal's objective in place — 'revise' is the only goal-change verb, and only after the user
+  has confirmed the change in conversation.
 - FEEDBACK arrives as the tool result ('round') or, for async rounds, as a queued notification followed by
   action 'collect'. Then choose: summarize the outcome to the user; start a verification round; or start a
   corrective round whose brief is built from the verdict gaps. On decision 'continue', launch the next
@@ -260,14 +280,17 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       '(use when a user correction must interrupt the current task agent); list shows every goal on this ' +
       'session board. New task: pass title + brief (a complete, self-contained work order — the task agent ' +
       'has NO conversation history) to create a goal; one session supports multiple concurrent goals. ' +
+      'revise is the ONLY goal-change verb and it is append-only: it creates a NEW goal (parentGoalId = old ' +
+      'goal, inherited depth/executor/role/objective unless overridden), starts that goal\'s first round, and ' +
+      'marks the old goal superseded (supersededBy = new goal) — it never rewrites the objective in place. ' +
       'Existing goal: pass its goalId. The controller never marks a goal complete — that is the user\'s act.',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['round', 'start', 'collect', 'cancel', 'list'],
-          description: 'round=同步执行一轮（默认）| start=后台启动一轮并立即返回 | collect=折叠已完成的后台轮 | cancel=中止正在运行的轮（修正场景）| list=查看本会话全部 goal。',
+          enum: ['round', 'start', 'collect', 'cancel', 'revise', 'list'],
+          description: 'round=同步执行一轮（默认）| start=后台启动一轮并立即返回 | collect=折叠已完成的后台轮 | cancel=中止正在运行的轮（修正场景）| revise=追加式修正：为新目标建新 goal 并启动第 1 轮，旧 goal 置 superseded | list=查看本会话全部 goal。',
         },
         goalId: {
           type: 'string',
@@ -298,6 +321,25 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           type: 'string',
           description: '本轮 task agent 的角色（对应部署配置 roles 表，如 frontend/backend/writer）；缺省 default。',
         },
+        reason: {
+          type: 'string',
+          description:
+            'revise 必填：修订原因（写进 .cybernetics/revisions-<新goalId>.jsonl 审计，并向用户解释为什么换目标）。',
+        },
+        objective: {
+          type: 'string',
+          description: 'revise：新 goal 的目标文本；缺省继承旧 goal 的 objective（用于「目标本身被校准」的修订）。',
+        },
+        abortPrevious: {
+          type: 'boolean',
+          description:
+            'revise：是否中止旧 goal 正在运行的 task agent 轮（默认 false，让它跑完；true 时复用 cancel 路径）。',
+        },
+        executor: {
+          type: 'string',
+          enum: ['ephemeral', 'persistent'],
+          description: 'revise：新 goal 的执行者基质，缺省继承旧 goal（当前均为 ephemeral）。',
+        },
       },
     },
     output: {
@@ -305,6 +347,9 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         type: 'object',
         properties: {
           goalId: { type: 'string' },
+          previousGoalId: { type: 'string' },
+          revised: { type: 'boolean' },
+          revision: { type: 'object' },
           round: { type: 'number' },
           decision: { type: 'object' },
           result: { type: 'object' },
@@ -315,6 +360,15 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           const lines = (value.board as any[]).map((g) =>
             `${g.goalId} [${g.status}${g.running ? '/running' : ''}] R${g.round} ${g.title ?? ''} — ${g.subgoal}`)
           return [{ type: 'text', text: lines.length ? lines.join('\n') : '（goal 板为空）' }]
+        }
+        if (value.revised) {
+          return [{
+            type: 'text',
+            text:
+              `goal ${value.previousGoalId} 已置 superseded → 新 goal ${value.goalId}` +
+              `（修订自 ${value.previousGoalId}${value.aborted ? '，旧轮已中止' : ''}）；` +
+              `新 goal 第 ${value.round} 轮已后台启动，完成后将通知本会话`,
+          }]
         }
         if (value.started) return [{ type: 'text', text: `goal ${value.goalId} 第 ${value.round} 轮已后台启动，完成后将通知本会话` }]
         if (value.pending) return [{ type: 'text', text: `goal ${value.goalId} 第 ${value.round} 轮仍在运行` }]
@@ -327,13 +381,17 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       },
     },
     async execute(args: {
-      action?: 'round' | 'start' | 'collect' | 'cancel' | 'list'
+      action?: 'round' | 'start' | 'collect' | 'cancel' | 'revise' | 'list'
       goalId?: string
       title?: string
       brief?: string
       subgoal?: string
       depth?: 'quick' | 'full'
       role?: string
+      reason?: string
+      objective?: string
+      abortPrevious?: boolean
+      executor?: 'ephemeral' | 'persistent'
     }, exec: any) {
       requireFields(args as Record<string, unknown>, [])
       const goals = ctx.goals
@@ -360,8 +418,10 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       if (action === 'list') {
         return {
           board: [...board.values()].map((g) => ({
-            goalId: g.goalId, title: g.title, status: g.status ?? 'paused',
+            goalId: g.goalId, title: g.title, objective: g.objective, status: g.status ?? 'paused',
             running: running.has(g.goalId!), round: g.round, subgoal: g.subgoal,
+            ...(g.parentGoalId ? { parentGoalId: g.parentGoalId } : {}),
+            ...(g.supersededBy ? { supersededBy: g.supersededBy } : {}),
           })),
         }
       }
@@ -380,6 +440,8 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
 
       // --- Resolve the target loop for this call ------------------------------
       // Priority: explicit goalId > new goal (title) > active dsh-goal focus.
+      // 'revise' is excluded from the title branch: there `title` names the NEW
+      // goal's title while the call targets the OLD goal.
       let loop: LoopState | undefined
       if (args.goalId) {
         loop = board.get(args.goalId)
@@ -392,15 +454,17 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           board.set(loop.goalId!, loop)
         }
         if (!loop) throw new Error(`cybernetics: goal "${args.goalId}" not on this session's board (try action "list")`)
-      } else if (args.title) {
+      } else if (args.title && action !== 'revise') {
         // New task: create a registry goal. dsh-goal stays single-slot; when it
         // is free, focus the new goal into it (GUI tab + round-driver pickup).
         const goalId = `cyb-${randomUUID().slice(0, 8)}`
         const objective = args.brief ?? args.title
-        loop = {
-          goalId, title: args.title, objective, round: 0, doneSummary: '',
-          subgoal: args.subgoal ?? args.title, role: 'default', status: 'paused',
-        }
+        loop = createGoal(undefined, {
+          goalId,
+          title: args.title,
+          objective,
+          ...(args.subgoal ? { subgoal: args.subgoal } : {}),
+        })
         board.set(goalId, loop)
         // Goal creation is a projection write point: the tab gains the goal
         // immediately, before the first round settles.
@@ -446,6 +510,111 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       }
       const objective = loop.objective ?? goalView?.objective ?? loop.title ?? ''
 
+      /**
+       * Start one goal's round in the background (action 'start' and `revise`
+       * share this): install the handle, then queue the completion notice. The
+       * goal's status is already 'running' when this is called.
+       */
+      const launchBackground = async (target: LoopState): Promise<{ round: number }> => {
+        const controller = new AbortController()
+        if (exec.signal) {
+          if (exec.signal.aborted) controller.abort()
+          else exec.signal.addEventListener('abort', () => controller.abort(), { once: true })
+        }
+        const { round, run } = await startRound(
+          engine, parent, root, target, controllerConfig,
+          { objective: target.objective ?? '' }, controller.signal,
+        )
+        const handle: RunningRound = { goalId: target.goalId!, round, parent, root, loop: target, config: controllerConfig, run }
+        running.set(target.goalId!, handle)
+        run.result.then(async (settled: any) => {
+          handle.settled = settled
+          // Superseded goal (revise with abortPrevious: false): the successor
+          // carries the work from here — no collect notice, and release the run
+          // so a finished-but-replaced round cannot leak the handle.
+          if (target.supersededBy !== undefined) {
+            if (running.get(target.goalId!) === handle) {
+              running.delete(target.goalId!)
+              await disposeOnce(handle)
+            }
+            return
+          }
+          notifyRoundSettled(parent, target, round)
+        }).catch(() => { /* result never rejects by contract; belt and braces */ })
+        return { round }
+      }
+
+      // --- revise (append-only goal model) ------------------------------------
+      // A goal change NEVER rewrites the objective in place: it creates a
+      // successor goal (parentGoalId = old), starts that goal's first round, and
+      // freezes the old goal as superseded (supersededBy = new). The session
+      // agent decides whether the old goal's in-flight task agent is aborted.
+      if (action === 'revise') {
+        const previous = loop
+        const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
+        if (reason.length === 0) {
+          throw new Error('cybernetics: action "revise" requires a non-empty "reason" — record why the goal changed')
+        }
+        if (previous.supersededBy !== undefined) {
+          throw new Error(
+            `cybernetics: goal "${previous.goalId}" was already superseded by "${previous.supersededBy}" — ` +
+            'revise the successor goal instead of forking the lineage',
+          )
+        }
+        const abortPrevious = args.abortPrevious === true
+        const previousHandle = running.get(previous.goalId!)
+        let aborted: string | undefined
+        if (abortPrevious && previousHandle) {
+          previousHandle.run.cancel(args.brief ?? `goal 被修订取代：${reason}`)
+          running.delete(previous.goalId!)
+          await disposeOnce(previousHandle)
+          aborted = '旧 goal 的在跑轮已中止'
+        }
+        const newGoalId = `cyb-${randomUUID().slice(0, 8)}`
+        const next = createGoal(previous, {
+          goalId: newGoalId,
+          ...(args.title ? { title: args.title } : {}),
+          ...(args.objective ? { objective: args.objective } : {}),
+          ...(args.depth ? { depth: args.depth } : {}),
+          ...(args.executor ? { executor: args.executor } : {}),
+          ...(args.role ? { role: args.role } : {}),
+          subgoal: args.objective ?? previous.objective ?? previous.title ?? newGoalId,
+        })
+        // A revision inherits the previous work order unless a corrected brief
+        // is supplied; the round-1 task agent reads `next.brief` verbatim.
+        if (args.brief ?? previous.brief) next.brief = args.brief ?? previous.brief
+        board.set(newGoalId, next)
+        supersedeGoal(previous, newGoalId)
+        publishBoard()
+        const at = Date.now()
+        let revisionLog: string | undefined
+        try {
+          revisionLog = await writeRevisionLog(root, newGoalId, { from: previous.goalId!, to: newGoalId, reason, at })
+        } catch {
+          // Audit is observability: a read-only workspace must not break the
+          // revision (the lineage fields on the board still carry the change).
+        }
+        const { round } = await launchBackground(next)
+        return {
+          goalId: newGoalId,
+          previousGoalId: previous.goalId,
+          revised: true,
+          round,
+          started: true,
+          ...(aborted ? { aborted } : {}),
+          revision: { from: previous.goalId, to: newGoalId, reason, at },
+          ...(revisionLog ? { revisionLog } : {}),
+        }
+      }
+
+      // A superseded goal is frozen history: only the successor may be driven.
+      if (loop.supersededBy !== undefined) {
+        throw new Error(
+          `cybernetics: goal "${loop.goalId}" is superseded by "${loop.supersededBy}" — ` +
+          'drive the successor goal (see action "list")',
+        )
+      }
+
       // --- cancel -------------------------------------------------------------
       if (action === 'cancel') {
         const h = running.get(loop.goalId!)
@@ -464,7 +633,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         const { result, decision } = await foldRound(h.root, h.round, h.settled, h.loop, h.config)
         applyDecision(h.loop, h.round, result, decision)
         running.delete(loop.goalId!)
-        await h.run.dispose()
+        await disposeOnce(h)
         // Round settlement decision applied — republish (round / status / subgoal).
         publishBoard()
         return { goalId: loop.goalId, round: h.round, decision, result }
@@ -481,20 +650,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       publishBoard()
 
       if (action === 'start') {
-        const controller = new AbortController()
-        if (exec.signal) {
-          if (exec.signal.aborted) controller.abort()
-          else exec.signal.addEventListener('abort', () => controller.abort(), { once: true })
-        }
-        const { round, run } = await startRound(
-          engine, parent, root, loop, controllerConfig, { objective }, controller.signal,
-        )
-        const handle: RunningRound = { goalId: loop.goalId!, round, parent, root, loop, config: controllerConfig, run }
-        running.set(loop.goalId!, handle)
-        run.result.then((settled: any) => {
-          handle.settled = settled
-          notifyRoundSettled(parent, loop, round)
-        }).catch(() => { /* result never rejects by contract; belt and braces */ })
+        const { round } = await launchBackground(loop)
         return { goalId: loop.goalId, round, started: true }
       }
 

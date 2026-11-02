@@ -8,8 +8,9 @@ task agent → verify agent → triage agent，controller 在轮间推进，用�
 - 服务端：`src/index.ts`（`cybernetics` 工具 + 隐式触发提示段）+ `src/controller.ts`（轮间状态机）
 - 客户端：`lib/client.js`（「目标 / Goal」+「控制 / Control」两个会话页签，实时推送）
   - 「目标」优先读插件自有 session projection `cyberneticsGoals`：本会话**全部** goal
-    （标题 / 状态徽标 / 第 N 轮 / 当前 subgoal / depth、executor 小标签，按更新时间倒序）
-    就地更新；无多 goal 数据时回退到 dsh-goal 的 `goal` projection 单 goal 渲染；
+    （标题 / 状态徽标 / 第 N 轮 / 当前 subgoal / depth、executor 小标签、被取代/修订来源标注），
+    按服务端两段顺序渲染（未完成在前、已完成在后，组内更新时间倒序）并就地更新；
+    无多 goal 数据时回退到 dsh-goal 的 `goal` projection 单 goal 渲染；
   - 「控制」读 session list store（control stream 实时推送），递归展示本会话全部
     agent（主控 + subagent catalog）的运行状态与各自 goal projection
     （objective / phase / rounds / 受阻原因），顶部汇总运行中数量。
@@ -21,6 +22,13 @@ v0.6：多 goal session 投影（`cyberneticsGoals`）——goal 板每次变化
 整值快照 append 成一条 `cybernetics/goals` 事件，服务端纯折叠、宿主整值推送，「目标」页签逐条渲染
 并就地更新；空板回退到 dsh-goal 单 goal 渲染。`GoalView` 预置 `executor`/`revisions` 字段
 （当前 ephemeral / 空），供 Executor 适配层与外环修订记账接入。
+v0.6 追加：**只新增目标模型（append-only goals）**——goal 一经存在不再原地修改。`action: 'revise'`
+（必填 `reason`，可选 `objective`/`title`/`depth`/`executor`/`abortPrevious`）创建一个带
+`parentGoalId` 的新 goal 并立即启动其第 1 轮，旧 goal 置 `superseded` + `supersededBy` 保留最终状态；
+已完成的 goal 同样走这条路径。`abortPrevious` 默认 false（旧轮跑完由 session agent 决定是否打断），
+true 时复用 cancel 路径。每次修订追加 `.cybernetics/revisions-<新goalId>.jsonl`。页签按两段排序
+（未完成在前、已完成 met/cancelled/superseded 在后，组内 `updatedAt` 倒序；服务端排序、客户端不重排），
+并显示「已被 <新标题> 取代」/「修订自 <旧标题>」；`GoalStatus` 增加 `superseded`。
 v0.5：双档轮次（depth）——轻量分析 quick 单 agent 一轮直接反馈；复杂分析与变更走完整工作-验证循环。
 v0.4.1：硬门增加 allowlist 模式（只保留读+编排工具，挡住 farm_unregister 类长尾变更工具）。
 v0.4：可选硬门（`hardGate: true`）——装配期从顶层 session agent 物理摘除执行工具
