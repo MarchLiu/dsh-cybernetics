@@ -76,9 +76,13 @@ export interface LoopState {
 }
 
 /** Append one round's structured result to the per-workspace audit log. */
-async function writeRoundLog(root: string, round: number, result: unknown): Promise<void> {
+async function writeRoundLog(root: string, goalId: string | undefined, round: number, result: unknown): Promise<void> {
   await mkdir(join(root, STATE_DIR), { recursive: true })
-  await writeFile(join(root, STATE_DIR, `round-${round}.json`), JSON.stringify(result, null, 2))
+  // Multi-goal: several goals share the workspace log dir, and each numbers
+  // its rounds from 1 — without the goalId in the name, concurrent goals
+  // overwrite each other's audit trail (found in the v0.3 live test).
+  const slug = (goalId ?? 'goal').replace(/[^a-zA-Z0-9._-]/g, '_')
+  await writeFile(join(root, STATE_DIR, `round-${slug}-${round}.json`), JSON.stringify(result, null, 2))
 }
 
 /**
@@ -133,7 +137,7 @@ export async function foldRound(
   } else {
     result = settled.value as RoundResult
   }
-  await writeRoundLog(root, round, result)
+  await writeRoundLog(root, state.goalId, round, result)
   return { result, decision: decide(result, state, config) }
 }
 

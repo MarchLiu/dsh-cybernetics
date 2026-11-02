@@ -133,9 +133,9 @@ let goalId
   const out = await tool.execute({ action: 'collect', goalId }, exec)
   assert.equal(out.decision.action, 'continue')
   assert.match(out.decision.subgoal, /另一半没做/, 'subgoal derived from gaps')
-  const log = JSON.parse(await readFile(join(root, '.cybernetics', 'round-1.json'), 'utf8'))
-  assert.equal(log.report.summary, '做完了一半', 'audit log written')
-  console.log('✓ 6 collect: continue decision from gaps, round-1.json audit log落盘')
+  const log = JSON.parse(await readFile(join(root, '.cybernetics', `round-${goalId}-1.json`), 'utf8'))
+  assert.equal(log.report.summary, '做完了一半', 'audit log written (goal-scoped filename)')
+  console.log(`✓ 6 collect: continue decision from gaps, round-${goalId}-1.json audit log落盘`)
 }
 
 // 7. start a second round then cancel it (correction-interrupt path)

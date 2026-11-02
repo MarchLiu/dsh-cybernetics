@@ -81,7 +81,8 @@ Config `roles` 表把角色名映射到 `{provider, model}` 覆盖，round 脚�
 
 ## 审计与可视化
 
-- 每轮结构化结果落 `<workspace>/.cybernetics/round-<N>.json`（追加式审计日志）。
+- 每轮结构化结果落 `<workspace>/.cybernetics/round-<goalId>-<N>.json`（追加式审计日志；
+  goalId 进文件名，防止多 goal 各自从 1 计轮互相覆盖——v0.3 实机实测发现并修复）。
 - goal 状态由 dsh-goal 的 session projection（`goal` 投影）承载，客户端「目标 / Goal」页签
   （`lib/client.js`，conversation.view slot）实时读取渲染：objective 文本 + phase + rounds。
   v0.2 为纯文本渲染；后续演进：任务分解、状态跟踪、verdict 历史可视化（参照 dsh-context 范式）。
