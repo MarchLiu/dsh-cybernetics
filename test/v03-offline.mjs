@@ -935,7 +935,7 @@ async function loadClientTab() {
   assert.ok(spawned[0].name.startsWith('cyb-'), 'member name derives from the goal id')
 
   // the teammate settles its turn
-  for (const h of handlers) h({ id: 'child-team-1', output: [{ type: 'text', text: '分析完成：X 的结论 {"done": true, "summary": "X ok", "evidence": "tool out"}' }] })
+  for (const h of handlers) h({ id: 'child-team-1', lastAssistantMessage: [{ type: 'text', text: '分析完成：X 的结论 {"done": true, "summary": "X ok", "evidence": "tool out"}' }] })
   await new Promise((r) => setImmediate(r))
   const collected = await tool9.execute({ action: 'collect', goalId: started.goalId }, exec9)
   assert.equal(collected.decision.reason, 'met', 'quick verdict derives from the report')
@@ -952,7 +952,7 @@ async function loadClientTab() {
   assert.equal(messages[0].target, spawned[0].name, 'the same durable member is addressed')
   assert.match(messages[0].content[0].text, /委托书修订/)
   assert.equal(spawned.length, 1, 'no second spawn')
-  for (const h of handlers) h({ id: 'child-team-1', output: [{ type: 'text', text: '第二轮完成 {"done": true, "summary": "round2 ok", "evidence": "e2"}' }] })
+  for (const h of handlers) h({ id: 'child-team-1', lastAssistantMessage: [{ type: 'text', text: '第二轮完成 {"done": true, "summary": "round2 ok", "evidence": "e2"}' }] })
   const out2 = await p
   assert.equal(out2.round, 2)
   assert.equal(out2.decision.reason, 'met')
@@ -976,7 +976,7 @@ async function loadClientTab() {
 {
   const runsBefore = engine9.runs.length
   const t = await tool9.execute({ action: 'start', title: '持久完整轮', brief: 'C', executor: 'persistent', depth: 'full' }, exec9)
-  for (const h of handlers) h({ id: 'child-team-1', output: [{ type: 'text', text: '完成 {"done": true, "summary": "full ok", "evidence": "ev"}' }] })
+  for (const h of handlers) h({ id: 'child-team-1', lastAssistantMessage: [{ type: 'text', text: '完成 {"done": true, "summary": "full ok", "evidence": "ev"}' }] })
   for (let i = 0; i < 200 && engine9.runs.length === runsBefore; i++) await new Promise((r) => setImmediate(r))
   assert.equal(engine9.runs.length, runsBefore + 1, 'verify/triage workflow run started')
   const req = engine9.runs.at(-1).request
@@ -1383,7 +1383,7 @@ let boardSnapshot
   assert.equal(spawned41[0].context, 'fresh', 'teammates stay provisioned, never forked')
   assert.ok(spawned41[0].name.startsWith('cyb-'), 'member name derives from the goal id')
 
-  for (const h of handlers41) h({ id: 'child-reflect-1', output: [{ type: 'text', text: '分析完成 {"done": true, "summary": "reflect ok", "evidence": "e"}' }] })
+  for (const h of handlers41) h({ id: 'child-reflect-1', lastAssistantMessage: [{ type: 'text', text: '分析完成 {"done": true, "summary": "reflect ok", "evidence": "e"}' }] })
   await new Promise((r) => setImmediate(r))
   const collected41 = await tool41.execute({ action: 'collect', goalId: started41.goalId }, exec41)
   assert.equal(collected41.decision.reason, 'met', 'quick verdict derives from the reflected teammate output')
@@ -1439,4 +1439,73 @@ let boardSnapshot
   console.log('✓ 42 reflection seam absent: structured error for persistent, ephemeral round still starts')
 }
 
-console.log('\nALL 42 CHECKS PASSED')
+// 43. v0.6 subagent/end capture field (regression): the host's
+//     `SubagentRunEndInfo` carries the child's final output as
+//     `lastAssistantMessage` (ContentBlock[]); `output` does not exist on that
+//     payload. Reading the wrong field made every persistent report empty and
+//     the quick verdict unmet. Assert the real field is consumed, and that the
+//     legacy `output` shape still works as a compatibility fallback.
+{
+  const handlers43 = []
+  const spawned43 = []
+  const tools43 = []
+  const root43 = await mkdtemp(join(tmpdir(), 'cyb-capture-'))
+  const ctx43 = {
+    tools: { register: (d) => { tools43.push(d); return () => {} } },
+    systemPrompt: { section() {}, getSectionOrder: () => 0 },
+    goals: { get: () => null, create: () => ({ id: 'goal-focused' }) },
+    workingDirectory: { get: () => root43 },
+    agentPresets: { serviceFor: () => fakeEngine() },
+    on: (event, fn) => { if (event === 'subagent/end') handlers43.push(fn); return () => {} },
+    agentTeams: {
+      spawnTeammate: async (_caller, req) => {
+        spawned43.push(req)
+        return { member: { id: `child-capture-${spawned43.length}`, name: req.name, status: 'running' } }
+      },
+      sendMessage: async () => ({ messageId: 'm-1' }),
+      interrupt: () => ({ previousStatus: 'running' }),
+      listMembers: () => [{ id: `child-capture-${spawned43.length}`, name: spawned43.at(-1)?.name, status: 'inactive' }],
+    },
+  }
+  apply(ctx43, {})
+  const tool43 = tools43[0]
+  const exec43 = { agent: { session: { id: 'sess-capture' }, followup() {} }, signal: undefined }
+
+  // (a) the real host payload shape: lastAssistantMessage
+  const started43 = await tool43.execute(
+    { action: 'start', title: '捕获回归', brief: '做 R', executor: 'persistent', depth: 'quick' },
+    exec43,
+  )
+  for (const h of handlers43) {
+    h({
+      runId: 'run-43',
+      provider: 'spawn',
+      id: 'child-capture-1',
+      local: true,
+      stopReason: 'completed',
+      lastAssistantMessage: [{ type: 'text', text: '任务完成 {"done": true, "summary": "captured ok", "evidence": "e"}' }],
+    })
+  }
+  await new Promise((r) => setImmediate(r))
+  const collected43 = await tool43.execute({ action: 'collect', goalId: started43.goalId }, exec43)
+  assert.notEqual(collected43.result.report.summary, '', 'lastAssistantMessage reaches the report (empty before the fix)')
+  assert.match(collected43.result.report.summary, /captured ok/, 'the child text was parsed from the real host field')
+  assert.equal(collected43.result.verdict.met, true, 'quick verdict is met when the real field carries done:true')
+  assert.equal(collected43.decision.reason, 'met')
+
+  // (b) compatibility fallback: the legacy/test shape only carries `output`
+  const started43b = await tool43.execute(
+    { action: 'start', title: '兼容回退', brief: '做 L', executor: 'persistent', depth: 'quick' },
+    exec43,
+  )
+  for (const h of handlers43) {
+    h({ id: 'child-capture-2', output: [{ type: 'text', text: '旧形状完成 {"done": true, "summary": "legacy ok", "evidence": "e2"}' }] })
+  }
+  await new Promise((r) => setImmediate(r))
+  const collected43b = await tool43.execute({ action: 'collect', goalId: started43b.goalId }, exec43)
+  assert.match(collected43b.result.report.summary, /legacy ok/, 'legacy `output` payload still readable (compat fallback)')
+  assert.equal(collected43b.result.verdict.met, true, 'compat fallback still yields a met verdict')
+  console.log('✓ 43 subagent/end capture: lastAssistantMessage is the source; legacy `output` still works')
+}
+
+console.log('\nALL 43 CHECKS PASSED')

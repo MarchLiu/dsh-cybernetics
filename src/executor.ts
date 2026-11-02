@@ -10,10 +10,11 @@
  * (`args.taskReport`) so verification never inherits the task narrative.
  *
  * Capture seam: a teammate's final output for one turn is delivered by the
- * host as `subagent/end` (info.id = the child session id, info.output =
- * ContentBlock[]). The event can settle before `spawnTeammate` resolves, so the
- * listener is installed before the first spawn and every settled child is
- * buffered by id until consumed.
+ * host as `subagent/end` (info.id = the child session id, info.lastAssistantMessage
+ * = ContentBlock[] — the host's `SubagentRunEndInfo` field; the legacy `output`
+ * shape is still accepted as a fallback). The event can settle before
+ * `spawnTeammate` resolves, so the listener is installed before the first spawn
+ * and every settled child is buffered by id until consumed.
  *
  * Soft integration: the Agent Teams service is probed at call time through
  * `agentTeamsOf()`. Two seams, in priority order:
@@ -323,7 +324,14 @@ export async function startTeamRound(
       const info = await wait.promise
       disposeWait = undefined
       if (cancelled) return { stopReason: 'cancelled', error: 'interrupted by session agent' }
-      const text = outputText((info as { output?: unknown }).output)
+      // The host's SubagentRunEndInfo carries the child's final output as
+      // `lastAssistantMessage` (ContentBlock[]) — NOT `output`, which does not
+      // exist on that payload. Reading the wrong field silently produced an
+      // empty report, so read the real field first and keep `output` only as a
+      // compatibility fallback for older/test shapes; an empty real field also
+      // falls through instead of shadowing usable legacy text.
+      const settledInfo = info as { lastAssistantMessage?: unknown; output?: unknown } | undefined
+      const text = outputText(settledInfo?.lastAssistantMessage) || outputText(settledInfo?.output)
       const parsed = parseTaskOutput(text)
       const report = {
         summary: parsed.summary,
