@@ -1,6 +1,21 @@
-# Cybernetics 工作协议 v0.4
+# Cybernetics 工作协议 v0.5
 
 目标-行动-测量-校准的迭代回路，构建在 DSH 的 `dsh-workflow` 编排与 `dsh-goal` 持久目标之上。
+
+## v0.5 变化：双档轮次（depth）——分析任务分级
+
+分析/查询类任务按复杂度分两级进入 goal 体系（用户 2026-11-02 定稿）：
+
+- **琐碎只读问答**（读工具一步可答的事实，无计算）→ session agent 直接答，不建 goal。
+- **轻量分析**（边界清晰、无需多步规划的查询）→ 建 goal，`depth: 'quick'`：
+  只跑 task agent 单 agent，一轮出结果直接反馈；跳过 verify/triage，成本约 1/3。
+  verdict 由 task report 派生（done → met），controller 决策逻辑不变。
+- **复杂分析与一切变更**（取数到本地、数据集统计、多步查询规划、任何状态改变）→
+  建 goal，`depth: 'full'`（默认）：完整 工作→验证→分诊 循环，验收通过才交付。
+  指导段明令禁止用 quick 轮抄近路做变更或复杂分析。
+
+实现：round.js 按 `args.depth` 分支（热生效）；`LoopState.depth` 逐轮可覆盖；
+工具参数 `depth` 枚举 quick/full。
 
 ## v0.4 变化：硬门（hard gate）——编排从劝告变成结构
 

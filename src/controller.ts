@@ -70,6 +70,8 @@ export interface LoopState {
   role: string
   /** Detailed per-round work order extracted by the calling model; passed to the task agent verbatim. */
   brief?: string
+  /** Round depth: 'quick' = task agent only (lightweight analysis); 'full' = task→verify→triage (default). */
+  depth?: 'quick' | 'full'
   /** Lifecycle: running (a round in flight) / paused / met (verify passed, awaits user) / cancelled. */
   status?: 'running' | 'paused' | 'met' | 'cancelled'
   paused?: { reason: ResumableReason; note: string }
@@ -109,6 +111,7 @@ export async function startRound(
       state: { round, doneSummary: state.doneSummary },
       subgoal: state.subgoal,
       brief: state.brief,
+      depth: state.depth ?? 'full',
       role: state.role,
       roles: config.roles ?? {},
     },

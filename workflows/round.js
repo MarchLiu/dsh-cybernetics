@@ -10,10 +10,14 @@
 //                                                   // primary work order (falls back to the objective)
 //   role:   string,                                 // task agent role key (default 'default')
 //   roles:  { [role]: { provider?, model? } },      // per-role LLM overrides (deployment config)
+//   depth:  'quick' | 'full',                       // quick = task agent only (lightweight analysis:
+//                                                   // one agent, one round, direct feedback — no
+//                                                   // verify/triage); full = the whole loop (default,
+//                                                   // for complex analysis and any world change)
 // }
 // Returns { round, report, verdict, triage } — the controller folds this into the decision.
 
-const { goal, state, subgoal, brief, role, roles } = args
+const { goal, state, subgoal, brief, role, roles, depth } = args
 
 // One triaged step; shared by the four triage buckets (plain data, no $ref).
 const stepsItem = {
@@ -74,6 +78,24 @@ const report = await agent(
 
 if (report === null) {
   return { round: state.round, failed: 'task agent 失败，本轮无结果' }
+}
+
+// quick depth: lightweight analysis — one agent, one round, direct feedback.
+// Skip verify/triage entirely; derive a verdict-shaped outcome from the
+// task report so the controller's decision logic works unchanged.
+if (depth === 'quick') {
+  return {
+    round: state.round,
+    report,
+    verdict: {
+      met: report.done === true,
+      quick: true,
+      criteria: [],
+      gaps: report.done === true ? [] : ['task agent 报告 done=false（quick 轮无 verify，详见 report）'],
+      goalItselfQuestionable: false,
+    },
+    triage: { auto: [], defer: [], reject: [], human: [] },
+  }
 }
 
 await phase('verify')

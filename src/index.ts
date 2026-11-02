@@ -112,11 +112,16 @@ function requireFields(args: Record<string, unknown>, names: string[]): void {
 
 const IMPLICIT_GUIDANCE = `Goal-driven orchestration (cybernetics). You are the SESSION agent: you never execute task work
 yourself — you manage goals and the task agents that execute them. Classify each user input:
-- NEW task → create a goal and launch a task agent: call cybernetics with action 'start' (non-blocking) or
-  'round' (blocking), a short title, and a brief — the COMPLETE work order extracted from the request
-  (background, paths, constraints, acceptance criteria). The task agent is an independent subagent with NO
-  conversation history; the brief must be detailed enough for it to finish the work unaided. One session
-  supports multiple concurrent goals; each returns its own goalId.
+- TRIVIAL READ-ONLY QUESTION (a fact your read tools answer directly, no computation) → answer inline, no goal.
+- LIGHTWEIGHT ANALYSIS (a bounded query/lookup needing tool work but no multi-step planning) → create a goal
+  with depth 'quick': one task-agent round, feed the result back directly.
+- COMPLEX ANALYSIS (data fetching to disk, datasets, statistics, multi-step query planning) and ANY
+  WORLD-CHANGING TASK → create a goal with depth 'full' (default): the work-verify loop must confirm the
+  result before you deliver it. Never shortcut a change or a complex analysis through a quick round.
+- For goals: call cybernetics with action 'start' (non-blocking) or 'round' (blocking), a short title, and
+  a brief — the COMPLETE work order extracted from the request (background, paths, constraints, acceptance
+  criteria). The task agent is an independent subagent with NO conversation history; the brief must be
+  detailed enough for it to finish the work unaided. One session supports multiple concurrent goals.
 - CORRECTION to an existing task → decide: interrupt (action 'cancel' on that goalId, then start a fresh
   round whose brief carries the correction) or wait (collect the running round, then start a corrective
   round addressing it).
@@ -257,6 +262,13 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           type: 'string',
           description: '本轮子目标；缺省沿用上轮决策（首轮取自 goal 本身）。',
         },
+        depth: {
+          type: 'string',
+          enum: ['quick', 'full'],
+          description:
+            '本轮深度：quick=轻量分析，只跑 task agent 单 agent 一轮出结果直接反馈（跳过 verify/triage）；' +
+            'full=完整工作-验证循环（默认）——复杂分析（取数/下载/统计/多步查询规划）与一切变更类任务必须用 full。',
+        },
         role: {
           type: 'string',
           description: '本轮 task agent 的角色（对应部署配置 roles 表，如 frontend/backend/writer）；缺省 default。',
@@ -295,6 +307,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       title?: string
       brief?: string
       subgoal?: string
+      depth?: 'quick' | 'full'
       role?: string
     }, exec: any) {
       requireFields(args as Record<string, unknown>, [])
@@ -383,6 +396,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       // Per-call overrides.
       if (args.subgoal) loop.subgoal = args.subgoal
       if (args.brief) loop.brief = args.brief
+      if (args.depth) loop.depth = args.depth
       if (args.role) loop.role = args.role
 
       const controllerConfig: ControllerConfig = {

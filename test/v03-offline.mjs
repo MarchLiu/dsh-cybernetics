@@ -194,7 +194,9 @@ let goalId
 // 10. guidance section encodes the orchestrator protocol
 {
   assert.match(section.text, /never execute task work/i)
-  assert.match(section.text, /NEW task/)
+  assert.match(section.text, /TRIVIAL READ-ONLY QUESTION/)
+  assert.match(section.text, /LIGHTWEIGHT ANALYSIS/)
+  assert.match(section.text, /COMPLEX ANALYSIS/)
   assert.match(section.text, /CORRECTION/)
   assert.match(section.text, /cancel/)
   console.log('✓ 10 guidance: orchestrator protocol injected')
@@ -283,4 +285,43 @@ let goalId
   console.log('✓ 13 allowlist mode: farm_unregister/subagent/bash hidden; reads+cybernetics survive')
 }
 
-console.log('\nALL 13 CHECKS PASSED')
+// 14. round.js depth='quick': only the task agent runs; verdict derived from report
+{
+  const code = await readFile(new URL('../workflows/round.js', import.meta.url), 'utf8')
+  const calls = []
+  const agent = async (prompt, opts) => {
+    calls.push(opts?.label ?? '?')
+    return { summary: '轻量分析结论', done: true, artifacts: [], evidence: 'e', nextStepThoughts: [] }
+  }
+  const fn = new (async function () {}.constructor)('agent', 'phase', 'args', 'log', code)
+  const out = await fn(agent, async () => {}, {
+    goal: { objective: 'O' }, state: { round: 1, doneSummary: '' },
+    subgoal: 'S', brief: 'B', depth: 'quick', roles: {},
+  }, () => {})
+  assert.deepEqual(calls, ['task:default'], 'quick: only task agent')
+  assert.equal(out.verdict.met, true)
+  assert.equal(out.verdict.quick, true)
+  console.log('✓ 14 quick depth: single task agent, verdict derived, verify/triage skipped')
+}
+
+// 15. round.js depth='full' (default): all three agents run in order
+{
+  const code = await readFile(new URL('../workflows/round.js', import.meta.url), 'utf8')
+  const calls = []
+  const agent = async (prompt, opts) => {
+    calls.push(opts?.label ?? '?')
+    if (calls.length === 1) return { summary: 's', done: true, artifacts: [], evidence: 'e', nextStepThoughts: [] }
+    if (calls.length === 2) return { met: true, criteria: [], gaps: [], goalItselfQuestionable: false }
+    return { auto: [], defer: [], reject: [], human: [] }
+  }
+  const fn = new (async function () {}.constructor)('agent', 'phase', 'args', 'log', code)
+  const out = await fn(agent, async () => {}, {
+    goal: { objective: 'O' }, state: { round: 1, doneSummary: '' },
+    subgoal: 'S', brief: 'B', roles: {},
+  }, () => {})
+  assert.deepEqual(calls, ['task:default', 'verify', 'triage'], 'full: three agents in order')
+  assert.equal(out.verdict.met, true)
+  console.log('✓ 15 full depth (default): task→verify→triage complete loop')
+}
+
+console.log('\nALL 15 CHECKS PASSED')
