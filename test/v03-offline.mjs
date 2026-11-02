@@ -8,6 +8,7 @@ import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply } from '../src/index.ts'
+import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals } from '../src/projection.ts'
 
 // --- fake workflow engine ---------------------------------------------------
 function fakeEngine() {
@@ -347,4 +348,261 @@ let goalId
   console.log('✓ 16 gateAllowlistExtra: team verbs join the default allowlist')
 }
 
-console.log('\nALL 16 CHECKS PASSED')
+// 17. v0.6 projection unit: registered under `cyberneticsGoals`, folds its own
+//     whole-value events, keeps state identity for every unrelated event
+{
+  const registered = []
+  const ctx7 = {
+    tools: { register: () => () => {} },
+    systemPrompt: { section() {}, getSectionOrder: () => 0 },
+    goals: { get: () => null },
+    workingDirectory: { get: () => root },
+    agentPresets: { serviceFor: () => undefined },
+    agents: { roots: () => [] },
+    sessionProjections: {
+      register: (definition) => { registered.push(definition); return () => {} },
+    },
+  }
+  apply(ctx7, { implicitTrigger: false })
+  assert.equal(registered.length, 1, 'projection unit registered exactly once')
+  const unit = registered[0]
+  assert.equal(unit.key, 'cyberneticsGoals', 'projection key drives client faceOf()')
+  assert.deepEqual(unit.init(), { goals: [] }, 'empty session starts with an empty board')
+  assert.equal(Number.isInteger(unit.stateVersion), true, 'stateVersion declared for the persisted cache')
+  assert.equal(typeof unit.wire.view, 'function')
+  assert.equal(typeof unit.wire.viewSchema.parse, 'function', 'wire schema is a .parse duck type')
+  const goalV = {
+    goalId: 'cyb-1', title: 'T', objective: 'O', status: 'running', depth: 'full',
+    executor: 'ephemeral', round: 1, subgoal: 'S', revisions: [], updatedAt: 123,
+  }
+  const state0 = unit.init()
+  const state1 = unit.apply(state0, { type: 'cybernetics/goals', data: { goals: [goalV] } })
+  assert.notStrictEqual(state1, state0, 'owned event produces a new state')
+  assert.equal(state1.goals.length, 1)
+  assert.equal(state1.goals[0].goalId, 'cyb-1')
+  assert.strictEqual(unit.apply(state1, { type: 'user/message', data: {} }), state1,
+    'unrelated event: same state reference (host zero-work fast path)')
+  assert.strictEqual(unit.apply(state1, { type: 'goal/change', data: {} }), state1,
+    'dsh-goal events are not ours')
+  assert.strictEqual(unit.wire.view(unit.wire.viewSchema.parse(state1)), state1, 'wire view is a passthrough')
+  console.log('✓ 17 projection unit: key cyberneticsGoals, whole-value fold, unrelated events keep reference')
+}
+
+// 18. v0.6 write points: goal creation + round start + settlement each append a
+//     `cybernetics/goals` event carrying the session's WHOLE board
+{
+  const appends = []
+  const tools8 = []
+  const engine8 = fakeEngine()
+  const parent8 = {
+    session: {
+      id: 'sess-proj',
+      append(type, data) {
+        const event = { type, data: JSON.parse(JSON.stringify(data)), seq: appends.length + 1 }
+        appends.push(event)
+        return event
+      },
+    },
+    followup() {},
+  }
+  const ctx8 = {
+    tools: { register: (d) => { tools8.push(d); return () => {} } },
+    systemPrompt: { section() {}, getSectionOrder: () => 0 },
+    goals: { get: () => null, create: () => ({ id: 'goal-focused' }) },
+    workingDirectory: { get: () => root },
+    agentPresets: { serviceFor: () => engine8 },
+    agents: { roots: () => [] },
+    sessionProjections: { register: () => () => {} },
+  }
+  apply(ctx8, {})
+  const tool8 = tools8[0]
+  const exec8 = { agent: parent8, signal: undefined }
+  const goalEvents = () => appends.filter((e) => e.type === 'cybernetics/goals')
+
+  // creation + background round start
+  const a = await tool8.execute({ action: 'start', title: '投影任务A', brief: '委托书A' }, exec8)
+  assert.ok(goalEvents().length >= 1, 'goal creation published a cybernetics/goals event')
+  const atStart = goalEvents().at(-1).data
+  assert.equal(atStart.goals.length, 1, 'payload carries the whole board')
+  assert.equal(atStart.goals[0].goalId, a.goalId)
+  assert.equal(atStart.goals[0].title, '投影任务A')
+  assert.equal(atStart.goals[0].status, 'running', 'in-flight round is visible as running')
+  assert.equal(atStart.goals[0].round, 0)
+
+  // round settlement folded by collect
+  engine8.runs[0].settle({
+    stopReason: 'completed',
+    value: {
+      round: 1,
+      report: { summary: 'A 半成', done: false, artifacts: [], evidence: 'e', nextStepThoughts: [] },
+      verdict: { met: false, criteria: [], gaps: ['缺口X'], goalItselfQuestionable: false },
+      triage: { auto: [], defer: [], reject: [], human: [] },
+    },
+  })
+  await new Promise((r) => setImmediate(r))
+  await tool8.execute({ action: 'collect', goalId: a.goalId }, exec8)
+  const afterSettle = goalEvents().at(-1).data
+  assert.equal(afterSettle.goals.length, 1)
+  assert.equal(afterSettle.goals[0].round, 1, 'settlement publish carries the advanced round')
+  assert.equal(afterSettle.goals[0].status, 'paused')
+  assert.match(afterSettle.goals[0].subgoal, /缺口X/)
+
+  // a second goal: the same event now carries BOTH goals (multi-goal invariant)
+  const p = tool8.execute({ action: 'round', title: '投影任务B', brief: '委托书B' }, exec8)
+  const before = engine8.runs.length
+  for (let i = 0; i < 100 && engine8.runs.length === before; i++) await new Promise((r) => setImmediate(r))
+  engine8.runs.at(-1).settle({
+    stopReason: 'completed',
+    value: {
+      round: 1,
+      report: { summary: 'B 完成', done: true, artifacts: [], evidence: 'e', nextStepThoughts: [] },
+      verdict: { met: true, criteria: [], gaps: [], goalItselfQuestionable: false },
+      triage: { auto: [], defer: [], reject: [], human: [] },
+    },
+  })
+  const b = await p
+  const afterB = goalEvents().at(-1).data
+  assert.equal(afterB.goals.length, 2, 'every publish is a whole-board snapshot')
+  assert.deepEqual(
+    afterB.goals.map((g) => g.goalId).sort(),
+    [a.goalId, b.goalId].sort(),
+    'both goals of the session are tracked',
+  )
+  assert.equal(afterB.goals.find((g) => g.goalId === b.goalId).status, 'met')
+  console.log(`✓ 18 write points: creation/start/collect append cybernetics/goals (${goalEvents().length} publishes, whole board)`)
+}
+
+// 19. v0.6 publishGoals: safe without a session, idempotent for the same state
+{
+  assert.equal(publishGoals(undefined, { goals: [] }), 'skipped', 'no session: no-op')
+  assert.equal(publishGoals(null, { goals: [] }), 'skipped', 'null session: no-op')
+  assert.equal(publishGoals({ id: 'no-append' }, { goals: [] }), 'skipped', 'session without append: no-op')
+  const written = []
+  const sess = { append: (type, data) => { written.push({ type, data }); return {} } }
+  const state = {
+    goals: [{
+      goalId: 'cyb-x', title: 'X', objective: 'o', status: 'paused', depth: 'full',
+      executor: 'ephemeral', round: 2, revisions: [], updatedAt: 7,
+    }],
+  }
+  assert.equal(publishGoals(sess, state), 'published')
+  assert.equal(publishGoals(sess, JSON.parse(JSON.stringify(state))), 'unchanged',
+    'same state republished: no duplicate event')
+  assert.equal(written.length, 1)
+  assert.equal(written[0].type, 'cybernetics/goals')
+  assert.equal(written[0].data.goals[0].goalId, 'cyb-x')
+  console.log('✓ 19 publishGoals: session-less no-op, identical republish is a true no-op')
+}
+
+// 20. v0.6 goalsFromBoard: status mapping, defaults, stable updatedAt (sort key)
+{
+  const loops = [
+    {
+      goalId: 'g-failed', title: 'F', objective: 'of', round: 2, doneSummary: '', subgoal: 'sf',
+      role: 'default', status: 'paused', paused: { reason: 'failed', note: 'boom' }, depth: 'quick',
+    },
+    { goalId: 'g-new', title: 'N', objective: 'on', round: 0, doneSummary: '', subgoal: 'sn', role: 'default' },
+  ]
+  const snap = goalsFromBoard(loops, 1000)
+  assert.equal(snap.goals.length, 2)
+  const failed = snap.goals.find((g) => g.goalId === 'g-failed')
+  const fresh = snap.goals.find((g) => g.goalId === 'g-new')
+  assert.equal(failed.status, 'failed', 'paused(failed) surfaces as failed for the tab badge')
+  assert.equal(failed.depth, 'quick')
+  assert.equal(failed.executor, 'ephemeral', 'executor defaults to the workflow agent until v0.6 adapter')
+  assert.deepEqual(failed.revisions, [])
+  assert.equal(fresh.status, 'pending', 'a board goal with no round yet is pending')
+  assert.equal(fresh.depth, 'full', 'depth defaults to full')
+  assert.equal(failed.updatedAt, 1000)
+  const again = goalsFromBoard(loops, 2000)
+  assert.equal(again.goals.find((g) => g.goalId === 'g-failed').updatedAt, 1000,
+    'unchanged content keeps its updatedAt (idempotent publish precondition)')
+  console.log('✓ 20 goalsFromBoard: status/depth/executor mapping, stable updatedAt ordering key')
+}
+
+// 21. v0.6 client tab wiring: reads the multi-goal face, keeps the single-goal
+//     fallback (client.js is loaded verbatim by the ModuleLoader — text check)
+{
+  const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.match(client, /faceOf\('cyberneticsGoals'\)/, '目标 tab subscribes to the multi-goal projection')
+  assert.match(client, /faceOf\('goal'\)/, 'dsh-goal single-slot face kept as fallback')
+  assert.match(client, /goalStatus\.running/, 'status badge locale keys present')
+  assert.match(client, /useSyncExternalStore/, 'in-place updates via projection snapshots, no polling')
+  console.log('✓ 21 client tab: cyberneticsGoals face + goal fallback, live snapshots, status locales')
+}
+
+// 22. v0.6 client tab render (offline, stubbed react/jsx-runtime): the multi-goal
+//     list renders every goal newest-first with its badges, and an absent
+//     projection falls back to the dsh-goal single-goal rendering
+{
+  const src = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  let loaded
+  globalThis.window = { __ModuleLoader__: { load: (m) => { loaded = m } } }
+  new Function('window', src)(globalThis.window)
+  assert.ok(loaded, 'client module registered with the ModuleLoader')
+
+  const flatten = (node, out = []) => {
+    if (node === null || node === undefined || typeof node === 'boolean') return out
+    if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
+    if (Array.isArray(node)) { for (const n of node) flatten(n, out); return out }
+    if (typeof node.type === 'function') { flatten(node.type(node.props), out); return out }
+    if (node.props && node.props.children !== undefined) flatten(node.props.children, out)
+    return out
+  }
+  const values = {}
+  const react = { useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot() }
+  const jsx = {
+    jsx: (type, props, key) => ({ type, props: props ?? {}, key }),
+    jsxs: (type, props, key) => ({ type, props: props ?? {}, key }),
+  }
+  const mod = loaded.factory((req) => {
+    if (req === 'react') return react
+    if (req === 'react/jsx-runtime') return jsx
+    throw new Error('unexpected require: ' + req)
+  })
+  const dict = {}
+  const t = (key, params) => {
+    let text = dict[key] ?? key
+    if (params) for (const name of Object.keys(params)) text = text.replaceAll('{' + name + '}', String(params[name]))
+    return text
+  }
+  const registered = []
+  mod.apply({
+    effect: (fn) => fn(),
+    locale: { register: (_ns, dictionaries) => Object.assign(dict, dictionaries.zh), bind: () => t },
+    slots: { inject: (_name, cb) => cb(), register: (spec, view) => { registered.push({ spec, view }) } },
+    sessions: {
+      binding: () => ({
+        session: { projections: { faceOf: (key) => ({ getSnapshot: () => values[key], subscribe: () => () => {} }) } },
+      }),
+    },
+  })
+  const tab = registered.find((entry) => entry.spec.id === 'cybernetics-goal')
+  assert.ok(tab, '目标 tab registered')
+  const injected = tab.spec.inject('sess-client')
+
+  values.cyberneticsGoals = {
+    goals: [
+      { goalId: 'cyb-old', title: '旧任务', objective: 'o', status: 'paused', depth: 'full', executor: 'ephemeral', round: 2, subgoal: '缺口X', revisions: [], updatedAt: 100 },
+      { goalId: 'cyb-new', title: '新任务', objective: 'o', status: 'running', depth: 'quick', executor: 'persistent', round: 0, revisions: [], updatedAt: 300 },
+    ],
+  }
+  values.goal = { current: null }
+  const text = flatten(tab.view({ ...injected, t })).join('\n')
+  assert.ok(text.indexOf('新任务') < text.indexOf('旧任务'), 'goals render newest-updatedAt first')
+  assert.match(text, /进行中/)
+  assert.match(text, /已暂停/)
+  assert.match(text, /第 2 轮/)
+  assert.match(text, /缺口X/)
+  assert.match(text, /完整/)
+  assert.match(text, /临时执行者/)
+  assert.match(text, /2 个目标/)
+
+  values.cyberneticsGoals = undefined
+  values.goal = { current: { goal: { objective: '单一焦点目标', phase: 'active', maxGoalRounds: 5 }, roundsStarted: 1 } }
+  const fallback = flatten(tab.view({ ...injected, t })).join('\n')
+  assert.match(fallback, /单一焦点目标/, 'absent projection falls back to dsh-goal rendering')
+  console.log('✓ 22 client render: multi-goal rows newest-first, fallback single goal intact')
+}
+
+console.log('\nALL 22 CHECKS PASSED')

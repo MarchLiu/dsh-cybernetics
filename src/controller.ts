@@ -75,6 +75,15 @@ export interface LoopState {
   /** Lifecycle: running (a round in flight) / paused / met (verify passed, awaits user) / cancelled. */
   status?: 'running' | 'paused' | 'met' | 'cancelled'
   paused?: { reason: ResumableReason; note: string }
+  /**
+   * Execution substrate (v0.6, orthogonal to depth): the Executor adapter is
+   * not implemented yet, so every goal reports 'ephemeral' (workflow agent).
+   * Present on the loop state now so the session projection's GoalView shape
+   * needs no breaking change when the adapter lands.
+   */
+  executor?: 'ephemeral' | 'persistent'
+  /** Outer-loop goal revisions (v0.6: agent proposes, the user confirms). */
+  revisions?: Array<{ version: number; reason: string; at: number }>
 }
 
 /** Append one round's structured result to the per-workspace audit log. */

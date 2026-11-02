@@ -32,6 +32,20 @@
    手工养一名分析师跑真实多轮知识库分析，验证协作形态；通过后再实现 Executor 适配层
    （`LoopState.executor` + 外环 revision 记账 + 控制页签执行者行）。
 
+### v0.6 已实现：多 goal 投影与页签
+
+dsh-goal 的 `goal` 投影每 session 只有一个焦点槽，`cyb-*` 多 goal 板在「目标」页签里不可见。
+本版新增插件自有 session 投影 `cyberneticsGoals`：每个写点（goal 创建、轮次启动、轮次结算决策、
+cancel）把该 session **全部 goal 的整值快照** append 成一条 `cybernetics/goals` 事件，
+projection 纯折叠后由宿主把整值推给客户端，页签按 `updatedAt` 倒序渲染每个 goal
+（标题 / 状态徽标 / 第 N 轮 / 当前 subgoal / depth、executor 小标签）并就地更新；
+空板回退到原有单 goal `goal` 投影渲染。`GoalView` 已预留 `executor` 与 `revisions` 字段（当前
+固定 ephemeral / 空数组），供 Executor 适配层与外环修订记账接入。
+
+已知边界：goal 板仍是**进程内存态**（`boards`），宿主重启后 projection 会重放会话日志里的
+`cybernetics/goals` 事件、页签仍显示旧 goal，而 controller 的板已为空——两者要等「首次触碰时
+从 projection 状态回灌 board」的 rehydrate 步骤落地后才完全一致（后续轮次）。
+
 ## v0.5 变化：双档轮次（depth）——分析任务分级
 
 分析/查询类任务按复杂度分两级进入 goal 体系（用户 2026-11-02 定稿）：
@@ -160,6 +174,8 @@ Config `roles` 表把角色名映射到 `{provider, model}` 覆盖，round 脚�
 - goal 状态由 dsh-goal 的 session projection（`goal` 投影）承载，客户端「目标 / Goal」页签
   （`lib/client.js`，conversation.view slot）实时读取渲染：objective 文本 + phase + rounds。
   v0.2 为纯文本渲染；后续演进：任务分解、状态跟踪、verdict 历史可视化（参照 dsh-context 范式）。
+- v0.6 起该页签优先读插件自有投影 `cyberneticsGoals`：一个 session 的全部 goal（含 `cyb-*`）
+  逐条展示并就地更新；`goal` 投影保留为无多 goal 数据时的回退渲染。
 
 ## 第 0 步实验记录（2026-11-02）
 

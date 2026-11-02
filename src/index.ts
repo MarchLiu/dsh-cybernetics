@@ -25,6 +25,7 @@ import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { runRound, startRound, foldRound } from './controller.ts'
 import type { ControllerConfig, ControllerDecision, LoopState, RoundResult, RolesConfig } from './controller.ts'
+import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals } from './projection.ts'
 
 export const name = 'dsh-cybernetics'
 
@@ -35,9 +36,13 @@ export const inject = [
   'workingDirectory',
   'agentPresets',
   'agents',
+  'sessionProjections',
 ] as const
-// All six are ROOT-level services (goal / working-directory / agent-preset-registry
-// / agents are top-level loader entries) — static inject cannot pend at boot.
+// All seven are ROOT-level services (goal / working-directory / agent-preset-registry
+// / agents / session-projection registry are top-level loader entries) — static
+// inject cannot pend at boot. `sessionProjections` is the registry dsh-goal
+// itself injects at root; this plugin registers the `cyberneticsGoals` unit
+// there so every goal on the board reaches the「目标」tab (v0.6).
 // `workflowEngine` is different: it is published inside each Agent's preset
 // mount (the `delegation` group with isolate workflowEngine: true), invisible
 // to the root scope. It is resolved per call via
@@ -192,6 +197,20 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
   const hardGate = config.hardGate === true
   const disposers: Array<() => void> = []
 
+  // v0.6: register the multi-goal session projection, so every goal on the
+  // session board — not just dsh-goal's single focus slot — reaches the
+  // 「目标 / Goal」tab. The registration rides this plugin's fiber: unloading
+  // the plugin removes the key and the tab falls back to the `goal` face.
+  // Guarded because the offline harness (and any host without the projection
+  // seam) builds a ctx without `sessionProjections`.
+  const projections = ctx.sessionProjections as
+    | { register?: (definition: unknown) => () => void }
+    | undefined
+  if (projections !== undefined && typeof projections.register === 'function') {
+    const projectionDisposer = projections.register(cyberneticsGoalsProjection())
+    if (typeof projectionDisposer === 'function') disposers.push(projectionDisposer)
+  }
+
   if (config.implicitTrigger !== false) {
     ctx.systemPrompt.section({
       name: `tool:${toolName}`,
@@ -329,6 +348,14 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       const board = boards.get(parent.session) ?? new Map<string, LoopState>()
       boards.set(parent.session, board)
 
+      // v0.6 write point: publish the session's WHOLE board as one
+      // `cybernetics/goals` event, so the「目标」tab tracks every goal of this
+      // session (dsh-goal's single-slot `goal` projection cannot). Idempotent:
+      // republishing an unchanged board appends nothing and never throws.
+      const publishBoard = (): void => {
+        publishGoals(parent.session, goalsFromBoard(board.values()))
+      }
+
       // 'list' needs no goal resolution and no workflow engine.
       if (action === 'list') {
         return {
@@ -375,6 +402,9 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           subgoal: args.subgoal ?? args.title, role: 'default', status: 'paused',
         }
         board.set(goalId, loop)
+        // Goal creation is a projection write point: the tab gains the goal
+        // immediately, before the first round settles.
+        publishBoard()
         if (!goalView || goalView.phase !== 'active') {
           try { goals.create(parent, { objective: `${args.title}\n\n${objective}` }) } catch { /* focus sync is best-effort */ }
         }
@@ -405,6 +435,10 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       if (args.depth) loop.depth = args.depth
       if (args.role) loop.role = args.role
 
+      // A goal adopted from the dsh-goal focus slot joins the board here; make
+      // it visible in the tab even when this call changes nothing else.
+      publishBoard()
+
       const controllerConfig: ControllerConfig = {
         roundScriptPath: config.roundScriptPath ?? fileURLToPath(new URL('../workflows/round.js', import.meta.url)),
         roundsPerSubgoal: config.roundsPerSubgoal,
@@ -418,6 +452,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         if (!h) return { goalId: loop.goalId, cancelled: '该 goal 当前没有运行中的轮' }
         loop.status = 'cancelled'
         h.run.cancel(args.brief ?? 'session agent 决定终止（用户修正）')
+        publishBoard()
         return { goalId: loop.goalId, round: h.round, cancelled: '已请求中止；完成通知到达后请 collect 折叠结果' }
       }
 
@@ -430,6 +465,8 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         applyDecision(h.loop, h.round, result, decision)
         running.delete(loop.goalId!)
         await h.run.dispose()
+        // Round settlement decision applied — republish (round / status / subgoal).
+        publishBoard()
         return { goalId: loop.goalId, round: h.round, decision, result }
       }
 
@@ -438,6 +475,10 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         throw new Error(`cybernetics: goal "${loop.goalId}" already has a round in flight — collect or cancel it first`)
       }
       loop.status = 'running'
+      // In-flight visibility: the blocking 'round' path can run for minutes, so
+      // publish before awaiting it (the async path needs no second publish —
+      // the state did not change).
+      publishBoard()
 
       if (action === 'start') {
         const controller = new AbortController()
@@ -462,6 +503,8 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         engine, parent, root, loop, controllerConfig, { objective }, exec.signal,
       )
       applyDecision(loop, result.round, result, decision)
+      // Round settlement decision applied — republish (round / status / subgoal).
+      publishBoard()
       return { goalId: loop.goalId, round: result.round, decision, result }
     },
   })
