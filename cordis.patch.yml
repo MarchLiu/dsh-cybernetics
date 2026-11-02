@@ -22,3 +22,9 @@
 - insert:
     - id: dsh-cybernetics
       name: dsh-cybernetics
+      config:
+        # v0.4 hard gate: strip execution tools (bash/edit/write) from top-level
+        # session agents at prompt-assembly time — every task MUST go through a
+        # cybernetics goal + task agent. Task/verify/triage subagents unaffected.
+        hardGate: true
+        # gatedTools: [bash, edit, write]   # default; extend to taste

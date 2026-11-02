@@ -34,9 +34,10 @@ export const inject = [
   'goals',
   'workingDirectory',
   'agentPresets',
+  'agents',
 ] as const
-// All five are ROOT-level services (goal / working-directory / agent-preset-registry
-// are top-level loader entries) — static inject cannot pend at boot.
+// All six are ROOT-level services (goal / working-directory / agent-preset-registry
+// / agents are top-level loader entries) — static inject cannot pend at boot.
 // `workflowEngine` is different: it is published inside each Agent's preset
 // mount (the `delegation` group with isolate workflowEngine: true), invisible
 // to the root scope. It is resolved per call via
@@ -55,6 +56,16 @@ export interface Config extends ControllerConfig {
   implicitTrigger?: boolean
   /** Per-role sub-agent model/provider overrides. */
   roles?: RolesConfig
+  /**
+   * Hard orchestration gate (default false): hide execution tools from
+   * TOP-LEVEL session agents at prompt-assembly time, so the session agent
+   * structurally cannot do task work itself — every task must go through a
+   * cybernetics goal + task agent. Task/verify/triage subagents (never in
+   * `agents.roots()`) are unaffected and keep full tool access.
+   */
+  hardGate?: boolean
+  /** Tool names hidden from gated agents (default ['bash', 'edit', 'write']). */
+  gatedTools?: string[]
 }
 
 // No `Config` export: this cordis requires a schemastery schema there// (Config.validate), which a zero-dependency plugin cannot import. The raw
@@ -108,15 +119,49 @@ yourself — you manage goals and the task agents that execute them. Classify ea
   'round-cap'/'failed' = report status. Never mark a goal complete yourself; completion is the user's act.
 Use action 'list' to see every goal on this session's board with its status, round and subgoal.`
 
+/** Tool names hidden from top-level session agents when the hard gate is on. */
+const DEFAULT_GATED_TOOLS = ['bash', 'edit', 'write']
+
+const HARD_GATE_GUIDANCE = `
+HARD GATE ACTIVE: execution tools (bash/edit/write) are STRUCTURALLY unavailable to you — they are
+removed from your tool list at prompt-assembly time. You cannot edit files or run commands, no matter
+how small the task. Everything that changes the world MUST be delegated: create a cybernetics goal and
+let a task agent execute it. You keep: reading, searching, asking the user, and the cybernetics verbs.
+Do not tell the user a task is "too small for the loop" — the loop is the only way work gets done.`
+
 export function apply(ctx: any, config: Partial<Config> = {}) {
   const toolName = config.toolName ?? 'cybernetics'
+  const hardGate = config.hardGate === true
+  const disposers: Array<() => void> = []
 
   if (config.implicitTrigger !== false) {
     ctx.systemPrompt.section({
       name: `tool:${toolName}`,
       order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-      text: IMPLICIT_GUIDANCE,
+      text: IMPLICIT_GUIDANCE + (hardGate ? HARD_GATE_GUIDANCE : ''),
     })
+  }
+
+  if (hardGate) {
+    // The hard gate: a system-prompt/assemble waterfall listener that strips
+    // execution tools from TOP-LEVEL agents' assemblies. Workflow subagents
+    // (task/verify/triage) and team teammates are never in agents.roots(),
+    // so their assemblies pass through untouched with full tool access.
+    const gated = new Set(config.gatedTools ?? DEFAULT_GATED_TOOLS)
+    const listenerDisposer = ctx.on('system-prompt/assemble', (assembly: any, context: any, next: () => unknown) => {
+      const scope = context?.scope
+      if (!scope) return next()
+      let roots: unknown[] = []
+      try { roots = ctx.agents?.roots?.() ?? [] } catch { return next() }
+      const isRoot = roots.some((r: any) =>
+        r === scope || r?.id === scope || (r?.id && r.id === scope?.id))
+      if (!isRoot) return next()
+      if (Array.isArray(assembly.tools)) {
+        assembly.tools = assembly.tools.filter((t: any) => !gated.has(t?.name))
+      }
+      return next()
+    })
+    disposers.push(() => listenerDisposer?.())
   }
 
   const disposer = (ctx.tools as { register: (d: unknown) => () => void }).register({
@@ -346,7 +391,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
     },
   })
 
-  return () => disposer()
+  return () => { disposer(); disposers.forEach((d) => d()) }
 }
 
 /** Fold a controller decision back into the loop's durable-ish state. */

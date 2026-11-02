@@ -1,6 +1,25 @@
-# Cybernetics 工作协议 v0.3
+# Cybernetics 工作协议 v0.4
 
 目标-行动-测量-校准的迭代回路，构建在 DSH 的 `dsh-workflow` 编排与 `dsh-goal` 持久目标之上。
+
+## v0.4 变化：硬门（hard gate）——编排从劝告变成结构
+
+v0.3 及以前，「session agent 不亲自执行」是系统提示里的劝告，模型可自行判断绕过
+（琐碎任务直接内联完成）。v0.4 增加可选的**硬门**（`hardGate: true`）：
+
+- 实现：插件注册 `system-prompt/assemble` waterfall 监听器（dsh-system-prompt 的官方扩展点，
+  每个模型步触发，可变 assembly、返回值权威），在装配期把执行类工具
+  （默认 `bash`/`edit`/`write`，可用 `gatedTools` 覆盖）从**顶层 session agent** 的
+  工具清单中物理移除——模型根本看不到这些工具，无法调用。
+- 判定顶层 agent 用 `ctx.agents.roots()`（与 dsh-tool-goal 同一 API）；
+  workflow 子 agent（task/verify/triage）与 team 成员从不在 roots() 里，
+  它们的装配原样通过，保留全部工具——执行能力只属于被编排的执行者。
+- 配套提示段追加 HARD GATE ACTIVE 声明，防止模型把「没有 bash」误读为环境故障。
+- 默认关闭，部署侧通过 `cordis.patch.yml` 的 `config.hardGate: true` 开启。
+- 设计动机（用户 2026-11-02）：思考与行动分离；人类经 goal 跟踪/解释 agent 行为；
+  每个 task agent 在有限 goal 上紧凑运行；修正任务（cancel/重启）更自由。
+- 已知边界：门在装配层（模型看不见工具），不在执行层（无公开拦截缝）；
+  `subagent`/`workflow` 等其他派发工具默认不在门禁清单，如需收口加入 `gatedTools`。
 
 ## v0.3 变化：多 goal + 编排者 session agent
 

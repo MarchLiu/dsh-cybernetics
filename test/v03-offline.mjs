@@ -200,4 +200,56 @@ let goalId
   console.log('✓ 10 guidance: orchestrator protocol injected')
 }
 
-console.log('\nALL 10 CHECKS PASSED')
+// 11. hard gate: assemble waterfall strips execution tools from ROOT agents only
+{
+  const rootAgent = { id: 'agent-root' }
+  const childAgent = { id: 'agent-child' }
+  const listeners = []
+  const ctx2 = {
+    tools: { register: () => () => {} },
+    systemPrompt: { section() {}, getSectionOrder: () => 0 },
+    goals: { get: () => null },
+    workingDirectory: { get: () => root },
+    agentPresets: { serviceFor: () => undefined },
+    agents: { roots: () => [rootAgent] },
+    on: (event, fn) => { listeners.push({ event, fn }); return () => {} },
+  }
+  apply(ctx2, { hardGate: true })
+  const gate = listeners.find((l) => l.event === 'system-prompt/assemble')
+  assert.ok(gate, 'hard gate listener registered')
+  const mkAssembly = () => ({
+    tools: [{ name: 'bash' }, { name: 'edit' }, { name: 'write' }, { name: 'read' }, { name: 'cybernetics' }],
+  })
+  // root agent: gated tools stripped, orchestration/read tools kept
+  const a1 = mkAssembly()
+  await gate.fn(a1, { scope: rootAgent }, () => a1)
+  assert.deepEqual(a1.tools.map((t) => t.name), ['read', 'cybernetics'])
+  // workflow child agent: untouched
+  const a2 = mkAssembly()
+  await gate.fn(a2, { scope: childAgent }, () => a2)
+  assert.equal(a2.tools.length, 5)
+  // scope-less assembly: untouched
+  const a3 = mkAssembly()
+  await gate.fn(a3, {}, () => a3)
+  assert.equal(a3.tools.length, 5)
+  console.log('✓ 11 hard gate: root agent stripped of bash/edit/write; child agents untouched')
+}
+
+// 12. hard gate off by default: no listener registered
+{
+  const listeners2 = []
+  const ctx3 = {
+    tools: { register: () => () => {} },
+    systemPrompt: { section() {}, getSectionOrder: () => 0 },
+    goals: { get: () => null },
+    workingDirectory: { get: () => root },
+    agentPresets: { serviceFor: () => undefined },
+    agents: { roots: () => [] },
+    on: (event, fn) => { listeners2.push({ event, fn }); return () => {} },
+  }
+  apply(ctx3, {})
+  assert.equal(listeners2.filter((l) => l.event === 'system-prompt/assemble').length, 0)
+  console.log('✓ 12 hard gate off by default: no assemble listener')
+}
+
+console.log('\nALL 12 CHECKS PASSED')
