@@ -1,14 +1,19 @@
 // One cybernetics round, run as a dsh-workflow script: task agent -> verify agent -> triage agent.
 // args = {
 //   goal:   { objective: string },                  // the session's durable goal (dsh-goal), model-authored
+//                                                   // — authored to be a COMPLETE work order: detailed enough
+//                                                   // for a fresh subagent to finish the whole job unaided
 //   state:  { round: number, doneSummary: string }, // carried context
 //   subgoal: string,                                // this round's bounded subgoal
+//   brief:  string,                                 // per-round detailed task description extracted by the
+//                                                   // calling model from the live conversation; the task agent's
+//                                                   // primary work order (falls back to the objective)
 //   role:   string,                                 // task agent role key (default 'default')
 //   roles:  { [role]: { provider?, model? } },      // per-role LLM overrides (deployment config)
 // }
 // Returns { round, report, verdict, triage } — the controller folds this into the decision.
 
-const { goal, state, subgoal, role, roles } = args
+const { goal, state, subgoal, brief, role, roles } = args
 
 // One triaged step; shared by the four triage buckets (plain data, no $ref).
 const stepsItem = {
@@ -26,16 +31,31 @@ const specFor = (key) => {
 
 await phase('task')
 
+// The task agent is an INDEPENDENT subagent: it inherits no conversation
+// history, so everything it needs must be in this one prompt. The work order
+// is `brief` (the calling model's extraction of the current task, detailed
+// enough to fully drive execution) falling back to the durable objective.
+const workOrder = (brief && brief.trim()) || goal.objective
+
 const report = await agent(
   [
-    `你是 task agent，只面向以下有限目标工作，不继承任何对话历史。`,
+    `你是一个独立的 task agent：不继承任何对话历史，从零开始工作。`,
+    `下面这份工作委托书是你可以获得的全部任务信息，它被要求详细到足以让你独立完成当前工作；`,
+    `如委托书与现实不符，以工作区/代码/工具的真实状态为准，并把偏差写进报告。`,
     ``,
-    `总目标：${goal.objective}`,
+    `【工作委托书】`,
+    workOrder,
     ``,
-    `本轮子目标：${subgoal}`,
+    `【本轮子目标（在委托书范围内的本轮边界）】`,
+    subgoal || '（未单独给出：以委托书的下一步未完成项为准）',
     ``,
-    `已完成的既往工作摘要（不要重做）：`,
+    `【已完成的既往工作摘要（不要重做，但可依赖其产物）】`,
     state.doneSummary || '（无，这是第一轮）',
+    ``,
+    `【执行纪律】`,
+    `- 你不是在写计划：必须实际调用工具完成工作（读写代码、运行命令、执行测试），产出真实的磁盘/服务状态变化。`,
+    `- 完成的判定是可验证的：每项交付都要有可复现证据（命令输出、测试结果、文件路径），不接受"应该可以了"。`,
+    `- 被环境阻塞（依赖缺失、权限不足、需要人类决策）时如实停止并在 nextStepThoughts/human 线索中写明阻塞点，不要伪装完成。`,
     ``,
     `完成后交付：summary、done、artifacts、evidence、nextStepThoughts。`,
     `nextStepThoughts 只记录"值得做但超出本轮子目标"的后续工作线索，不要执行它们。`,
@@ -64,6 +84,7 @@ const verdict = await agent(
     `不重做工作，不接受"大概完成了"。`,
     ``,
     `总目标：${goal.objective}`,
+    brief ? `本轮工作委托书：${brief}` : '',
     `本轮子目标：${subgoal}`,
     ``,
     `task agent 交付报告：`,

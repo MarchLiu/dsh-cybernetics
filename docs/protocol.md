@@ -1,6 +1,20 @@
-# Cybernetics 工作协议 v0.2
+# Cybernetics 工作协议 v0.3
 
 目标-行动-测量-校准的迭代回路，构建在 DSH 的 `dsh-workflow` 编排与 `dsh-goal` 持久目标之上。
+
+## v0.3 变化：多 goal + 编排者 session agent
+
+- **同一 session 支持多个并发 goal**：插件维护自己的 goal 板（`boards: session -> goalId -> loop`）。
+  dsh-goal 仍是每 session 单槽，降级为**焦点 goal**（GUI 页签 + goal-round-driver 自动续跑）；
+  新建 registry goal 时若 dsh-goal 空槽则尽力同步进去。
+- **session agent 是编排者，从不亲自执行任务**：它识别用户输入、提取工作委托书（brief）、
+  启动/收取/取消 task agent 轮、向用户转述反馈。
+- **异步轮**：`action: 'start'` 后台启动一轮并立即返回；轮结束时插件经 `agent.followup()`
+  向 session agent 收件箱排队一条完成通知（与 dsh-goal-round-driver 同一机制），
+  session agent 随后 `action: 'collect'` 折叠结果得到 continue/pause 决策。
+- **修正路径**：用户对已有任务的修正由 session agent 裁决——`cancel`（中止在跑的轮，
+  底层 `WorkflowRun.cancel()`）后带修正 brief 重启一轮，或等 `collect` 后开修正轮。
+- v0.2 的单 goal 阻塞调用保持兼容：无 `action`/`goalId`/`title` 时驱动当前 dsh-goal 焦点 goal。
 
 ## v0.2 变化：goal 回到 session
 
@@ -15,17 +29,27 @@
 
 | 角色 | 实现 | 职责 |
 |---|---|---|
-| Session Agent | 调用方 | 持有 goal（模型动词维护），隐式触发回路，向用户转述 |
-| Controller | `src/controller.ts` | 轮间状态机：推进/暂停/终止回路，维护轮审计日志 |
-| Task Agent | workflow `agent()` | 面向当轮子目标执行，产出结构化交付报告 |
+| Session Agent | 调用方 | **编排者**：识别输入（新任务/修正/反馈），维护 goal 板，启动/收取/取消轮，向用户转述；从不亲自执行任务 |
+| Controller | `src/controller.ts` | 轮间状态机：`startRound`/`foldRound`/`runRound`，推进/暂停/终止，维护轮审计日志 |
+| Task Agent | workflow `agent()` | 独立 sub agent（无对话历史），面向工作委托书（brief）实际执行，产出结构化交付报告 |
 | Verify Agent | workflow `agent()` | 把总目标拆成可判定方面逐条验收，产出结构化 verdict |
 | Triage Agent | workflow `agent()` | 对后续线索四分拣：auto / defer / reject / human |
 | 用户 | 外环 | 对话校准（goal 修订由 session agent 执行）、裁定 human 类目、确认完成 |
 
+## 输入分类协议（session agent 职责）
+
+1. **新任务** → `cybernetics { action:'start', title, brief }` 建 goal 并后台启动 task agent；
+   `brief` 是完整工作委托书（背景、路径、约束、验收标准），详细到 subagent 无需对话历史即可完成。
+2. **已有任务的修正** → 裁决打断或等待：打断 = `cancel` 该 goalId 后以修正内容重写 brief 重启一轮；
+   等待 = `collect` 收完当轮后，以 verdict gaps + 修正内容构造新一轮。
+3. **反馈到达**（`round` 的返回值，或异步轮完成通知后的 `collect`）→ 三选一或组合：
+   向用户总结；启动验证轮；以缺口为 brief 启动修正轮。
+
 ## 隐式触发
 
-插件注入 system prompt 段（`implicitTrigger: false` 可关）：实质性任务先建 session goal；
-goal 存续期间模型应**不等显式要求**调用 `cybernetics` 推进回路。无 goal 时调用工具会报错并提示先建 goal。
+插件注入 system prompt 段（`implicitTrigger: false` 可关）：session agent 按上述分类协议
+对每个实质性用户输入建 goal / 启动 task agent / 处理反馈，**不等显式要求**。
+无任何可解析 goal（无 goalId、无 title、无活跃焦点 goal）时调用工具会报错并提示。
 
 ## 结构化判定
 

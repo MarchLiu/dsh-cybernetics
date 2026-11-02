@@ -15,6 +15,8 @@ task agent → verify agent → triage agent，controller 在轮间推进，用�
 
 ## 状态
 
+v0.3：多 goal 板 + 编排者协议 + 异步轮（`start`/`collect`/`cancel`/`list`）+ task agent 工作委托书（brief）。
+轮脚本现读（改 `workflows/round.js` 热生效）；`src/` 改动需宿主重载。
 v0.2：session-goal 模式 + 隐式触发 + 角色化 sub agent + 客户端 goal 页签。
 服务端已按 dsh 0.2.1-rc.3 真实 API 核对（tools.register / goals service / workingDirectory），
 客户端按 ModuleLoader 包装格式手写（参照 dsh-client-ui-goal / dsh-context）。

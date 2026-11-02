@@ -21,9 +21,10 @@
  * @module dsh-cybernetics
  */
 
+import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
-import { runRound } from './controller.ts'
-import type { ControllerConfig, LoopState, RolesConfig } from './controller.ts'
+import { runRound, startRound, foldRound } from './controller.ts'
+import type { ControllerConfig, ControllerDecision, LoopState, RoundResult, RolesConfig } from './controller.ts'
 
 export const name = 'dsh-cybernetics'
 
@@ -61,8 +62,26 @@ export interface Config extends ControllerConfig {
 // optional and read defensively (toolName, roundsPerSubgoal, roundScriptPath,
 // implicitTrigger, roles).
 
-/** Session-scoped loop state; the durable objective lives in dsh-goal. */
-const loops = new Map<unknown, LoopState>()
+/**
+ * Multi-goal loop registry: session -> goalId -> loop. v0.3 lifts the
+ * single-goal limit of dsh-goal (one slot per session) by keeping the
+ * plugin's own goal board; the dsh-goal slot remains the FOCUS goal (GUI
+ * tab + goal-round-driver auto-continuation) and is synced best-effort.
+ */
+const boards = new Map<unknown, Map<string, LoopState>>()
+
+/** One in-flight async round (action 'start'), keyed by goalId. */
+interface RunningRound {
+  goalId: string
+  round: number
+  parent: any
+  root: string
+  loop: LoopState
+  config: ControllerConfig
+  run: { result: Promise<any>; cancel(reason?: string): void; dispose(): Promise<void> }
+  settled?: { stopReason: string; value?: unknown; error?: unknown }
+}
+const running = new Map<string, RunningRound>()
 
 /** Minimal required-field validation the omitted dsh-tools wrapper would do. */
 function requireFields(args: Record<string, unknown>, names: string[]): void {
@@ -71,15 +90,23 @@ function requireFields(args: Record<string, unknown>, names: string[]): void {
   }
 }
 
-const IMPLICIT_GUIDANCE = `Goal-driven work loop (cybernetics): for any substantial task, first persist the
-working objective with the goal tools (create_goal / goal edit) — the goal is YOUR synthesis of the user's
-request, not a document the user edits; users calibrate through conversation and you revise the goal
-accordingly. While a session goal is active, advance it by calling the cybernetics tool WITHOUT waiting for
-an explicit ask: each call runs one full round (task agent -> verify agent -> triage agent) and returns a
-continue/pause decision. On 'continue', call cybernetics again with the returned subgoal. On 'pause', read
-the reason: 'met' means report to the user and wait for confirmation; 'goal-questionable' means re-examine
-and revise the goal through dialogue; 'human-input' means surface the question; 'round-cap'/'failed' mean
-report status. Choose the round's task role with the role argument when the deployment configures per-role models.`
+const IMPLICIT_GUIDANCE = `Goal-driven orchestration (cybernetics). You are the SESSION agent: you never execute task work
+yourself — you manage goals and the task agents that execute them. Classify each user input:
+- NEW task → create a goal and launch a task agent: call cybernetics with action 'start' (non-blocking) or
+  'round' (blocking), a short title, and a brief — the COMPLETE work order extracted from the request
+  (background, paths, constraints, acceptance criteria). The task agent is an independent subagent with NO
+  conversation history; the brief must be detailed enough for it to finish the work unaided. One session
+  supports multiple concurrent goals; each returns its own goalId.
+- CORRECTION to an existing task → decide: interrupt (action 'cancel' on that goalId, then start a fresh
+  round whose brief carries the correction) or wait (collect the running round, then start a corrective
+  round addressing it).
+- FEEDBACK arrives as the tool result ('round') or, for async rounds, as a queued notification followed by
+  action 'collect'. Then choose: summarize the outcome to the user; start a verification round; or start a
+  corrective round whose brief is built from the verdict gaps. On decision 'continue', launch the next
+  round with the returned subgoal. On 'pause': 'met' = report and wait for user confirmation;
+  'goal-questionable' = re-examine the goal through dialogue; 'human-input' = surface the question;
+  'round-cap'/'failed' = report status. Never mark a goal complete yourself; completion is the user's act.
+Use action 'list' to see every goal on this session's board with its status, round and subgoal.`
 
 export function apply(ctx: any, config: Partial<Config> = {}) {
   const toolName = config.toolName ?? 'cybernetics'
@@ -95,16 +122,40 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
   const disposer = (ctx.tools as { register: (d: unknown) => () => void }).register({
     name: toolName,
     description:
-      'Run ONE cybernetics round against the session goal: a task agent executes the current subgoal, ' +
-      'a verify agent judges goal attainment with evidence, a triage agent sorts next-step thoughts, ' +
-      'then the controller decides continue or pause. Call repeatedly to advance the loop; never marks ' +
-      'the goal complete itself. Requires an active session goal (create one with the goal tools first).',
+      'Goal-driven orchestration for the SESSION agent, which never executes task work itself: it manages ' +
+      'goals and the independent task agents that execute them. Actions: round (default, blocking) runs one ' +
+      'full round (task agent -> verify agent -> triage agent) and returns the controller decision; start ' +
+      'launches the round in the background and returns immediately (a completion notice is queued into this ' +
+      'session); collect folds a finished background round into its decision; cancel aborts a running round ' +
+      '(use when a user correction must interrupt the current task agent); list shows every goal on this ' +
+      'session board. New task: pass title + brief (a complete, self-contained work order — the task agent ' +
+      'has NO conversation history) to create a goal; one session supports multiple concurrent goals. ' +
+      'Existing goal: pass its goalId. The controller never marks a goal complete — that is the user\'s act.',
     parameters: {
       type: 'object',
       properties: {
+        action: {
+          type: 'string',
+          enum: ['round', 'start', 'collect', 'cancel', 'list'],
+          description: 'round=同步执行一轮（默认）| start=后台启动一轮并立即返回 | collect=折叠已完成的后台轮 | cancel=中止正在运行的轮（修正场景）| list=查看本会话全部 goal。',
+        },
+        goalId: {
+          type: 'string',
+          description: '目标 goal（list/之前调用返回）；缺省 = 当前 dsh-goal 焦点 goal，或配合 title 新建。',
+        },
+        title: {
+          type: 'string',
+          description: '新任务的短标题；提供即创建新 goal（多 goal 并存，各自由 task agent 执行）。',
+        },
+        brief: {
+          type: 'string',
+          description:
+            '本轮任务的详细内容描述（独立 task agent 的工作委托书）：从当前任务/对话中提取，' +
+            '详细到 subagent 无需对话历史即可完整执行——含背景、路径、验收标准。修正场景：把修正内容写进新的 brief。',
+        },
         subgoal: {
           type: 'string',
-          description: '本轮子目标；缺省沿用上轮决策（首轮取自当前 session goal）。',
+          description: '本轮子目标；缺省沿用上轮决策（首轮取自 goal 本身）。',
         },
         role: {
           type: 'string',
@@ -116,21 +167,36 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       schema: {
         type: 'object',
         properties: {
+          goalId: { type: 'string' },
           round: { type: 'number' },
           decision: { type: 'object' },
           result: { type: 'object' },
         },
-        required: ['round', 'decision'],
       },
       render: (_args: unknown, value: any) => {
+        if (value.board) {
+          const lines = (value.board as any[]).map((g) =>
+            `${g.goalId} [${g.status}${g.running ? '/running' : ''}] R${g.round} ${g.title ?? ''} — ${g.subgoal}`)
+          return [{ type: 'text', text: lines.length ? lines.join('\n') : '（goal 板为空）' }]
+        }
+        if (value.started) return [{ type: 'text', text: `goal ${value.goalId} 第 ${value.round} 轮已后台启动，完成后将通知本会话` }]
+        if (value.pending) return [{ type: 'text', text: `goal ${value.goalId} 第 ${value.round} 轮仍在运行` }]
+        if (value.cancelled) return [{ type: 'text', text: `goal ${value.goalId} 第 ${value.round} 轮已请求中止：${value.cancelled}` }]
         const d = value.decision
-        const line = d.action === 'continue'
-          ? `第 ${value.round} 轮完成，继续：${d.subgoal}`
-          : `第 ${value.round} 轮完成，暂停（${d.reason}）：${d.note}`
+        const line = d?.action === 'continue'
+          ? `goal ${value.goalId} 第 ${value.round} 轮完成，继续：${d.subgoal}`
+          : `goal ${value.goalId} 第 ${value.round} 轮完成，暂停（${d?.reason}）：${d?.note}`
         return [{ type: 'text', text: line }]
       },
     },
-    async execute(args: { subgoal?: string; role?: string }, exec: any) {
+    async execute(args: {
+      action?: 'round' | 'start' | 'collect' | 'cancel' | 'list'
+      goalId?: string
+      title?: string
+      brief?: string
+      subgoal?: string
+      role?: string
+    }, exec: any) {
       requireFields(args as Record<string, unknown>, [])
       const goals = ctx.goals
       const workingDirectory = ctx.workingDirectory
@@ -139,6 +205,20 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       const parent = exec.agent
       if (!parent?.session) throw new Error('cybernetics tool requires a calling agent session')
       const root = workingDirectory.get(parent.session)
+      const action = args.action ?? 'round'
+
+      const board = boards.get(parent.session) ?? new Map<string, LoopState>()
+      boards.set(parent.session, board)
+
+      // 'list' needs no goal resolution and no workflow engine.
+      if (action === 'list') {
+        return {
+          board: [...board.values()].map((g) => ({
+            goalId: g.goalId, title: g.title, status: g.status ?? 'paused',
+            running: running.has(g.goalId!), round: g.round, subgoal: g.subgoal,
+          })),
+        }
+      }
 
       // The workflow engine lives in the Agent's preset mount (delegation group
       // isolate); read it through the registry's sanctioned root-realm accessor.
@@ -151,49 +231,163 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       }
 
       const goalView = goals.get(parent)
-      if (!goalView || goalView.phase !== 'active') {
-        // goals.get() keeps returning a view for completed/paused/blocked
-        // goals — "current" is not "active". Verified live 2026-11-02: after
-        // goal complete, the old null-check ran a stray round instead of
-        // rejecting. Only phase "active" may drive rounds.
-        throw new Error(
-          `no active session goal (phase: ${goalView?.phase ?? 'none'}): create one first ` +
-          '(goal tools: create_goal; a paused/blocked goal must be resumed by its owner), then call cybernetics. ' +
-          'The goal is your synthesis of the user request, refined through conversation.',
-        )
-      }
 
-      // A new goal id restarts the loop state; rounds do not carry across goals.
-      const prev = loops.get(parent.session)
-      const state = !prev || (prev as any).goalId !== goalView.id
-        ? { round: 0, doneSummary: '', subgoal: args.subgoal ?? goalView.objective, role: 'default', goalId: goalView.id }
-        : prev
-      if (args.subgoal) state.subgoal = args.subgoal
-      if (args.role) state.role = args.role
-
-      const { result, decision } = await runRound(
-        engine,
-        parent,
-        root,
-        state,
-        {
-          roundScriptPath: config.roundScriptPath ?? fileURLToPath(new URL('../workflows/round.js', import.meta.url)),
-          roundsPerSubgoal: config.roundsPerSubgoal,
-          roles: config.roles,
-        },
-        { objective: goalView.objective },
-        exec.signal,
-      )
-      state.round = result.round
-      if (decision.action === 'continue') {
-        state.subgoal = decision.subgoal
+      // --- Resolve the target loop for this call ------------------------------
+      // Priority: explicit goalId > new goal (title) > active dsh-goal focus.
+      let loop: LoopState | undefined
+      if (args.goalId) {
+        loop = board.get(args.goalId)
+        if (!loop && goalView && goalView.id === args.goalId && goalView.phase === 'active') {
+          loop = {
+            goalId: goalView.id, title: goalView.objective.split('\n')[0].slice(0, 60),
+            objective: goalView.objective, round: 0, doneSummary: '',
+            subgoal: goalView.objective, role: 'default', status: 'paused',
+          }
+          board.set(loop.goalId!, loop)
+        }
+        if (!loop) throw new Error(`cybernetics: goal "${args.goalId}" not on this session's board (try action "list")`)
+      } else if (args.title) {
+        // New task: create a registry goal. dsh-goal stays single-slot; when it
+        // is free, focus the new goal into it (GUI tab + round-driver pickup).
+        const goalId = `cyb-${randomUUID().slice(0, 8)}`
+        const objective = args.brief ?? args.title
+        loop = {
+          goalId, title: args.title, objective, round: 0, doneSummary: '',
+          subgoal: args.subgoal ?? args.title, role: 'default', status: 'paused',
+        }
+        board.set(goalId, loop)
+        if (!goalView || goalView.phase !== 'active') {
+          try { goals.create(parent, { objective: `${args.title}\n\n${objective}` }) } catch { /* focus sync is best-effort */ }
+        }
       } else {
-        state.paused = decision.reason === 'met' ? undefined : { reason: decision.reason, note: decision.note }
+        // Legacy single-goal path: drive the active dsh-goal.
+        if (!goalView || goalView.phase !== 'active') {
+          // goals.get() keeps returning a view for completed/paused/blocked
+          // goals — "current" is not "active". Only phase "active" may drive rounds.
+          throw new Error(
+            `no active session goal (phase: ${goalView?.phase ?? 'none'}): pass title+brief to create one, ` +
+            'goalId to drive an existing board goal, or create a dsh-goal first (create_goal).',
+          )
+        }
+        loop = board.get(goalView.id)
+        if (!loop) {
+          loop = {
+            goalId: goalView.id, title: goalView.objective.split('\n')[0].slice(0, 60),
+            objective: goalView.objective, round: 0, doneSummary: '',
+            subgoal: goalView.objective, role: 'default', status: 'paused',
+          }
+          board.set(goalView.id, loop)
+        }
       }
-      loops.set(parent.session, state)
-      return { round: result.round, decision, result }
+
+      // Per-call overrides.
+      if (args.subgoal) loop.subgoal = args.subgoal
+      if (args.brief) loop.brief = args.brief
+      if (args.role) loop.role = args.role
+
+      const controllerConfig: ControllerConfig = {
+        roundScriptPath: config.roundScriptPath ?? fileURLToPath(new URL('../workflows/round.js', import.meta.url)),
+        roundsPerSubgoal: config.roundsPerSubgoal,
+        roles: config.roles,
+      }
+      const objective = loop.objective ?? goalView?.objective ?? loop.title ?? ''
+
+      // --- cancel -------------------------------------------------------------
+      if (action === 'cancel') {
+        const h = running.get(loop.goalId!)
+        if (!h) return { goalId: loop.goalId, cancelled: '该 goal 当前没有运行中的轮' }
+        loop.status = 'cancelled'
+        h.run.cancel(args.brief ?? 'session agent 决定终止（用户修正）')
+        return { goalId: loop.goalId, round: h.round, cancelled: '已请求中止；完成通知到达后请 collect 折叠结果' }
+      }
+
+      // --- collect ------------------------------------------------------------
+      if (action === 'collect') {
+        const h = running.get(loop.goalId!)
+        if (!h) throw new Error(`cybernetics: goal "${loop.goalId}" has no background round to collect`)
+        if (!h.settled) return { goalId: loop.goalId, round: h.round, pending: true }
+        const { result, decision } = await foldRound(h.root, h.round, h.settled, h.loop, h.config)
+        applyDecision(h.loop, h.round, result, decision)
+        running.delete(loop.goalId!)
+        await h.run.dispose()
+        return { goalId: loop.goalId, round: h.round, decision, result }
+      }
+
+      // --- round / start ------------------------------------------------------
+      if (running.has(loop.goalId!)) {
+        throw new Error(`cybernetics: goal "${loop.goalId}" already has a round in flight — collect or cancel it first`)
+      }
+      loop.status = 'running'
+
+      if (action === 'start') {
+        const controller = new AbortController()
+        if (exec.signal) {
+          if (exec.signal.aborted) controller.abort()
+          else exec.signal.addEventListener('abort', () => controller.abort(), { once: true })
+        }
+        const { round, run } = await startRound(
+          engine, parent, root, loop, controllerConfig, { objective }, controller.signal,
+        )
+        const handle: RunningRound = { goalId: loop.goalId!, round, parent, root, loop, config: controllerConfig, run }
+        running.set(loop.goalId!, handle)
+        run.result.then((settled: any) => {
+          handle.settled = settled
+          notifyRoundSettled(parent, loop, round)
+        }).catch(() => { /* result never rejects by contract; belt and braces */ })
+        return { goalId: loop.goalId, round, started: true }
+      }
+
+      // Blocking round (default).
+      const { result, decision } = await runRound(
+        engine, parent, root, loop, controllerConfig, { objective }, exec.signal,
+      )
+      applyDecision(loop, result.round, result, decision)
+      return { goalId: loop.goalId, round: result.round, decision, result }
     },
   })
 
   return () => disposer()
+}
+
+/** Fold a controller decision back into the loop's durable-ish state. */
+function applyDecision(loop: LoopState, round: number, result: RoundResult, decision: ControllerDecision): void {
+  loop.round = round
+  const summary = (result.report as { summary?: string } | undefined)?.summary
+  if (summary) {
+    loop.doneSummary = `${loop.doneSummary ? `${loop.doneSummary}\n` : ''}R${round}: ${summary}`.slice(-6000)
+  }
+  if (decision.action === 'continue') {
+    loop.subgoal = decision.subgoal
+    loop.status = 'paused'
+    loop.paused = undefined
+  } else {
+    loop.status = decision.reason === 'met' ? 'met' : 'paused'
+    loop.paused = decision.reason === 'met' ? undefined : { reason: decision.reason, note: decision.note }
+  }
+}
+
+/**
+ * Queue a completion notice into the session agent's own inbox, so an async
+ * round's feedback reaches the session agent even while it is doing something
+ * else. Zero-dependency replica of dsh-llm's createUserMessage
+ * ({id, role:'user', content, source}) + Agent.followup, the same mechanism
+ * dsh-goal-round-driver uses to admit continuation rounds.
+ */
+function notifyRoundSettled(parent: any, loop: LoopState, round: number): void {
+  try {
+    parent.followup({
+      id: randomUUID(),
+      role: 'user',
+      content: [{
+        type: 'text',
+        text:
+          `<cybernetics_round>\nGoal: ${JSON.stringify(loop.goalId)} (${loop.title ?? ''})\nRound: ${round}\n\n` +
+          `该 goal 的后台轮已结束。调用 cybernetics { action: "collect", goalId: ${JSON.stringify(loop.goalId)} } 折叠结果，然后按协议处理反馈：向用户总结 / 启动验证轮 / 带缺口启动修正轮。\n</cybernetics_round>`,
+      }],
+      source: { kind: 'cybernetics', goalId: loop.goalId, round },
+    })
+  } catch {
+    // The notice is a convenience; the session agent can still collect on its
+    // next turn. Never let notification failure break the round lifecycle.
+  }
 }
