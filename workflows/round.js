@@ -10,6 +10,9 @@
 //                                                   // primary work order (falls back to the objective)
 //   role:   string,                                 // task agent role key (default 'default')
 //   roles:  { [role]: { provider?, model? } },      // per-role LLM overrides (deployment config)
+//   taskReport?: object,                            // v0.6 TeamExecutor: the persistent teammate's
+//                                                   // report — when present the task agent is skipped
+//                                                   // and verify/triage run over it directly
 //   depth:  'quick' | 'full',                       // quick = task agent only (lightweight analysis:
 //                                                   // one agent, one round, direct feedback — no
 //                                                   // verify/triage); full = the whole loop (default,
@@ -17,7 +20,7 @@
 // }
 // Returns { round, report, verdict, triage } — the controller folds this into the decision.
 
-const { goal, state, subgoal, brief, role, roles, depth } = args
+const { goal, state, subgoal, brief, role, roles, depth, taskReport } = args
 
 // One triaged step; shared by the four triage buckets (plain data, no $ref).
 const stepsItem = {
@@ -31,6 +34,81 @@ const specFor = (key) => {
   return s && (s.provider || s.model)
     ? { ...(s.provider ? { provider: s.provider } : {}), ...(s.model ? { model: s.model } : {}) }
     : {}
+}
+
+// v0.6 TeamExecutor: the persistent teammate already did the task work; the
+// controller hands its report in as `taskReport`. Skip the task agent entirely
+// and go straight to verify/triage (quick depth returns the derived verdict).
+if (taskReport && typeof taskReport === 'object') {
+  const report = taskReport
+  if (depth === 'quick') {
+    return {
+      round: state.round,
+      report,
+      verdict: {
+        met: report.done === true,
+        quick: true,
+        criteria: [],
+        gaps: report.done === true ? [] : ['task agent 报告 done=false（quick 轮无 verify，详见 report）'],
+        goalItselfQuestionable: false,
+      },
+      triage: { auto: [], defer: [], reject: [], human: [] },
+    }
+  }
+  await phase('verify')
+  const verdict = await agent(
+    [
+      `你是独立的 verify agent：你没有、也不应获得 task agent 的叙述过程。`,
+      `下面是目标、工作委托书和 task agent 的报告，请基于证据判定本轮是否达成目标。`,
+      ``,
+      `【目标】`,
+      goal.objective,
+      ``,
+      `【工作委托书】`,
+      (brief && brief.trim()) || goal.objective,
+      ``,
+      `【task agent 的报告】`,
+      JSON.stringify(report, null, 2),
+      ``,
+      `判定标准：证据是否支撑报告的每一项结论；是否覆盖了本轮子目标；是否存在未验证的断言。`,
+    ].join('\n'),
+    { label: 'verify', ...specFor('verify'), schema: {
+      type: 'object', additionalProperties: false,
+      required: ['met', 'criteria', 'gaps', 'goalItselfQuestionable'],
+      properties: {
+        met: { type: 'boolean' },
+        criteria: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['criterion', 'pass', 'evidence'], properties: { criterion: { type: 'string' }, pass: { type: 'boolean' }, evidence: { type: 'string' } } } },
+        gaps: { type: 'array', items: { type: 'string' } },
+        goalItselfQuestionable: { type: 'boolean' },
+      },
+    } },
+  )
+  await phase('triage')
+  const triage = await agent(
+    [
+      `你是 triage agent：把 verify 的缺口拆成四类处置建议。`,
+      ``,
+      `【verify 判定】`,
+      JSON.stringify(verdict, null, 2),
+      ``,
+      `【本轮子目标】`,
+      subgoal || '',
+    ].join('\n'),
+    { label: 'triage', ...specFor('triage'), schema: {
+      type: 'object', additionalProperties: false,
+      required: ['auto', 'defer', 'reject', 'human'],
+      properties: {
+        auto: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['step', 'rationale'], properties: { step: { type: 'string' }, rationale: { type: 'string' } } } },
+        defer: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['step', 'rationale'], properties: { step: { type: 'string' }, rationale: { type: 'string' } } } },
+        reject: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['step', 'rationale'], properties: { step: { type: 'string' }, rationale: { type: 'string' } } } },
+        human: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['step', 'rationale'], properties: { step: { type: 'string' }, rationale: { type: 'string' }, question: { type: 'string' } } } },
+      },
+    } },
+  )
+  if (verdict === null || triage === null) {
+    return { round: state.round, report, failed: 'verify/triage agent 失败，本轮无结论' }
+  }
+  return { round: state.round, report, verdict, triage }
 }
 
 await phase('task')

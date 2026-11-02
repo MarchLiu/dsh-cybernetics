@@ -2,9 +2,10 @@
 
 目标-行动-测量-校准的迭代回路，构建在 DSH 的 `dsh-workflow` 编排与 `dsh-goal` 持久目标之上。
 
-## v0.6 设计（未实现）：与 Agent Teams 集成
+## v0.6 设计：与 Agent Teams 集成
 
-2026-11-02 与用户逐条定稿的设计决策。尚未写代码；第 0 步验证实验先行（见文末）。
+2026-11-02 与用户逐条定稿的设计决策。第 0 步验证实验已完成（见文末）；执行者适配层
+`executor: 'ephemeral' | 'persistent'` 已实现（见下方「已实现」小节）。
 
 1. **双层修正回路**。内环（行动修正）：本轮 subgoal / 委托书，由 session agent 依据 verdict
    自动调整，每轮记账（现有）。外环（目标修正）：goal 的 objective / 范围，**agent 只能提案，
@@ -33,6 +34,21 @@
 7. **分步**：第 0 步（验证）：allowlist 加入 `spawn_teammate`/`send_message`/`interrupt_agent`，
    手工养一名分析师跑真实多轮知识库分析，验证协作形态；通过后再实现 Executor 适配层
    （`LoopState.executor` + 外环 revision 记账 + 控制页签执行者行）。
+
+### v0.6 已实现：执行者适配层（Executor）
+
+- `executor: 'ephemeral' | 'persistent'`（与 depth 正交）：ephemeral 仍是 v0.5 的 workflow
+  临时 agent；persistent 用 Agent Teams 的持久 teammate 执行 task 工作。
+- `src/executor.ts` 的 `startTeamRound`：首轮 `spawnTeammate(context:'fresh')`，后续轮
+  `sendMessage` 投递「委托书修订」；用宿主 `subagent/end` 事件（info.id = 子会话 id，
+  info.output = ContentBlock[]）捕获每轮最终输出；被取消的轮会先摘除自己的等待者，
+  不会抢走后继轮的 settle 事件。
+- quick：由 teammate 输出派发 verdict（输出契约要求最后一行
+  `{"done": bool, "summary": "...", "evidence": "..."}`，缺失标记即视为未完成）。
+- full：teammate 的文本报告按 task 报告结构交给 `workflows/round.js` 的 `args.taskReport`，
+  task agent 被跳过，verify/triage 仍以临时 agent 独立运行——验证不继承任务叙述。
+- 软集成：运行时探测 `ctx.agentTeams`，缺失时 persistent 报错并提示回退 ephemeral。
+- 审计：round 日志记录 `executor`；goal 板记录 `memberName`（跨轮复用同一 teammate）。
 
 ### v0.6 已实现：多 goal 投影与页签
 

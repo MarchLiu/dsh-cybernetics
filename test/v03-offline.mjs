@@ -872,4 +872,131 @@ async function loadClientTab() {
   console.log('✓ 27 client lineage: successor/parent lines with titles, superseded badge, projection order preserved')
 }
 
-console.log('\nALL 27 CHECKS PASSED')
+
+// 28. v0.6 TeamExecutor (persistent, quick): spawns one fresh teammate on the
+//     first round, captures its output via subagent/end, derives the verdict
+{
+  const appends = []
+  setRecordAppender((_s, type, data) => { appends.push({ type, data }) })
+  const handlers = []
+  const spawned = []
+  const messages = []
+  const tools9 = []
+  const engine9 = fakeEngine()
+  const parent9 = { session: { id: 'sess-team' }, followup() {} }
+  const ctx9 = {
+    tools: { register: (d) => { tools9.push(d); return () => {} } },
+    systemPrompt: { section() {}, getSectionOrder: () => 0 },
+    goals: { get: () => null, create: () => ({ id: 'goal-focused' }) },
+    workingDirectory: { get: () => root },
+    agentPresets: { serviceFor: (a, n) => (n === 'workflowEngine' ? engine9 : undefined) },
+    agents: { roots: () => [] },
+    sessionProjections: { register: () => () => {} },
+    on: (event, fn) => { if (event === 'subagent/end') handlers.push(fn); return () => {} },
+    agentTeams: {
+      spawnTeammate: async (_caller, req) => {
+        spawned.push(req)
+        return { member: { id: 'child-team-1', name: req.name, status: 'running' } }
+      },
+      sendMessage: async (_caller, req) => { messages.push(req); return { messageId: 'm-1' } },
+      interrupt: () => ({ previousStatus: 'running' }),
+      listMembers: () => [{ id: 'child-team-1', name: spawned[0]?.name, status: 'inactive' }],
+    },
+  }
+  apply(ctx9, {})
+  const tool9 = tools9[0]
+  const exec9 = { agent: parent9, signal: undefined }
+
+  const started = await tool9.execute({ action: 'start', title: '持久分析', brief: '分析 X', executor: 'persistent', depth: 'quick' }, exec9)
+  assert.equal(spawned.length, 1, 'first persistent round spawns exactly one teammate')
+  assert.equal(spawned[0].context, 'fresh', 'teammates are provisioned, never forked')
+  assert.deepEqual(spawned[0].prompt.length, 1)
+  assert.match(spawned[0].prompt[0].text, /输出契约/)
+  assert.ok(spawned[0].name.startsWith('cyb-'), 'member name derives from the goal id')
+
+  // the teammate settles its turn
+  for (const h of handlers) h({ id: 'child-team-1', output: [{ type: 'text', text: '分析完成：X 的结论 {"done": true, "summary": "X ok", "evidence": "tool out"}' }] })
+  await new Promise((r) => setImmediate(r))
+  const collected = await tool9.execute({ action: 'collect', goalId: started.goalId }, exec9)
+  assert.equal(collected.decision.reason, 'met', 'quick verdict derives from the report')
+  assert.equal(collected.result.verdict.quick, true)
+  assert.match(collected.result.report.summary, /X ok/)
+    console.log('✓ 28 persistent quick round: one fresh teammate, verdict derived from its output')
+
+// 29. v0.6 TeamExecutor round 2+: the peer message steers the SAME member
+//     (brief amendment), no second spawn
+{
+  const p = tool9.execute({ action: 'round', goalId: started.goalId }, exec9)
+  for (let i = 0; i < 100 && messages.length === 0; i++) await new Promise((r) => setImmediate(r))
+  assert.equal(messages.length, 1, 'second round sends one amendment message')
+  assert.equal(messages[0].target, spawned[0].name, 'the same durable member is addressed')
+  assert.match(messages[0].content[0].text, /委托书修订/)
+  assert.equal(spawned.length, 1, 'no second spawn')
+  for (const h of handlers) h({ id: 'child-team-1', output: [{ type: 'text', text: '第二轮完成 {"done": true, "summary": "round2 ok", "evidence": "e2"}' }] })
+  const out2 = await p
+  assert.equal(out2.round, 2)
+  assert.equal(out2.decision.reason, 'met')
+  console.log('✓ 29 persistent round 2: brief amendment to the same member, no respawn')
+}
+
+// 30. v0.6 TeamExecutor cancel: interrupts the teammate and releases the goal
+{
+  let interrupts = 0
+  ctx9.agentTeams.interrupt = () => { interrupts++; return { previousStatus: 'running' } }
+  const t = await tool9.execute({ action: 'start', title: '可取消任务', brief: 'B', executor: 'persistent', depth: 'quick' }, exec9)
+  await new Promise((r) => setImmediate(r))
+  const c = await tool9.execute({ action: 'cancel', goalId: t.goalId }, exec9)
+  assert.match(String(c.cancelled), /已请求中止/)
+  assert.equal(interrupts, 1, 'cancel interrupts the persistent teammate')
+  console.log('✓ 30 persistent cancel: interrupt issued to the member')
+}
+
+// 31. v0.6 TeamExecutor full depth: the teammate's report is handed to
+//     round.js as taskReport so verify/triage stay ephemeral and independent
+{
+  const runsBefore = engine9.runs.length
+  const t = await tool9.execute({ action: 'start', title: '持久完整轮', brief: 'C', executor: 'persistent', depth: 'full' }, exec9)
+  for (const h of handlers) h({ id: 'child-team-1', output: [{ type: 'text', text: '完成 {"done": true, "summary": "full ok", "evidence": "ev"}' }] })
+  for (let i = 0; i < 200 && engine9.runs.length === runsBefore; i++) await new Promise((r) => setImmediate(r))
+  assert.equal(engine9.runs.length, runsBefore + 1, 'verify/triage workflow run started')
+  const req = engine9.runs.at(-1).request
+  assert.equal(req.args.taskReport.summary, 'full ok', 'report passed as taskReport')
+  assert.equal(req.args.taskReport.done, true)
+  engine9.runs.at(-1).settle({
+    stopReason: 'completed',
+    value: {
+      round: 1,
+      report: { summary: 'full ok', done: true, artifacts: [], evidence: 'ev', nextStepThoughts: [] },
+      verdict: { met: true, criteria: [], gaps: [], goalItselfQuestionable: false },
+      triage: { auto: [], defer: [], reject: [], human: [] },
+    },
+  })
+  await new Promise((r) => setImmediate(r))
+  const col = await tool9.execute({ action: 'collect', goalId: t.goalId }, exec9)
+  assert.equal(col.decision.reason, 'met')
+  console.log('✓ 31 persistent full: taskReport handed to round.js for independent verify')
+}
+}
+
+// 32. round.js taskReport branch: the task agent is skipped entirely
+{
+  const code = await readFile(new URL('../workflows/round.js', import.meta.url), 'utf8')
+  const calls = []
+  const agent = async (prompt, opts) => {
+    calls.push(opts?.label ?? '?')
+    if (calls.length === 1) return { met: true, criteria: [], gaps: [], goalItselfQuestionable: false }
+    return { auto: [], defer: [], reject: [], human: [] }
+  }
+  const fn = new (async function () {}.constructor)('agent', 'phase', 'args', 'log', code)
+  const out = await fn(agent, async () => {}, {
+    goal: { objective: 'O' }, state: { round: 1, doneSummary: '' },
+    subgoal: 'S', brief: 'B', roles: {},
+    taskReport: { summary: 'from teammate', done: true, artifacts: [], evidence: 'e', nextStepThoughts: [] },
+  }, () => {})
+  assert.deepEqual(calls, ['verify', 'triage'], 'task agent skipped; verify+triage ran')
+  assert.equal(out.report.summary, 'from teammate')
+  assert.equal(out.verdict.met, true)
+  console.log('✓ 32 round.js taskReport: task agent skipped, verify/triage over the given report')
+}
+
+console.log('\nALL 32 CHECKS PASSED')

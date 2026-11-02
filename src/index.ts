@@ -27,6 +27,7 @@ import {
   createGoal, foldRound, runRound, startRound, supersedeGoal, writeRevisionLog,
 } from './controller.ts'
 import type { ControllerConfig, ControllerDecision, LoopState, RoundResult, RolesConfig } from './controller.ts'
+import { startTeamRound, teamExecutorAvailable } from './executor.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals } from './projection.ts'
 
 export const name = 'dsh-cybernetics'
@@ -144,6 +145,11 @@ yourself — you manage goals and the task agents that execute them. Classify ea
   a brief — the COMPLETE work order extracted from the request (background, paths, constraints, acceptance
   criteria). The task agent is an independent subagent with NO conversation history; the brief must be
   detailed enough for it to finish the work unaided. One session supports multiple concurrent goals.
+- EXECUTOR (new): pass executor 'persistent' for goals whose rounds should accumulate context across
+  iterations (multi-turn analysis by a durable teammate — the member keeps its identity and findings
+  while you keep the dialogue). Default 'ephemeral' runs each round as fresh workflow subagents, which
+  is right for one-shot work and changes. Persistent rounds still verify (full depth) through ephemeral
+  verifiers, so verification never inherits the task narrative.
 - CORRECTION to an existing task → an APPEND-ONLY goal revision: call action 'revise' with the old goalId, a
   required reason, the new objective when the goal itself changed (omit it to inherit), and optionally a new
   title / depth / executor. 'revise' creates a NEW goal (parentGoalId = old goal) and starts its first round;
@@ -497,6 +503,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       if (args.subgoal) loop.subgoal = args.subgoal
       if (args.brief) loop.brief = args.brief
       if (args.depth) loop.depth = args.depth
+      if (args.executor) loop.executor = args.executor
       if (args.role) loop.role = args.role
 
       // A goal adopted from the dsh-goal focus slot joins the board here; make
@@ -511,6 +518,32 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       const objective = loop.objective ?? goalView?.objective ?? loop.title ?? ''
 
       /**
+       * Start one round on the goal's chosen substrate. Ephemeral (default) is
+       * the v0.5 workflow run; persistent uses an Agent Teams teammate that
+       * survives across rounds. Both return the same run-like handle, so the
+       * async/blocking/cancel paths below stay substrate-agnostic.
+       */
+      const startAnyRound = async (target: LoopState, signal?: AbortSignal): Promise<any> => {
+        if (target.executor === 'persistent') {
+          if (!teamExecutorAvailable(ctx)) {
+            throw new Error(
+              'cybernetics: executor "persistent" needs Agent Teams (ctx.agentTeams) in this session — ' +
+              'none is available; use executor "ephemeral" for this goal',
+            )
+          }
+          return startTeamRound(ctx, parent, target, controllerConfig, signal)
+        }
+        const started = await startRound(engine, parent, root, target, controllerConfig, { objective: target.objective ?? '' }, signal)
+        return {
+          round: started.round,
+          result: started.run.result,
+          cancel: (reason?: string) => started.run.cancel(reason),
+          dispose: () => started.run.dispose(),
+          run: started.run,
+        }
+      }
+
+      /**
        * Start one goal's round in the background (action 'start' and `revise`
        * share this): install the handle, then queue the completion notice. The
        * goal's status is already 'running' when this is called.
@@ -521,13 +554,11 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           if (exec.signal.aborted) controller.abort()
           else exec.signal.addEventListener('abort', () => controller.abort(), { once: true })
         }
-        const { round, run } = await startRound(
-          engine, parent, root, target, controllerConfig,
-          { objective: target.objective ?? '' }, controller.signal,
-        )
-        const handle: RunningRound = { goalId: target.goalId!, round, parent, root, loop: target, config: controllerConfig, run }
+        const started: any = await startAnyRound(target, controller.signal)
+        const round = started.round as number
+        const handle: RunningRound = { goalId: target.goalId!, round, parent, root, loop: target, config: controllerConfig, run: started }
         running.set(target.goalId!, handle)
-        run.result.then(async (settled: any) => {
+        started.result.then(async (settled: any) => {
           handle.settled = settled
           // Superseded goal (revise with abortPrevious: false): the successor
           // carries the work from here — no collect notice, and release the run
@@ -654,10 +685,15 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         return { goalId: loop.goalId, round, started: true }
       }
 
-      // Blocking round (default).
-      const { result, decision } = await runRound(
-        engine, parent, root, loop, controllerConfig, { objective }, exec.signal,
-      )
+      // Blocking round (default). Both substrates expose {round, result, dispose}.
+      const handle: any = await startAnyRound(loop, exec.signal)
+      let settled: any
+      try {
+        settled = await handle.result
+      } finally {
+        await handle.dispose()
+      }
+      const { result, decision } = await foldRound(root, handle.round, settled, loop, controllerConfig)
       applyDecision(loop, result.round, result, decision)
       // Round settlement decision applied — republish (round / status / subgoal).
       publishBoard()

@@ -22,6 +22,8 @@ export interface RoundResult {
   verdict?: unknown
   triage?: unknown
   failed?: string
+  /** Execution substrate used for this round (v0.6 audit). */
+  executor?: 'ephemeral' | 'persistent'
 }
 
 /** LLM target overrides for one sub-agent role; workflow `agent()` opts subset. */
@@ -72,6 +74,10 @@ export interface LoopState {
   brief?: string
   /** Round depth: 'quick' = task agent only (lightweight analysis); 'full' = task→verify→triage (default). */
   depth?: 'quick' | 'full'
+  /** Execution substrate: 'ephemeral' (workflow subagents, default) or 'persistent' (Agent Teams teammate). */
+  executor?: 'ephemeral' | 'persistent'
+  /** Persistent teammate name, set on the first persistent round and reused afterwards. */
+  memberName?: string
   /**
    * Lifecycle: running (a round in flight) / paused / met (verify passed, awaits
    * user) / cancelled / superseded (a revision created a successor goal; this
@@ -87,13 +93,6 @@ export interface LoopState {
   parentGoalId?: string
   /** Set on a superseded goal: the id of the successor that replaced it. */
   supersededBy?: string
-  /**
-   * Execution substrate (v0.6, orthogonal to depth): the Executor adapter is
-   * not implemented yet, so every goal reports 'ephemeral' (workflow agent).
-   * Present on the loop state now so the session projection's GoalView shape
-   * needs no breaking change when the adapter lands.
-   */
-  executor?: 'ephemeral' | 'persistent'
   /**
    * In-place revision log kept for wire compatibility (pre-append-only shape).
    * v0.6 append-only model: a revision creates a successor goal instead, so new
@@ -246,7 +245,9 @@ export async function foldRound(
   } else {
     result = settled.value as RoundResult
   }
-  await writeRoundLog(root, state.goalId, round, result)
+  // v0.6 audit: record which substrate ran the round.
+  const logged: RoundResult = { ...result, executor: state.executor ?? 'ephemeral' }
+  await writeRoundLog(root, state.goalId, round, logged)
   return { result, decision: decide(result, state, config) }
 }
 

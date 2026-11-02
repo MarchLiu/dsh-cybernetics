@@ -19,9 +19,12 @@ task agent → verify agent → triage agent，controller 在轮间推进，用�
 ## 状态
 
 v0.6：多 goal session 投影（`cyberneticsGoals`）——goal 板每次变化把本 session 全部 goal 的
-整值快照 append 成一条 `cybernetics/goals` 事件，服务端纯折叠、宿主整值推送，「目标」页签逐条渲染
-并就地更新；空板回退到 dsh-goal 单 goal 渲染。`GoalView` 预置 `executor`/`revisions` 字段
-（当前 ephemeral / 空），供 Executor 适配层与外环修订记账接入。
+整值快照 append 成一条 `plugin:cybernetics/goals` 事件（可跳过的插件记录，宿主持久化读取安全），
+服务端纯折叠、宿主整值推送，「目标」页签逐条渲染并就地更新；空板回退到 dsh-goal 单 goal 渲染。
+**执行者适配层**：`executor: 'ephemeral' | 'persistent'`（与 depth 正交）——persistent 用 Agent Teams
+持久 teammate 执行 task 工作（首轮 spawn fresh，后续轮 sendMessage 投递委托书修订，`subagent/end`
+捕获输出）；quick 由输出契约派生 verdict，full 把报告作为 `taskReport` 交给 round.js，verify/triage
+仍以临时 agent 独立运行。审计日志记录 `executor`，goal 板记录 `memberName`。
 v0.6 追加：**只新增目标模型（append-only goals）**——goal 一经存在不再原地修改。`action: 'revise'`
 （必填 `reason`，可选 `objective`/`title`/`depth`/`executor`/`abortPrevious`）创建一个带
 `parentGoalId` 的新 goal 并立即启动其第 1 轮，旧 goal 置 `superseded` + `supersededBy` 保留最终状态；
