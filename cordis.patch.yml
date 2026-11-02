@@ -1,0 +1,24 @@
+# dsh-cybernetics bundle patch: inserts the plugin row into the profile roster.
+# Dual-face plugin by package name: the Node half (src/index.ts) provides the
+# cybernetics tool and the system-prompt guidance; the browser half
+# (exports["./client"], declared via dsh.client) renders the「目标 / Goal」tab.
+#
+# Optional config (override from a later layer, e.g. the profile patch):
+#   - id: dsh-cybernetics
+#     config:
+#       roundsPerSubgoal: 3
+#       implicitTrigger: true
+#       roles:
+#         default: { provider: zai-coding-cn, model: glm-5.3 }
+#         verify:  { provider: zai-coding-cn, model: glm-5.3 }
+#         writer:  { provider: zai-coding-cn, model: glm-5-turbo }
+# Top-level insert: the client-module boot graph enumerates only top-level
+# loader entries, so the Node half must load at the root for the「目标」tab to
+# register. The workflowEngine service (published inside each Agent's preset
+# delegation group) is NOT statically injected — apply() reads it per call via
+# `ctx.agentPresets.serviceFor(agent, 'workflowEngine')`; see src/index.ts.
+# History 2026-11-02: a top-level static inject of workflowEngine hung boot;
+# mounting the whole plugin inside preset-standard silenced the client scan.
+- insert:
+    - id: dsh-cybernetics
+      name: dsh-cybernetics

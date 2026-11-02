@@ -1,0 +1,61 @@
+# dsh-cybernetics
+
+DSH 的控制论工作协议插件：session goal（`dsh-goal` 持久目标，agent 思考产物、模型动词维护）→
+task agent → verify agent → triage agent，controller 在轮间推进，用户通过对话校准。
+构建在 `dsh-workflow`（单轮编排）之上。v0.2 起不再依赖 goal.md 文件。
+
+- 协议全文：[docs/protocol.md](docs/protocol.md)
+- 服务端：`src/index.ts`（`cybernetics` 工具 + 隐式触发提示段）+ `src/controller.ts`（轮间状态机）
+- 客户端：`lib/client.js`（「目标 / Goal」+「控制 / Control」两个会话页签，实时推送）
+  - 「目标」读当前 session 的 goal projection；
+  - 「控制」读 session list store（control stream 实时推送），递归展示本会话全部
+    agent（主控 + subagent catalog）的运行状态与各自 goal projection
+    （objective / phase / rounds / 受阻原因），顶部汇总运行中数量。
+- 轮脚本：`workflows/round.js`（每次 run = 一轮；`roles` 表支持按角色覆盖 sub agent 模型）
+
+## 状态
+
+v0.2：session-goal 模式 + 隐式触发 + 角色化 sub agent + 客户端 goal 页签。
+服务端已按 dsh 0.2.1-rc.3 真实 API 核对（tools.register / goals service / workingDirectory），
+客户端按 ModuleLoader 包装格式手写（参照 dsh-client-ui-goal / dsh-context）。
+**端到端回路尚未实跑**：workflow 轮脚本、页签挂载均待首次真实验证。
+
+2026-11-02 触发链路实测：隐式提示注入 ✅、工具注册 ✅；执行原在
+`ctx.get('workflowEngine')` 处报 "cannot get property ... without inject"
+（宿主 cordis 对未注入服务的属性访问直接抛错，goal 护栏不可达）。
+已改为静态 inject `workflowEngine` / `goals` / `workingDirectory`
+（对齐 dsh-tool-workflow / dsh-tool-ralph）。
+追加实测修正：首次重启后插件仍 pending——`workflowEngine` 是在 `delegation`
+group 的 isolate 里提供的（`isolate: workflowEngine: true`），顶层 insert 的
+行拿不到它。`cordis.patch.yml` 已改为按组 id 插入（`- id: delegation` +
+`insert:`，loader 方言：patch id 指向 group 行时追加进该组 config）。
+**待服务端重载后复测**：boot 不再 pending、工具可用、隐式提示段与客户端页签
+在组作用域下仍正常注入。
+第三次实测修正：按组 id 插入也被跳过（dump-config 报 `entry "delegation" not
+found`）——`delegation` 组不在顶层 patch 索引，而是嵌在 `preset-standard`
+（`@deepseek-ai/dsh-agent-preset`）的 `config.plugins` 里，patch 应用时那只是
+普通 config 对象。最终方案：profile 层 patch 整体重写 `preset-standard` 的
+config（Web 编辑器保存走的就是这条路），把 `dsh-cybernetics` 加进其
+delegation 组；本插件的 bundle patch 清空为 `[]`。
+第四次实测修正：页签仍未出现——浏览器实测发现 boot graph 的 client combo
+不含本包：客户端扫描只枚举**顶层** loader entries，挂进 preset 的行对它不可
+见。最终方案：插件回到顶层行，`workflowEngine` 不再静态 inject，执行时经
+`ctx.agentPresets.serviceFor(agent, 'workflowEngine')` 从 Agent 的 preset
+mount 读取（registry 的官方 root-realm 访问器）；inject 收窄为五个根级服务
+（tools/systemPrompt/goals/workingDirectory/agentPresets）。同轮还修复 goal
+护栏：`goals.get()` 对 completed/paused goal 仍返回视图，现严格要求
+`phase === 'active'`，并按 goal id 重置轮次状态。dump 复算确认：顶层行就位、
+preset-standard 恢复原样、无 patch 警告。
+页签渲染两连修（浏览器实测定位）：① inject 手动传的 `t` 遮蔽了槽位按
+`locale: NS` 注入的正确翻译函数（字典注册前 bind 会解析为空串）——inject
+不再传 t；② 宿主 jsx 变体忽略 `jsx(type, props, children)` 的第三参，
+children 必须放进 `props.children`（对照 dsh-client-ui-trajectory 编译产物），
+否则所有文本静默丢失、元素塌缩成空胶囊。修复后「目标 / 控制」两页签均完整
+渲染（2026-11-02：goal 徽章/objective/轮次 + 1/11 agent 树与各自 goal 状态）。
+
+## 与 dsh 现有机制的关系
+
+- goal：不替代——dsh-goal 仍是 durable setpoint 与续跑驱动；本插件是它的工作回路。
+- workflow：每轮就是一次 `ctx.workflowEngine.start()` run；不新增编排机制。
+- 完成确认：controller 永不自宣完成、不代改 goal phase；met 也只暂停等用户。
+- 多 goal（未来）：按 super-agent 模式，sub goal 下沉到 sub session 各自的 dsh-goal。
