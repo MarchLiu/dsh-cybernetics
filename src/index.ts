@@ -31,7 +31,7 @@ import {
 import type {
   ControllerConfig, ControllerDecision, LoopState, ResumableReason, RoundResult, RolesConfig,
 } from './controller.ts'
-import { startTeamRound, teamExecutorAvailable } from './executor.ts'
+import { startTeamRound, teamExecutorAvailable, teamExecutorUnavailableError } from './executor.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals } from './projection.ts'
 
 export const name = 'dsh-cybernetics'
@@ -735,12 +735,10 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
        */
       const startAnyRound = async (target: LoopState, signal?: AbortSignal): Promise<any> => {
         if (target.executor === 'persistent') {
-          if (!teamExecutorAvailable(ctx)) {
-            throw new Error(
-              'cybernetics: executor "persistent" needs Agent Teams (ctx.agentTeams) in this session — ' +
-              'none is available; use executor "ephemeral" for this goal',
-            )
-          }
+          // Soft probe: never read ctx.agentTeams directly here — Cordis throws
+          // on an un-injected service property, which would surface as an
+          // internal proxy error instead of "unsupported, use ephemeral".
+          if (!teamExecutorAvailable(ctx)) throw teamExecutorUnavailableError()
           return startTeamRound(ctx, parent, target, controllerConfig, signal)
         }
         const started = await startRound(engine, parent, root, target, controllerConfig, { objective: target.objective ?? '' }, signal)

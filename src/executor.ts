@@ -15,9 +15,13 @@
  * listener is installed before the first spawn and every settled child is
  * buffered by id until consumed.
  *
- * Soft integration: `ctx.agentTeams` is probed at call time. A session without
- * Agent Teams keeps working with executor 'ephemeral'; requesting 'persistent'
- * there fails with a pointed error instead of hanging.
+ * Soft integration: the Agent Teams service is probed at call time through
+ * `agentTeamsOf()` — Cordis context proxies THROW on an un-injected service
+ * property, so a plain `ctx.agentTeams` read turns "not mounted" into an
+ * internal proxy error. The accessor swallows that and reports `undefined`, so
+ * a session without Agent Teams keeps working with executor 'ephemeral';
+ * requesting 'persistent' there fails with a pointed, structured error
+ * (pointing at ephemeral) instead of a Cordis proxy exception or a hang.
  * @module dsh-cybernetics/executor
  */
 
@@ -44,10 +48,36 @@ export interface TeamRunHandle {
   dispose(): Promise<void>
 }
 
+/**
+ * Read the Agent Teams service without tripping Cordis' proxy guard.
+ *
+ * Cordis' context proxy throws `cannot get property "X" without inject` when a
+ * service was not injected into this context. Accessing a soft/optional
+ * integration must therefore be exception-safe: "not available" has to be
+ * reported as `undefined`, not as a proxy error. Returns `any` on purpose —
+ * the service shape is only known to the host that mounts it.
+ */
+export function agentTeamsOf(ctx: unknown): any {
+  try {
+    return (ctx as { agentTeams?: unknown } | undefined)?.agentTeams
+  } catch {
+    // Un-injected service: Cordis threw. Soft integration ⇒ unavailable.
+    return undefined
+  }
+}
+
 /** Whether this context can host persistent (teammate) executors. */
 export function teamExecutorAvailable(ctx: unknown): boolean {
-  const teams = (ctx as { agentTeams?: { spawnTeammate?: unknown } } | undefined)?.agentTeams
+  const teams = agentTeamsOf(ctx) as { spawnTeammate?: unknown } | undefined
   return teams !== undefined && typeof teams.spawnTeammate === 'function'
+}
+
+/** The pointed, structured error for a persistent round without Agent Teams. */
+export function teamExecutorUnavailableError(): Error {
+  return new Error(
+    'cybernetics: executor "persistent" needs Agent Teams (agentTeams) in this session — ' +
+    'the service is not injected here; fall back to executor "ephemeral" for this goal',
+  )
 }
 
 /** ContentBlock text join (the host's output blocks are already text-only here). */
@@ -200,12 +230,18 @@ export async function startTeamRound(
     doneSummary: state.doneSummary,
   }
   const workOrder = buildWorkOrder(input, config.roles)
+  // Soft integration probe (same accessor as teamExecutorAvailable): a missing
+  // service is a structured, actionable failure — the caller/protocol falls
+  // back to executor 'ephemeral' — never a Cordis proxy exception.
+  const teams = agentTeamsOf(ctx)
+  if (teams === undefined || typeof teams.spawnTeammate !== 'function') {
+    throw teamExecutorUnavailableError()
+  }
   // Install the subagent/end listener BEFORE the first spawn: a teammate can
   // settle before spawnTeammate resolves, and the buffered output must not be
   // lost. (Registration is idempotent per ctx.)
   captureState(ctx as object)
   const memberName = state.memberName ?? `cyb-${input.goalId.replace(/^cyb-/, '')}`
-  const teams = ctx.agentTeams
 
   let cancelled = false
   let resolveCancel: (() => void) | undefined

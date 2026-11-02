@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply, loadBoardFile, saveBoardFile } from '../src/index.ts'
+import { agentTeamsOf, startTeamRound, teamExecutorAvailable } from '../src/executor.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setRecordAppender, EVENT_TYPE, LEGACY_EVENT_TYPE } from '../src/projection.ts'
 
 // --- fake workflow engine ---------------------------------------------------
@@ -1242,4 +1243,78 @@ let boardSnapshot
   console.log('✓ 38 control tab: goal rows show executor + teammate name + round, unfinished first')
 }
 
-console.log('\nALL 38 CHECKS PASSED')
+// 39. v0.6 soft Agent Teams probe: a Cordis-style context THROWS when the
+//     un-injected `agentTeams` property is read. Requesting persistent there
+//     must reject with the structured "needs Agent Teams" error (pointing at
+//     the ephemeral fallback), never with the proxy exception; the same ctx
+//     still starts an ephemeral round.
+{
+  const engine39 = fakeEngine()
+  const host39 = fakeHost(engine39, { sessionId: 'sess-soft-probe' })
+  const root39 = await mkdtemp(join(tmpdir(), 'cyb-soft-'))
+  host39.ctx.workingDirectory = { get: () => root39 }
+  // Faithful Cordis behaviour: reading a service that was not injected does
+  // not return undefined — the context proxy throws. This is exactly the
+  // production failure (`cannot get property "agentTeams" without inject`).
+  let probes = 0
+  Object.defineProperty(host39.ctx, 'agentTeams', {
+    configurable: true,
+    enumerable: false,
+    get() {
+      probes++
+      throw new Error('cannot get property "agentTeams" without inject')
+    },
+  })
+  apply(host39.ctx, {})
+  const tool39 = host39.tools[0]
+  const exec39 = { agent: host39.parent, signal: undefined }
+
+  let rejected
+  try {
+    await tool39.execute({ action: 'round', title: '无团队任务', brief: '做 X', executor: 'persistent' }, exec39)
+  } catch (error) { rejected = error }
+  assert.ok(rejected instanceof Error, 'persistent on a team-less ctx rejects')
+  assert.match(rejected.message, /needs Agent Teams/, 'structured soft-integration error')
+  assert.match(rejected.message, /agentTeams/, 'the error names the missing service')
+  assert.match(rejected.message, /ephemeral/, 'the error points at the fallback executor')
+  assert.doesNotMatch(rejected.message, /without inject/, 'never leaks the Cordis proxy exception')
+
+  // The accessor itself is exception-safe and reports "unavailable".
+  assert.equal(agentTeamsOf(host39.ctx), undefined, 'agentTeamsOf swallows the thrown property access')
+  assert.equal(teamExecutorAvailable(host39.ctx), false, 'availability probe answers false, not throw')
+  assert.ok(probes > 0, 'the throwing getter really was hit')
+
+  // Same ctx, executor omitted (ephemeral): the round still starts.
+  const runsBefore39 = engine39.runs.length
+  const started39 = await tool39.execute({ action: 'start', title: '无团队临时任务', brief: '做 Y' }, exec39)
+  assert.equal(started39.started, true)
+  assert.equal(engine39.runs.length, runsBefore39 + 1, 'ephemeral round started on the team-less ctx')
+  assert.match(started39.goalId, /^cyb-/)
+  console.log('✓ 39 soft Agent Teams probe: un-injected service → structured error, ephemeral fallback still starts')
+}
+
+// 40. startTeamRound's own guard: called directly (bypassing index.ts's
+//     pre-check) it still refuses with the same structured error — the soft
+//     probe is enforced at the executor boundary too, not only at the tool.
+{
+  const ctx40 = { on: () => () => {} }
+  Object.defineProperty(ctx40, 'agentTeams', {
+    configurable: true,
+    get() { throw new Error('cannot get property "agentTeams" without inject') },
+  })
+  const loop40 = {
+    goalId: 'cyb-direct', title: 't', objective: 'o', round: 0, doneSummary: '',
+    subgoal: 's', role: 'default', status: 'running', executor: 'persistent',
+  }
+  let err40
+  try {
+    await startTeamRound(ctx40, {}, loop40, { roundScriptPath: '/nonexistent/round.js', roles: {} })
+  } catch (error) { err40 = error }
+  assert.ok(err40 instanceof Error, 'startTeamRound rejects without Agent Teams')
+  assert.match(err40.message, /needs Agent Teams/)
+  assert.match(err40.message, /ephemeral/, 'tells the caller to fall back')
+  assert.doesNotMatch(err40.message, /without inject/, 'not a Cordis proxy exception')
+  console.log('✓ 40 startTeamRound guard: direct call refuses with the structured fallback error')
+}
+
+console.log('\nALL 40 CHECKS PASSED')

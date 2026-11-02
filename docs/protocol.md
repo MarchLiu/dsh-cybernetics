@@ -27,7 +27,8 @@
 5. **执行者基质二选一**（`executor: 'ephemeral' | 'persistent'`，与 depth 正交）：
    一次性/变更类 goal → workflow 临时 agent（schema 校验报告、最省、已验证）；
    迭代型（多轮分析）goal → 持久 teammate（记忆是特性），verify 仍每轮临时、独立。
-6. **软集成**：运行时探测 `ctx.get('agentTeams')`，缺失则回退 workflow（不硬绑实验包）。
+6. **软集成**：运行时用 **try/catch 安全访问器**探测 `agentTeams`（Cordis 的 context 代理在
+   读取未注入的服务属性时会直接抛错，不能当成「服务不存在」），缺失则回退 workflow（不硬绑实验包）。
    `spawnTeammate` 仅 Team Lead 可调——cybernetics 作为 Lead 的工具调用天然满足；
    goal 板保持唯一真相，不双写 team task 板；每 goal 至多一个执行者；
    goal 完成/cancel 时 `interrupt` + 清理常驻队员。
@@ -47,7 +48,9 @@
   `{"done": bool, "summary": "...", "evidence": "..."}`，缺失标记即视为未完成）。
 - full：teammate 的文本报告按 task 报告结构交给 `workflows/round.js` 的 `args.taskReport`，
   task agent 被跳过，verify/triage 仍以临时 agent 独立运行——验证不继承任务叙述。
-- 软集成：运行时探测 `ctx.agentTeams`，缺失时 persistent 报错并提示回退 ephemeral。
+- 软集成：运行时探测用 `agentTeamsOf()`（try/catch 访问 `ctx.agentTeams`）——Cordis 未注入时
+  会抛错，安全访问器把它折叠成 `undefined` 并回退；因此 persistent 报的是结构化错误
+  （`needs Agent Teams … fall back to executor "ephemeral"`），不是 Cordis 代理异常。
 - 审计：round 日志记录 `executor`；goal 板记录 `memberName`（跨轮复用同一 teammate）。
 
 ### v0.6 已实现：多 goal 投影与页签
