@@ -160,3 +160,23 @@ Config `roles` 表把角色名映射到 `{provider, model}` 覆盖，round 脚�
 - goal 状态由 dsh-goal 的 session projection（`goal` 投影）承载，客户端「目标 / Goal」页签
   （`lib/client.js`，conversation.view slot）实时读取渲染：objective 文本 + phase + rounds。
   v0.2 为纯文本渲染；后续演进：任务分解、状态跟踪、verdict 历史可视化（参照 dsh-context 范式）。
+
+## 第 0 步实验记录（2026-11-02）
+
+配置：teammate `analyst`，`context: 'fresh'`，provider `spawn`；两轮真实知识库分析：
+首轮委托书（talent_portrait/profile 数据质量评估），次轮委托书修订（423 份 11-01 后刷新批次的
+delta 对比 + 压缩为 3 条决策要点）。
+
+观察：
+1. **持久记忆生效**：次轮引用了首轮自身结论（「陈志波 92 vs 24」不一致案例、student/researcher
+   分面基线），未重做首轮工作；次轮墙钟约为首轮一半。持久身份 + goal 边界成立，
+   会话历史只在本队员内累积，符合上下文不变量。
+2. **委托书修订语义可行**：只收到增量要求，按约定三段式（分布表/对比结论/3 条要点）交付，
+   无开放式对话漂移。
+3. **自主分析质量超出委托书要求**：自行发现 PII 入正文、markdown↔JSON 漂移、4% null 维度、
+   测试与规范节点混入、1.71 节点/人等——fresh 上下文 + 详细委托书足以支撑高质量领域判断。
+4. **只读约束被遵守**：仅写 `.cybernetics/tmp/probe.json`；报告明确说明 401 后未去读取凭据。
+5. 成本未精确计量；墙钟首轮约 4 分钟、次轮约 3 分钟。
+
+结论：支持 v0.6 `executor: 'persistent'` 方向。下一步：Executor 适配层（workflow/team 两种传输）
++ 外环 revision 记账 + 控制页签执行者行。
