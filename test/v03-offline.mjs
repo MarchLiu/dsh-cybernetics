@@ -10,7 +10,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
-import { apply, loadBoardFile, saveBoardFile } from '../src/index.ts'
+import { apply, Config, loadBoardFile, saveBoardFile } from '../src/index.ts'
+import { decideAbort } from '../src/controller.ts'
 import { agentTeamsOf, startTeamRound, teamExecutorAvailable } from '../src/executor.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setRecordAppender, setAppenderCandidatesForTest, EVENT_TYPE, LEGACY_EVENT_TYPE, resolveHostSessionCopy, hostSessionStatus, setPublishDebugRoot, DEBUG_DIR, DEBUG_FILE, MAX_DEBUG_ERROR_CHARS } from '../src/projection.ts'
 
@@ -573,7 +574,7 @@ async function loadClientTab() {
     return out
   }
   const values = {}
-  const react = { useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot() }
+  const react = { useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(), useState: (v) => [v, () => {}] }
   const jsx = {
     jsx: (type, props, key) => ({ type, props: props ?? {}, key }),
     jsxs: (type, props, key) => ({ type, props: props ?? {}, key }),
@@ -592,8 +593,15 @@ async function loadClientTab() {
   const registered = []
   // Session-list snapshot the control tab renders its agent tree from.
   const listSnapshot = { byId: {}, projectionsBySession: {} }
+  // v0.7.2: configForms stub — whileServed runs its register callback once
+  // (namespace served), get returns undefined the settings card guards on.
+  const configForms = {
+    get: () => undefined,
+    whileServed: (_namespaces, register) => { register(new Set()); return () => {} },
+  }
   mod.apply({
     effect: (fn) => fn(),
+    configForms,
     locale: { register: (_ns, dictionaries) => Object.assign(dict, dictionaries.zh), bind: () => t },
     slots: { inject: (_name, cb) => cb(), register: (spec, view) => { registered.push({ spec, view }) } },
     sessions: {
@@ -607,9 +615,21 @@ async function loadClientTab() {
   assert.ok(tab, '目标 tab registered')
   const control = registered.find((entry) => entry.spec.id === 'cybernetics-control')
   assert.ok(control, '控制 tab registered')
+  // v0.7.2: the plugins-page list card registers into the official `plugins.item`
+  // seat (the 内置插件配置 group) with id = settings namespace id.
+  const settings = registered.find((entry) => entry.spec.name === 'plugins.item')
+  assert.ok(settings, 'plugins.item settings card registered (内置插件配置 group)')
+  assert.equal(settings.spec.id, 'dsh-cybernetics', 'plugins.item id equals the settings namespace')
+  const formStub = {
+    getSnapshot: () => ({ status: 'ready', value: { allGoalsMode: true }, writable: true }),
+    subscribe: () => () => {},
+    set: async () => true,
+  }
+  const summary = settings.view({ ...settings.spec.inject(), t, form: formStub, view: 'summary' })
+  assert.match(flatten(summary).join('\n'), /开/, 'settings summary reflects allGoalsMode=true')
   return {
     src, flatten, values, dict, t, tab, injected: tab.spec.inject('sess-client'),
-    control, injectedControl: control.spec.inject('sess-client'), listSnapshot,
+    control, injectedControl: control.spec.inject('sess-client'), listSnapshot, settings,
   }
 }
 
@@ -1804,4 +1824,527 @@ console.log(JSON.stringify({
   console.log('✓ 47 all candidates reject: publish reports failed, debug record carries truncated errors')
 }
 
-console.log('\nALL 47 CHECKS PASSED')
+// 48. v0.7 all-goals mode: the injected prompt section carries the four routing
+//     rules (everything enters a goal / quick single round / progressive
+//     multi-round for analysis + write tasks / revise auto-abort decision tree);
+//     with the mode off the section is absent
+{
+  const toolsOff = []
+  const ctxOff = {
+    tools: { register: (d) => { toolsOff.push(d); return () => {} } },
+    systemPrompt: { section() {}, getSectionOrder: () => 0 },
+    goals: { get: () => null },
+    workingDirectory: { get: () => root },
+    agentPresets: { serviceFor: () => undefined },
+  }
+  let sectionOff
+  ctxOff.systemPrompt.section = (s) => { sectionOff = s }
+  apply(ctxOff, {})
+  assert.ok(sectionOff, 'implicit trigger section still injected')
+  assert.ok(!/ALL-GOALS MODE ACTIVE/.test(sectionOff.text), 'mode off: no all-goals routing section (behavior unchanged)')
+
+  const toolsOn = []
+  const ctxOn = { ...ctxOff, tools: { register: (d) => { toolsOn.push(d); return () => {} } } }
+  let sectionOn
+  ctxOn.systemPrompt.section = (s) => { sectionOn = s }
+  apply(ctxOn, { allGoalsMode: true })
+  assert.ok(sectionOn, 'section injected in all-goals mode')
+  const t = sectionOn.text
+  assert.match(t, /ALL-GOALS MODE ACTIVE/, 'rule 1: the mode header is present')
+  assert.match(t, /EVERYTHING ENTERS A GOAL/, 'rule 1: every request enters a goal, no in-place analysis')
+  assert.match(t, /SIMPLE READ-ONLY REQUEST → depth 'quick'/, 'rule 2: quick single-round routing')
+  assert.match(t, /COMPLEX ANALYSIS or WRITE TASK → depth 'full', progressive multi-round/, 'rule 3: progressive multi-round routing')
+  assert.match(t, /RULE 4 — REVISE DECISION TREE/, 'rule 4: revise auto decision tree present')
+  assert.match(t, /\(a\) old round STILL RUNNING and the revision contradicts it/, 'rule 4a: conflict → auto-abort')
+  assert.match(t, /\(b\) old round STILL RUNNING but the correction keeps the objective/, 'rule 4b: valuable/parallel → wait')
+  assert.match(t, /\(c\) old task agent ALREADY FINISHED/, 'rule 4c: finished → start directly')
+  console.log('✓ 48 all-goals mode prompt: four routing rules injected only when the mode is on')
+}
+
+// 49. v0.7 revise auto-abort decision tree (pure helper): explicit flag wins;
+//     not running → start directly; running + retarget → abort; running +
+//     same objective → wait
+{
+  const loop = (depth) => ({ goalId: 'g', status: 'running', depth })
+  const explicit = decideAbort(loop('full'), true, { abortPrevious: true })
+  assert.deepEqual([explicit.abort, explicit.mode], [true, 'explicit'])
+  const keep = decideAbort(loop('full'), true, { abortPrevious: false })
+  assert.deepEqual([keep.abort, keep.mode], [false, 'explicit'])
+  // (c) finished agent → no abort
+  const c = decideAbort(loop('full'), false, {})
+  assert.deepEqual([c.abort, c.mode], [false, 'auto'])
+  assert.match(c.basis, /无在跑轮|直接启动/)
+  // (a) running + objective rewritten → abort
+  const a = decideAbort(loop('full'), true, { objective: '新目标' })
+  assert.deepEqual([a.abort, a.mode], [true, 'auto'])
+  assert.match(a.basis, /冲突|中止/)
+  const a2 = decideAbort(loop('full'), true, { depth: 'quick' })
+  assert.deepEqual([a2.abort, a2.mode], [true, 'auto'], 'depth change also retargets')
+  const a3 = decideAbort(loop('quick'), true, { depth: 'quick' })
+  assert.deepEqual([a3.abort, a3.mode], [false, 'auto'], 'same-depth override does not retarget')
+  // (b) running + brief-only correction → wait
+  const b = decideAbort(loop('full'), true, {})
+  assert.deepEqual([b.abort, b.mode], [false, 'auto'])
+  assert.match(b.basis, /等待|自然结束/)
+  console.log('✓ 49 revise auto-abort helper: explicit/manual preserved; finished→direct start, retarget→abort, correction→wait')
+}
+
+// 50. v0.7 revise with allGoalsMode on: omitted abortPrevious auto-aborts a
+//     contradicting in-flight round (goal rewritten), waits for a same-objective
+//     correction, starts directly after the old agent finished — and the audit
+//     jsonl line records the decision mode + basis in all three states
+{
+  const metRound = {
+    round: 1,
+    report: { summary: '完成', done: true, artifacts: [], evidence: 'e', nextStepThoughts: [] },
+    verdict: { met: true, criteria: [], gaps: [], goalItselfQuestionable: false },
+    triage: { auto: [], defer: [], reject: [], human: [] },
+  }
+  const mk = async () => {
+    const e = fakeEngine()
+    const host = fakeHost(e, { sessionId: `sess-test-50-${Math.random().toString(36).slice(2, 8)}` })
+    host.ctx.workingDirectory = { get: () => root }
+    apply(host.ctx, { allGoalsMode: true })
+    return { tool: host.tools[0], exec: { agent: host.parent, signal: undefined }, e }
+  }
+  const auditLine = async (goalId) =>
+    JSON.parse((await readFile(join(root, '.cybernetics', `revisions-${goalId}.jsonl`), 'utf8')).trim().split('\n').at(-1))
+
+  // (a) running + objective rewritten → auto abort
+  {
+    const { tool, exec, e } = await mk()
+    const g = await tool.execute({ action: 'start', title: '旧方向', brief: 'b' }, exec)
+    const oldRun = e.runs[0]
+    const r = await tool.execute({ action: 'revise', goalId: g.goalId, reason: '目标被校准，旧方向作废', objective: '新目标' }, exec)
+    assert.equal(oldRun.cancelled, true, 'auto: contradicting in-flight round is cancelled')
+    assert.equal(r.abort.mode, 'auto')
+    assert.equal(r.abort.abort, true)
+    assert.match(r.abort.basis, /冲突|中止/)
+    const rec = await auditLine(r.goalId)
+    assert.equal(rec.abort.abort, true, 'audit records the abort decision')
+    assert.equal(rec.abort.mode, 'auto')
+    assert.match(rec.abort.basis, /冲突|中止/, 'audit records the decision basis')
+    oldRun.settle({ stopReason: 'cancelled', error: 'superseded' })
+  }
+
+  // (b) running + same objective → wait (old run untouched, audit says auto/false)
+  {
+    const { tool, exec, e } = await mk()
+    const g = await tool.execute({ action: 'start', title: '可复用任务', brief: 'b' }, exec)
+    const oldRun = e.runs[0]
+    const r = await tool.execute({ action: 'revise', goalId: g.goalId, reason: '补充验收标准' }, exec)
+    assert.equal(oldRun.cancelled, false, 'auto: valuable in-flight round keeps running')
+    assert.deepEqual([r.abort.abort, r.abort.mode], [false, 'auto'])
+    assert.match(r.abort.basis, /等待|自然结束/)
+    const rec = await auditLine(r.goalId)
+    assert.deepEqual([rec.abort.abort, rec.abort.mode], [false, 'auto'])
+    assert.match(rec.abort.basis, /等待|自然结束/)
+    // settle the successor so the fixture exits cleanly; old run settles silently (superseded)
+    e.runs.at(-1).settle({ stopReason: 'completed', value: metRound })
+    oldRun.settle({ stopReason: 'cancelled', error: 'superseded' })
+  }
+
+  // (c) old agent finished → direct start, no abort attempted
+  {
+    const { tool, exec, e } = await mk()
+    const g = await tool.execute({ action: 'start', title: '已完成任务', brief: 'b' }, exec)
+    e.runs[0].settle({ stopReason: 'completed', value: metRound })
+    await new Promise((r) => setImmediate(r))
+    await tool.execute({ action: 'collect', goalId: g.goalId }, exec)
+    const r = await tool.execute({ action: 'revise', goalId: g.goalId, reason: '完成后微调' }, exec)
+    assert.deepEqual([r.abort.abort, r.abort.mode], [false, 'auto'])
+    assert.match(r.abort.basis, /无在跑轮|直接启动/)
+    const rec = await auditLine(r.goalId)
+    assert.match(rec.abort.basis, /无在跑轮|直接启动/)
+    e.runs.at(-1).settle({ stopReason: 'completed', value: metRound })
+  }
+
+  // Backward compat: allGoalsMode OFF, omitted flag → still no abort (v0.6 default).
+  {
+    const e = fakeEngine()
+    const host = fakeHost(e, { sessionId: 'sess-test-50-off' })
+    host.ctx.workingDirectory = { get: () => root }
+    apply(host.ctx, {})
+    const tool = host.tools[0]
+    const exec = { agent: host.parent, signal: undefined }
+    const g = await tool.execute({ action: 'start', title: '兼容任务', brief: 'b' }, exec)
+    const oldRun = e.runs[0]
+    const r = await tool.execute({ action: 'revise', goalId: g.goalId, reason: '目标重写', objective: '全新目标' }, exec)
+    assert.equal(oldRun.cancelled, false, 'mode off: omitted abortPrevious still defaults to false (unchanged)')
+    assert.deepEqual([r.abort.abort, r.abort.mode], [false, 'explicit'], 'mode off: explicit-false semantics recorded')
+    const rec = await auditLine(r.goalId)
+    assert.equal(rec.abort.abort, false)
+    oldRun.settle({ stopReason: 'cancelled', error: 'superseded' })
+    e.runs.at(-1).settle({ stopReason: 'completed', value: metRound })
+  }
+  console.log('✓ 50 revise auto policy: contradicting→abort, correction→wait, finished→direct; audit lines carry mode+basis; mode off unchanged')
+}
+
+// --- v0.7.1: settings-panel Config schema (schemastery) ----------------------
+// The Web editor's plugin config panel derives the form from the exported
+// schemastery `Config` (0.1.7 settings model); the loader validates the raw
+// patch config through Config['~standard'].validate before apply() runs.
+{
+  assert.equal(typeof Config, 'function', 'Config schema is exported (callable schemastery schema)')
+  assert.equal(Config.dict.allGoalsMode.meta?.volatile, true, 'allGoalsMode is volatile (live panel toggle, no remount)')
+  assert.notEqual(Config.dict.hardGate.meta?.volatile, true, 'hardGate is NOT volatile (structural edit remounts)')
+  // Loader-path validation of the shipped patch config (cordis.patch.yml values).
+  const patch = { hardGate: true, gateMode: 'allowlist', gateAllowlistExtra: ['spawn_teammate', 'send_message', 'interrupt_agent'], roles: { default: { provider: 'p', model: 'm' } } }
+  const v = Config['~standard'].validate(patch).value
+  assert.equal(v.issues, undefined)
+  assert.equal(v.hardGate, true, 'non-volatile boolean resolves to a plain value')
+  assert.equal(v.allGoalsMode.get?.(), false, 'volatile boolean resolves to a live reference (default off)')
+  assert.deepEqual(v.roles.default, { provider: 'p', model: 'm' })
+  // Schema-resolved arrays arrive as [] when unset — apply() must fall back to
+  // the built-in gate sets, otherwise the hard gate would keep/gate nothing.
+  assert.deepEqual(v.gatedTools, [])
+  const sections = []
+  const ctx = {
+    tools: { register: () => () => {} },
+    systemPrompt: { section: (s) => { sections.push(s); return () => {} }, getSectionOrder: () => 0 },
+    goals: { get: () => null },
+    workingDirectory: { get: () => '/tmp' },
+    agentPresets: { serviceFor: () => undefined },
+    on: () => () => {},
+  }
+  apply(ctx, v)
+  assert.ok(sections[0].text.includes('HARD GATE ACTIVE'), 'loader-path hardGate:true renders hard-gate guidance')
+  // Plain-config path (no schema resolution — offline harness style) unchanged.
+  const plain = []
+  apply({ tools: { register: () => () => {} }, systemPrompt: { section: (s) => { plain.push(s); return () => {} }, getSectionOrder: () => 0 } }, { allGoalsMode: true })
+  assert.ok(plain[0].text.length > 300, 'plain-config allGoalsMode:true still injects guidance')
+  console.log('✓ 51 settings-panel Config schema: volatile allGoalsMode ref, hardGate plain, loader-path gate defaults intact')
+}
+
+// 52. v0.7.2 plugins-page settings card: plugins.row.config / plugins.bundle.config
+//     seats registered with the right dispatch keys and bound to the row's
+//     ConfigForm; the toggle writes allGoalsMode through form.set; the summary
+//     view renders the current state; an unserved namespace degrades gracefully.
+{
+  const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.match(client, /plugins\.row\.config/, 'row config seat registered (plugins.page 配置 control)')
+  assert.match(client, /plugins\.bundle\.config/, 'bundle config seat registered (bundle page)')
+  assert.match(client, /bundleKey \+ '#' \+ SETTINGS_ENTRY_ID/, 'row seat key is <bundle>#<row id>')
+  assert.match(client, /configForms\.get\(SETTINGS_ENTRY_ID\)/, 'binds the row namespace ConfigForm')
+
+  let loaded
+  globalThis.window = { __ModuleLoader__: { load: (m) => { loaded = m } } }
+  new Function('window', client)(globalThis.window)
+  const jsx = {
+    jsx: (type, props, key) => ({ type, props: props ?? {}, key }),
+    jsxs: (type, props, key) => ({ type, props: props ?? {}, key }),
+  }
+  const react = { useSyncExternalStore: (_sub, getSnapshot) => getSnapshot(), useState: (v) => [v, () => {}] }
+  const mod = loaded.factory((req) => (req === 'react' ? react : jsx))
+
+  // Fake ConfigForm for the `dsh-cybernetics` namespace (ConfigForm contract:
+  // getSnapshot / subscribe / set / mutate / unset).
+  let snap = { status: 'ready', value: { allGoalsMode: false }, writable: true }
+  const listeners = new Set()
+  const writes = []
+  const form = {
+    getSnapshot: () => snap,
+    subscribe: (cb) => { listeners.add(cb); return () => listeners.delete(cb) },
+    set: async (field, value) => {
+      writes.push({ field, value })
+      snap = { ...snap, value: { ...snap.value, [field]: value } }
+      listeners.forEach((cb) => cb())
+      return true
+    },
+    mutate: async () => true,
+    unset: async () => true,
+  }
+  const registered = []
+  const t = (key) => key
+  mod.apply({
+    effect: (fn) => fn(),
+    locale: { register: () => () => {}, bind: () => t },
+    slots: { inject: (_n, cb) => cb(), register: (spec, view) => { registered.push({ spec, view }) } },
+    sessions: {},
+    configForms: {
+      get: (id) => { assert.equal(id, 'dsh-cybernetics'); return form },
+      whileServed: (_namespaces, register) => { register(new Set()); return () => {} },
+    },
+  })
+  const rowSeat = registered.find((e) => e.spec.name === 'plugins.row.config' && e.spec.key === 'dsh-cybernetics#dsh-cybernetics')
+  const rowSeatScoped = registered.find((e) => e.spec.key === '@mars.liu/dsh-cybernetics#dsh-cybernetics')
+  const bundleSeat = registered.find((e) => e.spec.name === 'plugins.bundle.config' && e.spec.key === 'dsh-cybernetics')
+  assert.ok(rowSeat && bundleSeat && rowSeatScoped, 'all three seats registered with dispatch keys')
+
+  const flatten = (node, out = []) => {
+    if (node === null || node === undefined || typeof node === 'boolean') return out
+    if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
+    if (Array.isArray(node)) { for (const n of node) flatten(n, out); return out }
+    if (typeof node.type === 'function') { flatten(node.type(node.props), out); return out }
+    if (node.props && node.props.children !== undefined) flatten(node.props.children, out)
+    return out
+  }
+  const findSwitch = (node) => {
+    if (node === null || node === undefined || typeof node !== 'object') return undefined
+    if (node.props && node.props.role === 'switch') return node
+    if (Array.isArray(node)) { for (const n of node) { const hit = findSwitch(n); if (hit) return hit } return undefined }
+    if (node.props && node.props.children !== undefined) return findSwitch(node.props.children)
+    return undefined
+  }
+  const face = { form, view: 'page', t }
+  const pageText = flatten(rowSeat.view(face)).join('\n')
+  assert.match(pageText, /settings\.title/, 'page view renders the toggle row')
+  const rendered = findSwitch(rowSeat.view(face))
+  assert.ok(rendered, 'toggle exposes role=switch')
+  assert.equal(rendered.props['aria-checked'], false, 'reflects the accepted value (off)')
+  // Toggle write path: clicking the switch calls form.set on the field.
+  rendered.props.onClick()
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(writes, [{ field: 'allGoalsMode', value: true }], 'toggle writes allGoalsMode via ConfigForm.set')
+  assert.equal(findSwitch(rowSeat.view(face)).props['aria-checked'], true, 'next snapshot reflects the accepted write')
+  // Summary view: one-liner only.
+  const summary = flatten(rowSeat.view({ ...face, view: 'summary' })).join('\n')
+  assert.match(summary, /settings\.summaryOn/, 'summary view renders the state one-liner')
+  // Degrades without a served namespace.
+  const none = flatten(rowSeat.view({ form: undefined, view: 'page', t })).join('\n')
+  assert.match(none, /settings\.unavailable/, 'absent form renders the unavailable state, no crash')
+  console.log('✓ 52 plugins-page settings card: seats + keys + ConfigForm toggle write + summary + unavailable fallback')
+}
+
+// 53. v0.7.3 settings card host-form shape: on the plugins.item / plugins.row.config
+//     detail pages the OWNER prop form wins over the injected one (renderer
+//     renderEntry spreads ...injected, ...ownerProps) and carries the host's
+//     ConfigPageForm { state, mutate } instead of a live ConfigForm. The card
+//     must render from `state` and write through `mutate` (never touching
+//     `.subscribe`, which this shape lacks — the v0.7.2 crash).
+{
+  const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  let loaded
+  globalThis.window = { __ModuleLoader__: { load: (m) => { loaded = m } } }
+  new Function('window', client)(globalThis.window)
+  const jsx = {
+    jsx: (type, props, key) => ({ type, props: props ?? {}, key }),
+    jsxs: (type, props, key) => ({ type, props: props ?? {}, key }),
+  }
+  const react = { useSyncExternalStore: (_sub, getSnapshot) => getSnapshot(), useState: (v) => [v, () => {}] }
+  const mod = loaded.factory((req) => (req === 'react' ? react : jsx))
+  const registered = []
+  const t = (key) => key
+  mod.apply({
+    effect: (fn) => fn(),
+    locale: { register: () => () => {}, bind: () => t },
+    slots: { inject: (_n, cb) => cb(), register: (spec, view) => { registered.push({ spec, view }) } },
+    sessions: {},
+    configForms: {
+      get: () => { throw new Error('namespace not served in this harness') },
+      whileServed: (_namespaces, register) => { register(new Set()); return () => {} },
+    },
+  })
+  const itemSeat = registered.find((e) => e.spec.name === 'plugins.item')
+  assert.ok(itemSeat, 'plugins.item seat registered through whileServed')
+
+  const flatten = (node, out = []) => {
+    if (node === null || node === undefined || typeof node === 'boolean') return out
+    if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
+    if (Array.isArray(node)) { for (const n of node) flatten(n, out); return out }
+    if (typeof node.type === 'function') { flatten(node.type(node.props), out); return out }
+    if (node.props && node.props.children !== undefined) flatten(node.props.children, out)
+    return out
+  }
+  const findSwitch = (node) => {
+    if (node === null || node === undefined || typeof node !== 'object') return undefined
+    if (node.props && node.props.role === 'switch') return node
+    if (Array.isArray(node)) { for (const n of node) { const hit = findSwitch(n); if (hit) return hit } return undefined }
+    if (node.props && node.props.children !== undefined) return findSwitch(node.props.children)
+    return undefined
+  }
+
+  // Host ConfigPageForm: a frozen snapshot + mutate; NO subscribe/getSnapshot/set.
+  const mutations = []
+  let state = { status: 'ready', value: { allGoalsMode: false }, writable: true, revision: 7 }
+  const hostForm = {
+    get state() { return state },
+    mutate: async (ops, revision) => {
+      mutations.push({ ops, revision })
+      state = { ...state, value: { ...state.value, allGoalsMode: ops[0].value }, revision: revision + 1 }
+      return true
+    },
+  }
+  const face = { form: hostForm, view: 'page', t }
+  const pageText = flatten(itemSeat.view(face)).join('\n')
+  assert.match(pageText, /settings\.title/, 'host-shape form renders the toggle row (no crash on missing subscribe)')
+  const rendered = findSwitch(itemSeat.view(face))
+  assert.ok(rendered, 'host-shape toggle exposes role=switch')
+  assert.equal(rendered.props['aria-checked'], false, 'host-shape reflects state.value (off)')
+  rendered.props.onClick()
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(mutations, [{ ops: [{ op: 'set', path: ['allGoalsMode'], value: true }], revision: 7 }],
+    'host-shape toggle writes allGoalsMode via ConfigPageForm.mutate carrying the snapshot revision')
+  assert.equal(findSwitch(itemSeat.view(face)).props['aria-checked'], true, 're-rendered host state reflects the accepted write')
+  // An owner form of undefined (namespace momentarily unserved) degrades gracefully.
+  const none = flatten(itemSeat.view({ form: undefined, view: 'page', t })).join('\n')
+  assert.match(none, /settings\.unavailable/, 'absent owner form renders the unavailable state, no crash')
+  console.log('✓ 53 settings card host ConfigPageForm shape: state render + mutate write + no-subscribe crash regression')
+}
+
+// 54. v0.7.6 path-(b) settings write: the host ConfigFormController collapses
+//     a refusal into a bare `false` and swallows the host RemoteError message.
+//     The card must retry ONCE through the plugin's own remote.settings.mutate
+//     (the SAME write path: SettingsForms.write → configEditor.edit → the USER
+//     patch row `{id, name, config}` in the profile cordis.patch.yml, applied
+//     by reconcileProfilePatches) with NO expectedRevision — so a stale
+//     revision heals and a hard refusal surfaces its exact host message via
+//     settings.saveFailedDetail. A primary success must NOT touch the fallback.
+{
+  const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.match(client, /'remote\.settings'/, 'client module declares the remote.settings inject')
+  assert.match(client, /settingsDirectMutate/, 'apply binds the direct settings transport into the card props')
+  assert.match(client, /settings\.saveFailedDetail/, 'card renders the host refusal detail line')
+
+  let loaded
+  globalThis.window = { __ModuleLoader__: { load: (m) => { loaded = m } } }
+  new Function('window', client)(globalThis.window)
+  const jsx = {
+    jsx: (type, props, key) => ({ type, props: props ?? {}, key }),
+    jsxs: (type, props, key) => ({ type, props: props ?? {}, key }),
+  }
+  // Stateful react stub: useState slots persist across renders so the failure
+  // detail line (set asynchronously inside toggle) is observable.
+  const slotsMem = []
+  let slotIndex = 0
+  const react = {
+    useSyncExternalStore: (_sub, getSnapshot) => getSnapshot(),
+    useState: (initial) => {
+      const i = slotIndex++
+      if (slotsMem[i] === undefined) {
+        slotsMem[i] = {
+          value: initial,
+          set: (nv) => { slotsMem[i].value = typeof nv === 'function' ? nv(slotsMem[i].value) : nv },
+        }
+      }
+      return [slotsMem[i].value, slotsMem[i].set]
+    },
+  }
+  const mod = loaded.factory((req) => (req === 'react' ? react : jsx))
+  const registered = []
+  const t = (key, params) => key + (params && params.message !== undefined ? ':' + params.message : '')
+  mod.apply({
+    effect: (fn) => fn(),
+    locale: { register: () => () => {}, bind: () => t },
+    slots: { inject: (_n, cb) => cb(), register: (spec, view) => { registered.push({ spec, view }) } },
+    sessions: {},
+    configForms: {
+      get: () => undefined,
+      whileServed: (_namespaces, register) => { register(new Set()); return () => {} },
+    },
+    // No ctx.remote in the harness: apply must guard and leave it undefined.
+  })
+  const seat = registered.find((e) => e.spec.name === 'plugins.item')
+  assert.ok(seat, 'plugins.item seat registered')
+  const flatten = (node, out = []) => {
+    if (node === null || node === undefined || typeof node === 'boolean') return out
+    if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
+    if (Array.isArray(node)) { for (const n of node) flatten(n, out); return out }
+    if (typeof node.type === 'function') { flatten(node.type(node.props), out); return out }
+    if (node.props && node.props.children !== undefined) flatten(node.props.children, out)
+    return out
+  }
+  const findSwitch = (node) => {
+    if (node === null || node === undefined || typeof node !== 'object') return undefined
+    if (node.props && node.props.role === 'switch') return node
+    if (Array.isArray(node)) { for (const n of node) { const hit = findSwitch(n); if (hit) return hit } return undefined }
+    if (node.props && node.props.children !== undefined) return findSwitch(node.props.children)
+    return undefined
+  }
+  const render = (f) => { slotIndex = 0; return flatten(seat.view(f ?? face)).join('\n') }
+
+  // Case A: primary write refuses, direct fallback reports ok:false with the
+  // host message — the card must carry the message into saveFailedDetail and
+  // call the fallback with NO expectedRevision (unconditional write).
+  {
+    const directCalls = []
+    let state = { status: 'ready', value: { allGoalsMode: false }, writable: true, revision: 7 }
+    var face = {
+      form: {
+        get state() { return state },
+        mutate: async () => false, // host ConfigFormController refusal: bare false
+      },
+      directMutate: async (ops, expectedRevision) => {
+        directCalls.push({ ops, expectedRevision })
+        return { ok: false, error: { message: 'Config field "allGoalsMode" is not volatile' } }
+      },
+      view: 'page',
+      t,
+    }
+    const before = render()
+    assert.match(before, /settings\.title/, 'case A renders the toggle row')
+    slotIndex = 0
+    findSwitch(seat.view(face)).props.onClick()
+    await new Promise((r) => setImmediate(r))
+    await new Promise((r) => setImmediate(r))
+    assert.deepEqual(directCalls, [{ ops: [{ op: 'set', path: ['allGoalsMode'], value: true }], expectedRevision: undefined }],
+      'case A fallback retries once through remote.settings.mutate with no expectedRevision (user patch row path)')
+    const after = render()
+    assert.match(after, /settings\.saveFailedDetail:Config field "allGoalsMode" is not volatile/,
+      'case A surfaces the exact host refusal message')
+  }
+
+  // Case B: fallback write SUCCEEDS ({ok:true}) — no failure line renders.
+  {
+    slotsMem.length = 0
+    let state = { status: 'ready', value: { allGoalsMode: false }, writable: true, revision: 7 }
+    const faceB = {
+      form: { get state() { return state }, mutate: async () => false },
+      directMutate: async () => ({ ok: true, value: { revision: 8 } }),
+      view: 'page',
+      t,
+    }
+    slotIndex = 0
+    findSwitch(seat.view(faceB)).props.onClick()
+    await new Promise((r) => setImmediate(r))
+    await new Promise((r) => setImmediate(r))
+    slotIndex = 0
+    const face0 = faceB
+    assert.doesNotMatch(flatten(seat.view(face0)).join('\n'), /settings\.saveFailed/, 'case B healed write renders no failure line')
+  }
+
+  // Case C: primary write succeeds — the fallback must never be invoked.
+  {
+    slotsMem.length = 0
+    let directCalled = false
+    let state = { status: 'ready', value: { allGoalsMode: false }, writable: true, revision: 7 }
+    const faceC = {
+      form: {
+        get state() { return state },
+        mutate: async (ops) => { state = { ...state, value: { ...state.value, allGoalsMode: ops[0].value } }; return true },
+      },
+      directMutate: async () => { directCalled = true; return { ok: true } },
+      view: 'page',
+      t,
+    }
+    slotIndex = 0
+    findSwitch(seat.view(faceC)).props.onClick()
+    await new Promise((r) => setImmediate(r))
+    await new Promise((r) => setImmediate(r))
+    assert.equal(directCalled, false, 'case C accepted primary write never touches the fallback')
+    slotIndex = 0
+    assert.doesNotMatch(flatten(seat.view(faceC)).join('\n'), /settings\.saveFailed/, 'case C renders no failure line')
+  }
+
+  // Case D: no directMutate prop (host without remote.settings) — degrades to
+  // the v0.7.4 hint-only failure, no crash.
+  {
+    slotsMem.length = 0
+    let state = { status: 'ready', value: { allGoalsMode: false }, writable: true, revision: 7 }
+    const faceD = {
+      form: { get state() { return state }, mutate: async () => false },
+      view: 'page',
+      t,
+    }
+    slotIndex = 0
+    findSwitch(seat.view(faceD)).props.onClick()
+    await new Promise((r) => setImmediate(r))
+    await new Promise((r) => setImmediate(r))
+    slotIndex = 0
+    assert.match(flatten(seat.view(faceD)).join('\n'), /settings\.saveFailed(?!Detail)/, 'case D degrades to the hint-only failure state')
+  }
+
+  console.log('✓ 54 path-(b) settings write: unconditional user-patch-row fallback retry + host refusal message surfaced')
+}
+
+console.log('\nALL 54 CHECKS PASSED')

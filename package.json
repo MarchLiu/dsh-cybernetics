@@ -1,6 +1,6 @@
 {
   "name": "@mars.liu/dsh-cybernetics",
-  "version": "0.6.0",
+  "version": "0.7.6",
   "private": false,
   "files": [
     "src",
@@ -33,11 +33,15 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-renderer",
-        "@deepseek-ai/dsh-client-ui-session"
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-ui-settings"
       ],
       "platform": "web",
       "immediately": true
     }
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.5"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-session": "*"
