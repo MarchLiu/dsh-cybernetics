@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { apply, Config, loadBoardFile, saveBoardFile } from '../src/index.ts'
+import z from '@deepseek-ai/schemastery'
 import { decideAbort, parseAgentModelSpec } from '../src/controller.ts'
 import { agentTeamsOf, startTeamRound, teamExecutorAvailable } from '../src/executor.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setRecordAppender, setAppenderCandidatesForTest, EVENT_TYPE, LEGACY_EVENT_TYPE, resolveHostSessionCopy, hostSessionStatus, setPublishDebugRoot, DEBUG_DIR, DEBUG_FILE, MAX_DEBUG_ERROR_CHARS } from '../src/projection.ts'
@@ -2387,4 +2388,125 @@ console.log(JSON.stringify({
   console.log('✓ 55 flat agent-model fields: volatile (host-form writable), live-ref unwrap, provider/model parser + roles merge wiring (empty = session-agent inheritance)')
 }
 
-console.log('\nALL 55 CHECKS PASSED')
+// 56. path-(b) write LANDING: the card's toggle write must survive every host
+//     pre-write gate of @deepseek-ai/dsh-settings SettingsForms.write
+//     (lib/index.js:504-534) and produce the exact USER patch row shape that
+//     @deepseek-ai/dsh-config-editor ConfigEditor.edit (lib/index.js:150-155)
+//     appends to the profile cordis.patch.yml: `{id, name, config}` with NO
+//     `insert` key — the only landing reconcileProfilePatches accepts. This
+//     test replays the host gates verbatim against the REAL Config schema:
+//     volatileForm (lib/index.js:122-131), isVolatilePath
+//     (lib/index.js:173-179), projectForm (lib/index.js:160-165), the mutate
+//     op reduce (lib/index.js:488-497), validatePaths + strip + mergeLayers
+//     (lib/index.js:517-533), and schemastery validation (cordis
+//     resolveConfig, lib/index.js:956-962). A non-volatile path is the
+//     negative control: the same gates must refuse it pre-write, untouched
+//     file — the observed v0.7.4/v0.7.5 refusal signature.
+{
+  // --- faithful replicas of the dsh-settings helpers (lib/index.js) ---
+  const isPlainObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
+    && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null)
+  const volatileForm = (schema) => {
+    if (schema.meta?.volatile) {
+      const plain = new z(schema.toJSON())
+      const stripMeta = (node) => {
+        delete node.meta.volatile
+        for (const child of Object.values(node.dict ?? {})) stripMeta(child)
+        if (node.inner) stripMeta(node.inner)
+        for (const child of node.list ?? []) stripMeta(child)
+      }
+      stripMeta(plain)
+      return plain
+    }
+    if (schema.type === 'object') {
+      const dict = Object.fromEntries(Object.entries(schema.dict ?? {}).flatMap(([k, child]) => {
+        const field = volatileForm(child)
+        return field === undefined ? [] : [[k, field]]
+      }))
+      return Object.keys(dict).length === 0 ? undefined : z.object(dict)
+    }
+    return undefined
+  }
+  const isVolatilePath = (schema, path) => {
+    if (schema.meta?.volatile) return true
+    const [key, ...rest] = path
+    const child = key === undefined ? undefined : schema.dict?.[key]
+    return child !== undefined && isVolatilePath(child, rest)
+  }
+  const projectForm = (schema, value) => {
+    if (schema.type === 'object' && value !== null && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(schema.dict ?? {}).flatMap(([k, child]) => {
+        const field = Reflect.get(value, k)
+        return field === undefined ? [] : [[k, projectForm(child, field)]]
+      }))
+    }
+    return value
+  }
+  const mergeLayers = (under, over) => {
+    if (!isPlainObject(under) || !isPlainObject(over)) return over
+    const merged = { ...under }
+    for (const [k, v] of Object.entries(over)) merged[k] = Object.hasOwn(merged, k) ? mergeLayers(merged[k], v) : v
+    return merged
+  }
+  const validatePaths = (schema, value, node, path = []) => {
+    for (const [key, child] of Object.entries(value)) {
+      const target = [...path, key]
+      if (isVolatilePath(schema, target)) continue
+      const field = Object.hasOwn(node.dict, key) ? node.dict[key] : undefined
+      if (isPlainObject(child) && field !== undefined) validatePaths(schema, child, field, target)
+      else throw new Error(`Config field "${target.join('.')}" is not volatile`)
+    }
+  }
+  const strip = (schema, value, node, path = []) => {
+    if (isVolatilePath(schema, path)) return {}
+    const result = { ...value }
+    for (const [key, field] of Object.entries(node.dict)) {
+      const target = [...path, key]
+      if (isVolatilePath(schema, target)) Reflect.deleteProperty(result, key)
+      else if (isPlainObject(result[key])) result[key] = strip(schema, result[key], field, target)
+    }
+    return result
+  }
+  // --- the gates, against the REAL shipped Config schema ---
+  const form = volatileForm(Config)
+  assert.ok(form, 'the Config schema yields a volatile form (host serves the plugins-page card at all)')
+  const served = Object.keys(form.dict ?? {}).sort()
+  assert.ok(served.includes('allGoalsMode'), 'volatile form serves allGoalsMode')
+  assert.ok(served.includes('taskAgentModel') && served.includes('verifyAgentModel'),
+    'volatile form serves the flat agent-model fields')
+  assert.equal(isVolatilePath(Config, ['allGoalsMode']), true, 'the toggle op path passes the write() volatile gate')
+  assert.equal(isVolatilePath(Config, ['taskAgentModel']), true, 'taskAgentModel op path passes the write() volatile gate')
+  assert.equal(isVolatilePath(Config, ['hardGate']), false, 'hardGate is refused by the same gate (negative control)')
+  // The bundle insert row's raw config (cordis.patch.yml) as the loader holds it.
+  const rawEntryConfig = {
+    hardGate: true, gateMode: 'allowlist', gateAllowlistExtra: ['spawn_teammate', 'send_message', 'interrupt_agent'],
+    allGoalsMode: false,
+  }
+  // Host write(): change = mutate ops over projectForm(raw) — the card's exact op.
+  const current = projectForm(form, rawEntryConfig)
+  const op = { op: 'set', path: ['allGoalsMode'], value: true }
+  const next = [op].reduce((value, o) => (o.op === 'set' ? { ...value, [o.path[0]]: o.value } : value), current)
+  assert.doesNotThrow(() => validatePaths(Config, next, form), 'validatePaths accepts the volatile-only next section')
+  // strip(raw) + mergeLayers(next): the persisted user patch row config.
+  const persisted = mergeLayers(strip(Config, rawEntryConfig, form), next)
+  assert.equal(persisted.allGoalsMode, true, 'volatile value lands in the persisted config')
+  assert.equal(persisted.hardGate, true, 'non-volatile bundle config is preserved in the persisted config')
+  assert.deepEqual(persisted.gateAllowlistExtra, rawEntryConfig.gateAllowlistExtra, 'non-volatile arrays preserved')
+  // schemastery validation = cordis resolveConfig's exact check in edit().
+  const validated = Config['~standard'].validate(persisted)
+  assert.equal(validated.issues, undefined, 'resolveConfig accepts the persisted config (no pre-write ValidationError)')
+  // The row ConfigEditor.edit appends: {id, name, config}, NO insert key —
+  // the user patch row reconcileProfilePatches accepts (dsh-config-editor
+  // lib/index.js findLastIndex guard: `!item.has("insert")`).
+  const patchRow = { id: 'dsh-cybernetics', name: '@mars.liu/dsh-cybernetics', config: persisted }
+  assert.equal(Object.hasOwn(patchRow, 'insert'), false, 'the landed row carries NO insert key (user patch row, not a bundle insert row)')
+  assert.equal(patchRow.id, 'dsh-cybernetics', 'row id matches the loader entry id')
+  assert.equal(patchRow.name, '@mars.liu/dsh-cybernetics', 'row name matches the loader entry name')
+  // Negative control end-to-end: a hardGate op must die at the write() gate
+  // before any document mutation (the v0.7.4/0.7.5 refusal signature).
+  assert.throws(() => { if (!isVolatilePath(Config, ['hardGate'])) throw new Error('Config field "hardGate" is not volatile') },
+    /not volatile/, 'a non-volatile op is refused pre-write, file untouched')
+  console.log('✓ 56 write landing: toggle write survives every host pre-write gate and lands as the user patch row {id, name, config} (no insert)')
+}
+
+console.log('\nALL 56 CHECKS PASSED')

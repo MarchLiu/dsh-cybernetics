@@ -100,6 +100,19 @@ taskAgentModel / verifyAgentModel 两个扁平字段也改为 `.volatile()`（�
 生效步骤：重启宿主（客户端模块图 + 服务端 schema 都在启动时装配）+ 强刷浏览器；验证步骤：
 插件详情页拨「全目标模式」→ 开关保持 + 摘要行变「全目标模式：开」+ profile patch 出现
 `dsh-cybernetics` 用户行；仍失败时卡片将显示宿主拒绝原文（v0.7.6 面）。
+v0.7.8：**写入落点证明测试（测试 56）**——把宿主 `@deepseek-ai/dsh-settings` write() 的全部
+预写闸门（volatileForm / isVolatilePath / projectForm / mutate op reduce / validatePaths /
+strip + mergeLayers，lib/index.js 122-179 与 488-534 行）逐行复刻，对**真实导出的 Config
+schema** 重放卡片的 toggle 写：开关写通过每一道闸门、经 schemastery 校验
+（= cordis `resolveConfig` 的精确检查）后产出持久化 config，最终落点形状恰为
+`ConfigEditor.edit`（dsh-config-editor lib/index.js 150-155 行）追加到 profile
+`cordis.patch.yml` 的**用户 patch 行** `{id, name, config}`（无 `insert` 键）——即
+`reconcileProfilePatches`（dsh-app-boot lib/index.js:3794）唯一接受的落点。
+负向对照：`hardGate` 等非 volatile 路径在写前即被同一闸门以
+「Config field "hardGate" is not volatile」拒绝、文件不被触碰——这正是 v0.7.4/v0.7.5
+实机观测到的拒绝签名（profile patch mtime 不变、快速 rejected）：**运行中宿主装配的
+插件 schema 若早于 volatile 标注，宿主即在写前拒绝**；生效手段不变：重启宿主装配
+v0.7.7 schema + 强刷浏览器。离线测试增至 56 项。
 v0.6：多 goal session 投影（`cyberneticsGoals`）——goal 板每次变化把本 session 全部 goal 的
 整值快照 append 成一条 `plugin:cybernetics/goals` 事件（可跳过的插件记录，宿主持久化读取安全），
 服务端纯折叠、宿主整值推送，「目标」页签逐条渲染并就地更新；空板回退到 dsh-goal 单 goal 渲染。
