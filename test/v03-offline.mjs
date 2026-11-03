@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { apply, Config, loadBoardFile, saveBoardFile } from '../src/index.ts'
-import { decideAbort } from '../src/controller.ts'
+import { decideAbort, parseAgentModelSpec } from '../src/controller.ts'
 import { agentTeamsOf, startTeamRound, teamExecutorAvailable } from '../src/executor.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setRecordAppender, setAppenderCandidatesForTest, EVENT_TYPE, LEGACY_EVENT_TYPE, resolveHostSessionCopy, hostSessionStatus, setPublishDebugRoot, DEBUG_DIR, DEBUG_FILE, MAX_DEBUG_ERROR_CHARS } from '../src/projection.ts'
 
@@ -2347,4 +2347,34 @@ console.log(JSON.stringify({
   console.log('✓ 54 path-(b) settings write: unconditional user-patch-row fallback retry + host refusal message surfaced')
 }
 
-console.log('\nALL 54 CHECKS PASSED')
+// 55. v0.7.6 acceptance: flat agent-model fields on the settings schema —
+//     task/verify agent model overrides ("provider/model" or bare model),
+//     empty = inherit the session agent; wired into roles.default/.verify.
+{
+  assert.ok(Config.dict.taskAgentModel, 'Config schema exposes the flat taskAgentModel field')
+  assert.ok(Config.dict.verifyAgentModel, 'Config schema exposes the flat verifyAgentModel field')
+  // Parser: "provider/model" splits, a bare name is a model-only override,
+  // anything empty (unset field) inherits the session agent (no override).
+  assert.deepEqual(parseAgentModelSpec('glm-5.3/glm-5.3-flash'), { provider: 'glm-5.3', model: 'glm-5.3-flash' })
+  assert.deepEqual(parseAgentModelSpec(' bare-model '), { model: 'bare-model' })
+  assert.equal(parseAgentModelSpec(undefined), undefined, 'unset = inherit session agent')
+  assert.equal(parseAgentModelSpec('   '), undefined, 'blank = inherit session agent')
+  assert.deepEqual(parseAgentModelSpec('a/'), { model: 'a/' }, 'trailing slash is not a provider split')
+  assert.deepEqual(parseAgentModelSpec('/m'), { model: '/m' }, 'leading slash is not a provider split')
+  // Loader-path validation: flat string fields survive schemastery resolution
+  // alongside the roles dict they merge into.
+  const v = Config['~standard'].validate({ taskAgentModel: 'p/m', verifyAgentModel: 'v-model' }).value
+  assert.equal(v.issues, undefined)
+  assert.equal(v.taskAgentModel, 'p/m')
+  assert.equal(v.verifyAgentModel, 'v-model')
+  // Wiring: the flat fields merge over roles.default / roles.verify at
+  // controller-config build time; unset fields leave the roles untouched.
+  const index = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.match(index, /parseAgentModelSpec\(config\.taskAgentModel\)/)
+  assert.match(index, /parseAgentModelSpec\(config\.verifyAgentModel\)/)
+  assert.match(index, /roleOverrides\.default = \{ \.\.\.roleOverrides\.default, \.\.\.taskSpec \}/)
+  assert.match(index, /roleOverrides\.verify = \{ \.\.\.roleOverrides\.verify, \.\.\.verifySpec \}/)
+  console.log('✓ 55 flat agent-model fields: schema face + provider/model parser + roles merge wiring (empty = session-agent inheritance)')
+}
+
+console.log('\nALL 55 CHECKS PASSED')

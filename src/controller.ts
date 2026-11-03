@@ -32,6 +32,24 @@ export interface RoleSpec {
   model?: string
 }
 
+/**
+ * Parse a flat agent-model field ("provider/model" or a bare "model" name)
+ * into a workflow `agent()` override. Empty/whitespace/undefined → undefined,
+ * which the caller must treat as「与 session agent 一致」(no override handed
+ * to the round script — the workflow inherits the calling model).
+ */
+export function parseAgentModelSpec(value?: string): RoleSpec | undefined {
+  const raw = (value ?? '').trim()
+  if (!raw) return undefined
+  const slash = raw.indexOf('/')
+  if (slash > 0 && slash < raw.length - 1) {
+    const provider = raw.slice(0, slash).trim()
+    const model = raw.slice(slash + 1).trim()
+    if (provider && model) return { provider, model }
+  }
+  return { model: raw }
+}
+
 /** Per-role sub-agent configuration: 'default'/'verify'/'triage' plus named task roles. */
 export interface RolesConfig {
   default?: RoleSpec
@@ -112,6 +130,68 @@ export interface GoalRevisionRecord {
   reason: string
   /** Epoch milliseconds of the revision. */
   at: number
+  /**
+   * v0.7: how the old goal's in-flight round was handled, and why. Present on
+   * every revision so the audit trail records the decision basis, not just the
+   * outcome — see `decideAbort` for the decision tree.
+   */
+  abort?: { abort: boolean; mode: 'auto' | 'explicit'; basis: string }
+}
+
+/**
+ * Whether `revise` aborts the old goal's in-flight task agent round, and on
+ * what grounds. Pure — the caller supplies the "is a round in flight" fact
+ * from its own `running` map (no new orchestration mechanism; this reads the
+ * state the controller already maintains).
+ *
+ * Decision tree (v0.7 all-goals mode; `abortPrevious` explicitly passed keeps
+ * the v0.6 manual semantics):
+ * 1. `abortPrevious` given explicitly → honor it verbatim (mode 'explicit').
+ * 2. Old goal has NO round in flight → no abort, start the successor directly.
+ * 3. Old round in flight AND the revision rewrites the goal itself (a new
+ *    `objective`, or a different `depth`) → the old round is working toward a
+ *    target that no longer exists — contradictory goals / write-domain
+ *    conflict → abort it (the cancel path) so it cannot interleave writes.
+ * 4. Old round in flight, correction only (new brief / title / role on the
+ *    same objective) → the old work is still valuable and its result can be
+ *    reused → let the round finish naturally, no abort.
+ */
+export interface AbortDecision {
+  abort: boolean
+  mode: 'auto' | 'explicit'
+  basis: string
+}
+
+export function decideAbort(
+  previous: LoopState,
+  roundInFlight: boolean,
+  args: { abortPrevious?: boolean; objective?: string; depth?: 'quick' | 'full' },
+): AbortDecision {
+  if (args.abortPrevious !== undefined) {
+    return {
+      abort: args.abortPrevious,
+      mode: 'explicit',
+      basis: args.abortPrevious
+        ? '调用方显式要求中止旧轮（abortPrevious: true，复用 cancel 路径）'
+        : '调用方显式要求保留旧轮（abortPrevious: false，跑完自然结束）',
+    }
+  }
+  if (!roundInFlight) {
+    return { abort: false, mode: 'auto', basis: '旧 task agent 无在跑轮（查 goal 板 running 状态），直接启动新 goal，无需中止' }
+  }
+  const retargets = args.objective !== undefined || (args.depth !== undefined && args.depth !== (previous.depth ?? 'full'))
+  if (retargets) {
+    return {
+      abort: true,
+      mode: 'auto',
+      basis: '旧轮在跑且修订改写了目标本身（objective/depth 变化，目标矛盾/写域冲突）——自动中止旧轮，避免旧任务继续写入已被取代的方向',
+    }
+  }
+  return {
+    abort: false,
+    mode: 'auto',
+    basis: '旧轮在跑但任务目标未变（仅 brief/title/role 修正，旧工作仍可复用/可并行）——等待旧轮自然结束，结果由新 goal 继承',
+  }
 }
 
 /** Input for the append-only goal creation path. */

@@ -25,8 +25,9 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import z from '@deepseek-ai/schemastery'
 import {
-  STATE_DIR, createGoal, foldRound, runRound, startRound, supersedeGoal, writeRevisionLog,
+  STATE_DIR, createGoal, decideAbort, foldRound, parseAgentModelSpec, runRound, startRound, supersedeGoal, writeRevisionLog,
 } from './controller.ts'
 import type {
   ControllerConfig, ControllerDecision, LoopState, ResumableReason, RoundResult, RolesConfig,
@@ -68,6 +69,10 @@ export interface Config extends ControllerConfig {
   implicitTrigger?: boolean
   /** Per-role sub-agent model/provider overrides. */
   roles?: RolesConfig
+  /** Flat task-agent model override ("provider/model" or bare model); empty = inherit session agent. */
+  taskAgentModel?: string
+  /** Flat verify-agent model override (same format); empty = inherit session agent. */
+  verifyAgentModel?: string
   /**
    * Hard orchestration gate (default false): hide execution tools from
    * TOP-LEVEL session agents at prompt-assembly time, so the session agent
@@ -89,12 +94,76 @@ export interface Config extends ControllerConfig {
   gateAllowlist?: string[]
   /** Extra tool names unioned onto the allowlist (default or gateAllowlist). */
   gateAllowlistExtra?: string[]
+  /**
+   * All-goals mode (v0.7, default false): EVERY user request — including
+   * trivial read-only questions and lightweight analysis — must go through a
+   * cybernetics goal first; in-place analysis by the session agent is banned.
+   * Off (default) keeps the v0.6 implicit-trigger behavior exactly unchanged.
+   */
+  allGoalsMode?: boolean
 }
 
-// No `Config` export: this cordis requires a schemastery schema there// (Config.validate), which a zero-dependency plugin cannot import. The raw
-// patch config object passes through to apply() unvalidated; fields are
-// optional and read defensively (toolName, roundsPerSubgoal, roundScriptPath,
-// implicitTrigger, roles).
+// Under the host's 0.1.7 settings model, an exported schemastery `Config`
+// schema IS the plugin entry's settings page: the Web editor derives the
+// plugin config form from it and serves it through the shared configuration
+// forms (see @linxin666/dsh-ssh and @linxin666/dsh-usage for the same
+// pattern). At least one field must be `.volatile()` for the page to be
+// served at all; a volatile edit is committed into the running fiber's
+// reference without a remount and announced via `loader/volatile-update`.
+// allGoalsMode is volatile so the panel toggle is live; hardGate and the
+// gate/roles fields are deliberately non-volatile — they change structural
+// wiring (tool stripping listener, per-role routing), so an edit remounts
+// the row, which is the correct behavior for them.
+export const Config = z.object({
+  /** Model-facing tool name. */
+  toolName: z.string().default('cybernetics').description('模型侧工具名（缺省 cybernetics）。'),
+  /** Inject the implicit goal-loop guidance section. */
+  implicitTrigger: z.boolean().default(true).description('注入隐式 goal-loop 系统提示段（缺省开启）。'),
+  /** Per-role sub-agent model/provider overrides: role -> {provider, model}. */
+  roles: z.dict(z.object({
+    provider: z.string(),
+    model: z.string(),
+  })).description('按角色的子 agent provider/model 覆盖：role -> {provider, model}（如 default/verify/triage/frontend）。'),
+  /**
+   * Flat task-agent model override ("provider/model" or a bare model name).
+   * Empty = inherit the session agent. Merged over roles.default at wiring
+   * time (parseAgentModelSpec) — the flat fields are the settings-panel face;
+   * roles stays the canonical runtime shape the round script consumes.
+   */
+  taskAgentModel: z.string().description('task agent 模型覆盖（「provider/model」或裸模型名）；留空 = 与 session agent 一致。'),
+  /** Flat verify-agent model override; same format and fallback as taskAgentModel. */
+  verifyAgentModel: z.string().description('verify agent 模型覆盖（「provider/model」或裸模型名）；留空 = 与 session agent 一致。'),
+  /** Hard orchestration gate (default false). */
+  hardGate: z.boolean().default(false).description('硬编排门：装配期从顶层 session agent 摘除执行工具，所有改动必须经 cybernetics goal + task agent。修改会触发插件重载。'),
+  /** Tool names hidden in denylist mode (default DEFAULT_GATED_TOOLS). */
+  gatedTools: z.array(z.string()).description('denylist 模式下隐藏的工具名（缺省内置 DEFAULT_GATED_TOOLS）。'),
+  /** Gate semantics. */
+  gateMode: z.union(['denylist', 'allowlist'] as const).default('denylist').description('门语义：denylist 隐藏 gatedTools；allowlist 只保留 gateAllowlist（+gateAllowlistExtra）与 cybernetics 工具本身。'),
+  /** Allowlist-mode survival set (default DEFAULT_GATE_ALLOWLIST). */
+  gateAllowlist: z.array(z.string()).description('allowlist 模式生存工具集（缺省内置 DEFAULT_GATE_ALLOWLIST）。'),
+  /** Extra tool names unioned onto the allowlist. */
+  gateAllowlistExtra: z.array(z.string()).description('并集追加进 allowlist 的额外工具名。'),
+  /**
+   * All-goals mode (v0.7, default false): every user request must go through
+   * a cybernetics goal first. Volatile: the settings-panel toggle commits
+   * into the running instance without a remount.
+   */
+  allGoalsMode: z.boolean().default(false).volatile()
+    .description('全目标模式（v0.7，缺省关）：所有用户请求（含只读问题）都必须先经 cybernetics goal。开关在面板上保存后即时生效，无需重载。'),
+})
+
+/** One resolved config field: a live reference (volatile), or a plain value. */
+type ConfigField<T> = { get(): T } | T
+
+/** Read one resolved config field, following the live reference the schema produces for volatile fields. */
+function readConfigField<T>(field: ConfigField<T> | undefined, fallback: T): T {
+  if (field === undefined) return fallback
+  if (typeof field === 'object' && field !== null && typeof (field as { get?: unknown }).get === 'function') {
+    const value = (field as { get(): T }).get()
+    return value === undefined ? fallback : value
+  }
+  return field as T
+}
 
 /**
  * Multi-goal loop registry: session -> goalId -> loop. v0.3 lifts the
@@ -318,6 +387,42 @@ yourself — you manage goals and the task agents that execute them. Classify ea
   'round-cap'/'failed' = report status. Never mark a goal complete yourself; completion is the user's act.
 Use action 'list' to see every goal on this session's board with its status, round and subgoal.`
 
+/**
+ * v0.7 all-goals mode addendum: turns the implicit trigger from "suggest a
+ * goal for substantial tasks" into "every request is a goal". Contains the
+ * four routing rules the protocol and tests pin down:
+ * (1) everything enters a goal; (2) simple read-only → 'quick' single round;
+ * (3) complex analysis / write tasks → progressive multi-round ('full');
+ * (4) the revise auto-abort decision tree.
+ */
+const ALL_GOALS_GUIDANCE = `
+ALL-GOALS MODE ACTIVE (routing protocol — no exceptions, no in-place analysis):
+- RULE 1 — EVERYTHING ENTERS A GOAL: for ANY user request (question, lookup, analysis, change), first
+  create a goal via cybernetics (action 'start' with title + brief), then let the task agent produce the
+  answer. NEVER answer a request by doing the task work yourself with read tools — even a one-file lookup
+  or a quick calculation goes through the loop. If a change is requested while the hard gate is off, the
+  protocol still forbids in-place edits: delegate.
+- RULE 2 — SIMPLE READ-ONLY REQUEST → depth 'quick': one task-agent round, no verify/triage, feed the
+  result straight back to the user (bounded lookups, single-file reads, small queries).
+- RULE 3 — COMPLEX ANALYSIS or WRITE TASK → depth 'full', progressive multi-round: launch with action
+  'start' (async), then 'collect' each settled round and advance the subgoal round by round (task →
+  verify → triage). Analysis: data fetching to disk, datasets, statistics, multi-step query planning.
+  Write tasks additionally rely on the hard gate: the session agent must NEVER execute a change itself —
+  delegation through the goal loop is the only path, however small the change.
+- RULE 4 — REVISE DECISION TREE (updating an existing goal stays append-only: a new goal with
+  parentGoalId, old goal superseded; 'revise' is the only goal-change verb). Decide abortPrevious by the
+  old task agent's state (check with action 'list'):
+  (a) old round STILL RUNNING and the revision contradicts it (objective/depth rewritten — conflicting
+      goals / write-domain overlap) → let 'revise' auto-abort: do not pass abortPrevious; the plugin
+      cancels the old round automatically;
+  (b) old round STILL RUNNING but the correction keeps the objective (brief/title/role only) and the old
+      work stays valuable / parallelizable / reusable → do not pass abortPrevious; the plugin waits for
+      the old round to finish naturally;
+  (c) old task agent ALREADY FINISHED (goal not running on the board) → just call 'revise'; no abort is
+      needed and none is attempted.
+  The chosen branch and its reason are recorded in the .cybernetics/revisions-<newGoalId>.jsonl audit
+  line (abort.mode = auto|explicit + basis). Passing abortPrevious explicitly keeps manual control.`
+
 /** Tool names hidden from top-level session agents when the hard gate is on. */
 const DEFAULT_GATED_TOOLS = ['bash', 'edit', 'write']
 
@@ -373,6 +478,10 @@ not find it, that is the gate working as intended — delegate instead.`
 export function apply(ctx: any, config: Partial<Config> = {}) {
   const toolName = config.toolName ?? 'cybernetics'
   const hardGate = config.hardGate === true
+  // allGoalsMode is a volatile field: under the loader's schema resolution it
+  // arrives as a live reference whose value the settings panel commits in
+  // place (no remount), so read it at use time instead of capturing it once.
+  const allGoalsMode = () => readConfigField(config.allGoalsMode, false) === true
   const disposers: Array<() => void> = []
 
   // v0.6: register the multi-goal session projection, so every goal on the
@@ -389,13 +498,24 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
     if (typeof projectionDisposer === 'function') disposers.push(projectionDisposer)
   }
 
-  if (config.implicitTrigger !== false) {
-    ctx.systemPrompt.section({
+  // The implicit guidance section embeds the volatile allGoalsMode wording,
+  // so it must be re-derived when a settings-panel toggle is committed into
+  // the running instance (the loader announces loader/volatile-update on this
+  // fiber instead of remounting; same re-derive pattern as dsh-ssh's sync()).
+  let disposeSection: (() => void) | undefined
+  function registerGuidanceSection() {
+    if (disposeSection !== undefined) disposeSection()
+    disposeSection = undefined
+    if (config.implicitTrigger === false) return
+    disposeSection = ctx.systemPrompt.section({
       name: `tool:${toolName}`,
       order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-      text: IMPLICIT_GUIDANCE + (hardGate ? HARD_GATE_GUIDANCE : ''),
+      text: IMPLICIT_GUIDANCE + (allGoalsMode() ? ALL_GOALS_GUIDANCE : '') + (hardGate ? HARD_GATE_GUIDANCE : ''),
     })
   }
+  registerGuidanceSection()
+  disposers.push(() => { if (disposeSection !== undefined) disposeSection() })
+  ctx.on?.('loader/volatile-update', () => { registerGuidanceSection() })
 
   if (hardGate) {
     // The hard gate: a system-prompt/assemble waterfall listener that strips
@@ -403,12 +523,15 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
     // (task/verify/triage) and team teammates are never in agents.roots(),
     // so their assemblies pass through untouched with full tool access.
     const allowlistMode = config.gateMode === 'allowlist'
+    // NOTE: schema-resolved config turns an unset z.array field into [] (not
+    // undefined), so fall back on length, not on ?? — otherwise the gate
+    // would silently keep/gate nothing.
     const keep = new Set([
-      ...(config.gateAllowlist ?? DEFAULT_GATE_ALLOWLIST),
+      ...(config.gateAllowlist?.length ? config.gateAllowlist : DEFAULT_GATE_ALLOWLIST),
       ...(config.gateAllowlistExtra ?? []),
       toolName,
     ])
-    const gated = new Set(config.gatedTools ?? DEFAULT_GATED_TOOLS)
+    const gated = new Set(config.gatedTools?.length ? config.gatedTools : DEFAULT_GATED_TOOLS)
     const listenerDisposer = ctx.on('system-prompt/assemble', (assembly: any, context: any, next: () => unknown) => {
       const scope = context?.scope
       if (!scope) return next()
@@ -524,7 +647,8 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         abortPrevious: {
           type: 'boolean',
           description:
-            'revise：是否中止旧 goal 正在运行的 task agent 轮（默认 false，让它跑完；true 时复用 cancel 路径）。',
+            'revise：是否中止旧 goal 正在运行的 task agent 轮。缺省时按决策树自动判断（查 goal 板：旧轮在跑且目标被改写→自动中止；旧轮在跑但目标不变→等待自然结束；旧轮未跑→直启）；' +
+            '显式传 true/false 保持人工控制（true 复用 cancel 路径）。',
         },
         executor: {
           type: 'string',
@@ -540,6 +664,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           goalId: { type: 'string' },
           previousGoalId: { type: 'string' },
           revised: { type: 'boolean' },
+          abort: { type: 'object' },
           revision: { type: 'object' },
           round: { type: 'number' },
           decision: { type: 'object' },
@@ -725,10 +850,17 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       // it visible in the tab even when this call changes nothing else.
       await publishBoard()
 
+      // Flat settings-panel model fields fold into the canonical roles shape:
+      // an unset field leaves its role untouched = inherit the session agent.
+      const roleOverrides: RolesConfig = { ...(config.roles ?? {}) }
+      const taskSpec = parseAgentModelSpec(config.taskAgentModel)
+      if (taskSpec) roleOverrides.default = { ...roleOverrides.default, ...taskSpec }
+      const verifySpec = parseAgentModelSpec(config.verifyAgentModel)
+      if (verifySpec) roleOverrides.verify = { ...roleOverrides.verify, ...verifySpec }
       const controllerConfig: ControllerConfig = {
         roundScriptPath: config.roundScriptPath ?? fileURLToPath(new URL('../workflows/round.js', import.meta.url)),
         roundsPerSubgoal: config.roundsPerSubgoal,
-        roles: config.roles,
+        roles: roleOverrides,
       }
       const objective = loop.objective ?? goalView?.objective ?? loop.title ?? ''
 
@@ -805,7 +937,20 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
             'revise the successor goal instead of forking the lineage',
           )
         }
-        const abortPrevious = args.abortPrevious === true
+        // v0.7 abort policy: explicit abortPrevious keeps the v0.6 manual
+        // semantics; when the caller omits it, all-goals mode auto-decides via
+        // the decision tree (see decideAbort). With allGoalsMode off, the
+        // omitted flag means false exactly as before (backward compat) and the
+        // audit records that legacy default instead of a fabricated decision.
+        const roundInFlight = running.has(previous.goalId!)
+        const abortDecision = decideAbort(previous, roundInFlight, args)
+        const legacyDefault = args.abortPrevious === undefined && !allGoalsMode()
+        const effectiveAbort = legacyDefault
+          ? { abort: false, mode: 'explicit' as const, basis: 'all-goals 模式未开启：abortPrevious 缺省沿用 v0.6 默认 false（不中止旧轮）' }
+          : abortDecision
+        const abortPrevious = args.abortPrevious !== undefined
+          ? args.abortPrevious === true
+          : (allGoalsMode() ? abortDecision.abort : false)
         const previousHandle = running.get(previous.goalId!)
         let aborted: string | undefined
         if (abortPrevious && previousHandle) {
@@ -833,7 +978,10 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         const at = Date.now()
         let revisionLog: string | undefined
         try {
-          revisionLog = await writeRevisionLog(root, newGoalId, { from: previous.goalId!, to: newGoalId, reason, at })
+          revisionLog = await writeRevisionLog(root, newGoalId, {
+            from: previous.goalId!, to: newGoalId, reason, at,
+            abort: effectiveAbort,
+          })
         } catch {
           // Audit is observability: a read-only workspace must not break the
           // revision (the lineage fields on the board still carry the change).
@@ -846,6 +994,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           round,
           started: true,
           ...(aborted ? { aborted } : {}),
+          abort: effectiveAbort,
           revision: { from: previous.goalId, to: newGoalId, reason, at },
           ...(revisionLog ? { revisionLog } : {}),
         }

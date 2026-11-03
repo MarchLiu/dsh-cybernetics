@@ -1,6 +1,40 @@
-# Cybernetics 工作协议 v0.6（设计稿）
+# Cybernetics 工作协议 v0.7（设计稿）
 
 目标-行动-测量-校准的迭代回路，构建在 DSH 的 `dsh-workflow` 编排与 `dsh-goal` 持久目标之上。
+
+## v0.7 已实现：全量 goal 模式（allGoalsMode）
+
+配置项 `allGoalsMode`（默认 **false**——关闭时注入的提示段、revise 行为与 v0.6 完全一致）。
+开启后在隐式触发段后追加「ALL-GOALS MODE ACTIVE」路由协议，四条路由规则：
+
+> 配置入口（v0.7.1）：插件导出 schemastery `Config` schema，`allGoalsMode` 为 volatile 字段——
+> 在 DSH Web 编辑器 Settings → Plugins 的本插件条目面板上直接切换，保存后 loader 把新值
+> 提交进运行实例（不 remount），提示段即时重挂。无需再手改 profile JSON。
+
+1. **全量进 goal**：任何用户请求（问题、检索、分析、改动）一律先建 goal（action `'start'` +
+   title/brief）再由 task agent 执行；session agent 禁止用读工具就地完成任务——哪怕单文件
+   查询或一次计算也走回路。硬门关闭时协议同样禁止就地改动：必须委派。
+2. **简单只读请求 → depth `'quick'`**：单 task agent 一轮，跳过 verify/triage，结果直接反馈
+   （有界查询、单文件读取、小型统计）。
+3. **复杂分析 / 写任务 → depth `'full'` 多轮渐进**：action `'start'` 异步启动，逐轮 `'collect'`
+   收敛，controller 按轮推进 subgoal（task → verify → triage）。分析型 = 取数落盘、数据集、
+   统计、多步查询规划；写任务额外依赖硬门——session agent 永不亲自执行改动，goal 回路是
+   唯一路径，改动再小也一样。
+4. **revise 自动决策树**：修订仍是 append-only（新 goal + `parentGoalId`，旧 goal 置
+   `superseded`，`'revise'` 是唯一目标变更动词），但 `abortPrevious` 缺省时按旧 task agent
+   状态自动决策（数据来自现有 goal 板 running 状态，不新增编排机制）：
+   - (a) 旧轮**在跑**且修订改写目标本身（传入 `objective`，或 `depth` 变化）→ 目标矛盾/
+     写域冲突 → **自动中止旧轮**（复用 cancel 路径），等价 `abortPrevious: true`；
+   - (b) 旧轮**在跑**但目标不变（仅 brief/title/role 修正），旧工作仍可复用/可并行 →
+     **等待旧轮自然结束**，等价 `abortPrevious: false`；
+   - (c) 旧 task agent **已结束**（goal 板上该 goal 非 running）→ **直接启动新 goal**，
+     不做任何中止动作。
+   显式传 `abortPrevious: true/false` 保持 v0.6 人工控制语义（决策树让位）。每次修订的
+   `.cybernetics/revisions-<新goalId>.jsonl` 审计行新增 `abort` 字段
+   `{abort, mode: 'auto'|'explicit', basis}`，记录选择的分支与依据；`revise` 返回值同样携带。
+
+实现落点：`src/controller.ts` 的纯函数 `decideAbort`（决策树 + basis 文案）；
+`src/index.ts` 的 `ALL_GOALS_GUIDANCE` 提示段与 revise 路径接线。`src/` 改动需宿主重载生效。
 
 ## v0.6 设计：与 Agent Teams 集成
 
