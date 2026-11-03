@@ -2347,34 +2347,44 @@ console.log(JSON.stringify({
   console.log('✓ 54 path-(b) settings write: unconditional user-patch-row fallback retry + host refusal message surfaced')
 }
 
-// 55. v0.7.6 acceptance: flat agent-model fields on the settings schema —
+// 55. v0.7.7 acceptance: flat agent-model fields on the settings schema —
 //     task/verify agent model overrides ("provider/model" or bare model),
 //     empty = inherit the session agent; wired into roles.default/.verify.
+//     v0.7.7: BOTH fields are volatile — the host settings form
+//     (@deepseek-ai/dsh-settings volatileForm, lib/index.js:122-131) serves
+//     only `.volatile()` fields and its write() refuses any non-volatile
+//     path ("Config field ... is not volatile"), so a plain field is both
+//     invisible and unwritable on the plugins page. Volatile commit is live:
+//     the value is read per round start through readConfigField unwrap.
 {
   assert.ok(Config.dict.taskAgentModel, 'Config schema exposes the flat taskAgentModel field')
   assert.ok(Config.dict.verifyAgentModel, 'Config schema exposes the flat verifyAgentModel field')
+  assert.equal(Config.dict.taskAgentModel.meta?.volatile, true, 'taskAgentModel is volatile (host form serves + accepts volatile paths only)')
+  assert.equal(Config.dict.verifyAgentModel.meta?.volatile, true, 'verifyAgentModel is volatile (host form serves + accepts volatile paths only)')
   // Parser: "provider/model" splits, a bare name is a model-only override,
   // anything empty (unset field) inherits the session agent (no override).
   assert.deepEqual(parseAgentModelSpec('glm-5.3/glm-5.3-flash'), { provider: 'glm-5.3', model: 'glm-5.3-flash' })
   assert.deepEqual(parseAgentModelSpec(' bare-model '), { model: 'bare-model' })
   assert.equal(parseAgentModelSpec(undefined), undefined, 'unset = inherit session agent')
   assert.equal(parseAgentModelSpec('   '), undefined, 'blank = inherit session agent')
+  assert.equal(parseAgentModelSpec(''), undefined, 'empty string (volatile default) = inherit session agent')
   assert.deepEqual(parseAgentModelSpec('a/'), { model: 'a/' }, 'trailing slash is not a provider split')
   assert.deepEqual(parseAgentModelSpec('/m'), { model: '/m' }, 'leading slash is not a provider split')
   // Loader-path validation: flat string fields survive schemastery resolution
-  // alongside the roles dict they merge into.
+  // alongside the roles dict they merge into; volatile fields resolve to live
+  // references, exactly like allGoalsMode.
   const v = Config['~standard'].validate({ taskAgentModel: 'p/m', verifyAgentModel: 'v-model' }).value
   assert.equal(v.issues, undefined)
-  assert.equal(v.taskAgentModel, 'p/m')
-  assert.equal(v.verifyAgentModel, 'v-model')
-  // Wiring: the flat fields merge over roles.default / roles.verify at
-  // controller-config build time; unset fields leave the roles untouched.
+  assert.equal(v.taskAgentModel.get?.(), 'p/m', 'volatile taskAgentModel resolves to a live reference')
+  assert.equal(v.verifyAgentModel.get?.(), 'v-model', 'volatile verifyAgentModel resolves to a live reference')
+  // Wiring: the flat fields are read per round start through readConfigField
+  // (live-ref unwrap, '' = inherit) and merge over roles.default / roles.verify.
   const index = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8')
-  assert.match(index, /parseAgentModelSpec\(config\.taskAgentModel\)/)
-  assert.match(index, /parseAgentModelSpec\(config\.verifyAgentModel\)/)
+  assert.match(index, /parseAgentModelSpec\(readConfigField\(config\.taskAgentModel, ''\)\)/, 'taskAgentModel read unwraps the volatile live reference')
+  assert.match(index, /parseAgentModelSpec\(readConfigField\(config\.verifyAgentModel, ''\)\)/, 'verifyAgentModel read unwraps the volatile live reference')
   assert.match(index, /roleOverrides\.default = \{ \.\.\.roleOverrides\.default, \.\.\.taskSpec \}/)
   assert.match(index, /roleOverrides\.verify = \{ \.\.\.roleOverrides\.verify, \.\.\.verifySpec \}/)
-  console.log('✓ 55 flat agent-model fields: schema face + provider/model parser + roles merge wiring (empty = session-agent inheritance)')
+  console.log('✓ 55 flat agent-model fields: volatile (host-form writable), live-ref unwrap, provider/model parser + roles merge wiring (empty = session-agent inheritance)')
 }
 
 console.log('\nALL 55 CHECKS PASSED')

@@ -129,10 +129,17 @@ export const Config = z.object({
    * Empty = inherit the session agent. Merged over roles.default at wiring
    * time (parseAgentModelSpec) — the flat fields are the settings-panel face;
    * roles stays the canonical runtime shape the round script consumes.
+   * Volatile (v0.7.7): the host settings form (@deepseek-ai/dsh-settings
+   * volatileForm, lib/index.js:122-131) serves ONLY `.volatile()` fields, and
+   * its write() refuses any non-volatile path ("Config field ... is not
+   * volatile") — a plain field is invisible AND unwritable on the plugins
+   * page. Volatile commit keeps the running instance live; the value is read
+   * per round start (readConfigField unwrap below), so an edit takes effect
+   * on the next goal round without a remount.
    */
-  taskAgentModel: z.string().description('task agent 模型覆盖（「provider/model」或裸模型名）；留空 = 与 session agent 一致。'),
-  /** Flat verify-agent model override; same format and fallback as taskAgentModel. */
-  verifyAgentModel: z.string().description('verify agent 模型覆盖（「provider/model」或裸模型名）；留空 = 与 session agent 一致。'),
+  taskAgentModel: z.string().default('').volatile().description('task agent 模型覆盖（「provider/model」或裸模型名）；留空 = 与 session agent 一致。保存后下一轮 goal 即生效，无需重载。'),
+  /** Flat verify-agent model override; same format, fallback and volatile semantics as taskAgentModel. */
+  verifyAgentModel: z.string().default('').volatile().description('verify agent 模型覆盖（「provider/model」或裸模型名）；留空 = 与 session agent 一致。保存后下一轮 goal 即生效，无需重载。'),
   /** Hard orchestration gate (default false). */
   hardGate: z.boolean().default(false).description('硬编排门：装配期从顶层 session agent 摘除执行工具，所有改动必须经 cybernetics goal + task agent。修改会触发插件重载。'),
   /** Tool names hidden in denylist mode (default DEFAULT_GATED_TOOLS). */
@@ -852,10 +859,13 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
 
       // Flat settings-panel model fields fold into the canonical roles shape:
       // an unset field leaves its role untouched = inherit the session agent.
+      // Both fields are volatile (v0.7.7), so the loader hands back live
+      // references — unwrap through readConfigField ('' = inherit) exactly
+      // like the allGoalsMode live ref above.
       const roleOverrides: RolesConfig = { ...(config.roles ?? {}) }
-      const taskSpec = parseAgentModelSpec(config.taskAgentModel)
+      const taskSpec = parseAgentModelSpec(readConfigField(config.taskAgentModel, ''))
       if (taskSpec) roleOverrides.default = { ...roleOverrides.default, ...taskSpec }
-      const verifySpec = parseAgentModelSpec(config.verifyAgentModel)
+      const verifySpec = parseAgentModelSpec(readConfigField(config.verifyAgentModel, ''))
       if (verifySpec) roleOverrides.verify = { ...roleOverrides.verify, ...verifySpec }
       const controllerConfig: ControllerConfig = {
         roundScriptPath: config.roundScriptPath ?? fileURLToPath(new URL('../workflows/round.js', import.meta.url)),

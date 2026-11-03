@@ -86,6 +86,20 @@ stderr（tty，本环境不可读）。本轮插件侧改动：写入被拒时�
 「保存未生效，宿主拒绝原因：{message}」透出宿主 RemoteError 原文（ConfigFormController 原本把
 错误坍缩成裸 `false`）。离线测试增至 54 项，新增写入落点断言（回退写无 revision、主写成功不触
 回退、无 remote 降级不崩）。
+v0.7.7：**agent 模型字段 volatile 化（表单可写性根治）**——本轮实机复现（2026-11-04 浏览器点击
+插件详情页开关）：写仍被宿主拒绝（快照回弹「全目标模式：关」，profile `cordis.patch.yml` mtime
+21:58:35 未变，拒绝发生在落盘之前），且当前宿主进程 2026-11-03 22:04 启动、早于 v0.7.6 提交
+（00:40），运行中的仍是旧客户端模块。新增宿主侧取证：`@deepseek-ai/dsh-settings` 的
+`volatileForm(schema)`（lib/index.js:122-131）只保留 `.volatile()` 字段作为整个设置表单，
+`write()`（同文件 502-531 行）对每个写入路径做 `isVolatilePath` 检查并抛
+「Config field "…" is not volatile」——即宿主表单**只服务也只接受** volatile 字段；据此把
+taskAgentModel / verifyAgentModel 两个扁平字段也改为 `.volatile()`（此前非 volatile =
+在插件页既不可见也不可写），读取点改为 `readConfigField(config.taskAgentModel, '')` 解包
+活引用（'' = 与 session agent 一致），语义保持「保存后下一轮 goal 即生效，无需重载」。
+离线测试 55 项全过（测试 55 改为断言两字段 volatile + 活引用解析 + readConfigField 解包布线）。
+生效步骤：重启宿主（客户端模块图 + 服务端 schema 都在启动时装配）+ 强刷浏览器；验证步骤：
+插件详情页拨「全目标模式」→ 开关保持 + 摘要行变「全目标模式：开」+ profile patch 出现
+`dsh-cybernetics` 用户行；仍失败时卡片将显示宿主拒绝原文（v0.7.6 面）。
 v0.6：多 goal session 投影（`cyberneticsGoals`）——goal 板每次变化把本 session 全部 goal 的
 整值快照 append 成一条 `plugin:cybernetics/goals` 事件（可跳过的插件记录，宿主持久化读取安全），
 服务端纯折叠、宿主整值推送，「目标」页签逐条渲染并就地更新；空板回退到 dsh-goal 单 goal 渲染。
