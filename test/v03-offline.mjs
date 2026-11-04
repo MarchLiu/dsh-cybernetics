@@ -1995,11 +1995,10 @@ console.log(JSON.stringify({
   assert.equal(v.issues, undefined)
   assert.equal(v.hardGate, true, 'non-volatile boolean resolves to a plain value')
   assert.equal(v.allGoalsMode.get?.(), false, 'volatile boolean resolves to a live reference (default off)')
-  assert.equal(Config.dict.roles.meta?.volatile, true, 'roles is volatile (panel-editable, live next round)')
+  assert.equal(Config.dict.roles.meta?.volatile, undefined, 'roles is NOT volatile since v0.8.4 (gone from the panel; configured via profile yaml)')
   assert.equal(Config.dict.roundsPerSubgoal.meta?.volatile, true, 'roundsPerSubgoal is volatile (panel-editable)')
   assert.equal(Config.dict.maxConcurrentRounds.meta?.volatile, true, 'maxConcurrentRounds is volatile (panel-editable)')
-  assert.equal(typeof v.roles.get, 'function', 'volatile roles resolves to a live reference')
-  assert.deepEqual(v.roles.get().default, { provider: 'p', model: 'm' })
+  assert.deepEqual(v.roles.default, { provider: 'p', model: 'm' }, 'non-volatile roles resolves to a plain object (survives schema resolution)')
   // Schema-resolved arrays arrive as [] when unset — apply() must fall back to
   // the built-in gate sets, otherwise the hard gate would keep/gate nothing.
   assert.deepEqual(v.gatedTools, [])
@@ -2517,13 +2516,14 @@ console.log(JSON.stringify({
 //     (a) dsh-app-boot validateVolatilePlacement (lib/index.js:2606-2621) — the
 //     native containment check every plugin Config passes when its settings
 //     schema is projected: a volatile field must sit on a fixed object path
-//     with no enclosing volatile field. The current schema (seven volatile
-//     fields, roles a volatile z.dict over a plain inner object) must pass.
+//     with no enclosing volatile field. The current schema (SIX volatile
+//     fields since v0.8.4 — roles became non-volatile) must pass.
 //     (b) dsh-settings volatileForm over the REAL shipped schema must serve
-//     all SEVEN fields — roles / taskAgentModel / verifyAgentModel /
+//     exactly the SIX fields — taskAgentModel / verifyAgentModel /
 //     triageAgentModel / roundsPerSubgoal / maxConcurrentRounds /
-//     allGoalsMode — and a roles
-//     sub-op path must pass isVolatilePath (write gate).
+//     allGoalsMode — and roles must NO LONGER be served (nor writable):
+//     the GUI no longer exposes the roles JSON textarea, the advanced
+//     configuration path is the profile yaml (agent-guided, README).
 //     (c) STALE-RUNTIME CONTROL: the running host imports the plugin's
 //     link: source ONCE at boot (loader module cache; no source watcher), so
 //     a host process booted before the v0.7.7 commit serves the pre-0.7.7
@@ -2545,8 +2545,8 @@ console.log(JSON.stringify({
     for (const [index, child] of (node.list ?? []).entries()) validateVolatilePlacement(child, `${path}/${index}`, true, seen)
   }
   assert.doesNotThrow(() => validateVolatilePlacement(Config, 'config'),
-    'the Config passes the host native volatile-containment check (all seven fields on fixed object paths)')
-  // Negative control: a volatile field INSIDE the volatile roles dict would be refused.
+    'the Config passes the host native volatile-containment check (all volatile fields on fixed object paths)')
+  // Negative control: a volatile field INSIDE a volatile dict would be refused.
   const nestedVolatile = z.dict(z.object({ provider: z.string().volatile() })).volatile()
   assert.throws(() => validateVolatilePlacement(z.object({ roles: nestedVolatile }), 'config'),
     /fixed object path/, 'volatile under an enclosing volatile node is refused by the same check')
@@ -2572,10 +2572,10 @@ console.log(JSON.stringify({
   }
   const form57 = volatileForm57(Config)
   assert.deepEqual(Object.keys(form57.dict ?? {}).sort(),
-    ['allGoalsMode', 'maxConcurrentRounds', 'roles', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
-    'the served settings form exposes all seven volatile fields (roles/roundsPerSubgoal/maxConcurrentRounds/taskAgentModel/verifyAgentModel/triageAgentModel/allGoalsMode)')
-  assert.equal(isVolatilePath57(Config, ['roles', 'default', 'model']), true,
-    'a roles.default.model write path lies beneath the volatile roles node (write gate passes)')
+    ['allGoalsMode', 'maxConcurrentRounds', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
+    'the served settings form exposes exactly the six volatile fields (roles no longer served since v0.8.4)')
+  assert.equal(isVolatilePath57(Config, ['roles']), false,
+    'a roles write path is NOT volatile (v0.8.4): the panel neither serves nor writes it')
   // STALE-RUNTIME CONTROL: the pre-0.7.7 runtime face (only allGoalsMode
   // volatile, the other five plain) reproduces the user's exact screenshot:
   // the plugins page shows 全目标模式 alone.
@@ -2609,14 +2609,15 @@ console.log(JSON.stringify({
     const hostForm = hostSchema.volatileForm(Config)
     assert.notEqual(hostForm, undefined, 'host volatileForm serves a form for the current schema')
     assert.deepEqual(Object.keys(hostForm.dict ?? {}).sort(),
-      ['allGoalsMode', 'maxConcurrentRounds', 'roles', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
-      'the REAL host volatileForm serves exactly the seven volatile fields')
-    for (const path of [['roles', 'default', 'model'], ['roundsPerSubgoal'], ['maxConcurrentRounds'], ['taskAgentModel'], ['verifyAgentModel'], ['triageAgentModel'], ['allGoalsMode']]) {
+      ['allGoalsMode', 'maxConcurrentRounds', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
+      'the REAL host volatileForm serves exactly the six volatile fields (roles is off the panel since v0.8.4)')
+    assert.equal(Object.hasOwn(hostForm.dict ?? {}, 'roles'), false, 'the host form does not serve roles any more')
+    for (const path of [['roundsPerSubgoal'], ['maxConcurrentRounds'], ['taskAgentModel'], ['verifyAgentModel'], ['triageAgentModel'], ['allGoalsMode']]) {
       assert.equal(hostSchema.isVolatilePath(Config, path), true, `host write gate accepts ${path.join('.')}`)
     }
-    for (const path of [['hardGate'], ['gateMode'], ['toolName'], ['implicitTrigger']]) {
+    for (const path of [['roles', 'default', 'model'], ['hardGate'], ['gateMode'], ['toolName'], ['implicitTrigger']]) {
       assert.equal(hostSchema.isVolatilePath(Config, path), false, `host write gate keeps non-volatile ${path.join('.')} unwritable`)
-      assert.equal(Object.hasOwn(hostForm.dict ?? {}, path[0]), false, `host form does not serve non-volatile ${path[0]}`)
+      if (path.length === 1) assert.equal(Object.hasOwn(hostForm.dict ?? {}, path[0]), false, `host form does not serve non-volatile ${path[0]}`)
     }
     // The stale-runtime face through the REAL host function reproduces the
     // one-field panel identically.
@@ -2625,7 +2626,7 @@ console.log(JSON.stringify({
   } else {
     console.log('  (skipping the real-host volatileForm cross-check: host profile absent)')
   }
-  console.log('✓ 57 panel fidelity: volatile placement legal, volatileForm serves all seven volatile fields; stale-runtime control reproduces the one-field (全目标模式) panel — render root cause is the boot-time module cache (restart required), not the schema')
+  console.log('✓ 57 panel fidelity: volatile placement legal, volatileForm serves exactly the six volatile fields (roles off the panel since v0.8.4); stale-runtime control reproduces the one-field (全目标模式) panel — render root cause is the boot-time module cache (restart required), not the schema')
 }
 
 // 58. ROOT-INCLUDE ENTRY refusal: the exact user-observed save rejection
@@ -3017,12 +3018,14 @@ async function loadSettingsCard(formForApply) {
 }
 
 // 65. v0.8.1/v0.8.2 settings card full volatile coverage (live ConfigForm
-//     shape): the page view renders editable controls for ALL SEVEN volatile
-//     fields (allGoalsMode toggle + task/verify/triage model text + rounds/cap
-//     numbers + roles JSON), and every control writes through the SAME live ConfigForm
+//     shape): the page view renders editable controls for ALL volatile fields
+//     (allGoalsMode toggle + task/verify/triage model text + rounds/cap
+//     numbers), and every control writes through the SAME live ConfigForm
 //     (set / unset / mutate sugar) — number parsing and range validation,
-//     blank = unset (restore default), unchanged = no write, roles JSON
-//     validated before writing. Root-cause backdrop (verified against the
+//     blank = unset (restore default), unchanged = no write. v0.8.4: the roles
+//     JSON textarea + Apply button are GONE from the card (hand-editing JSON
+//     in the GUI is unfriendly); the card's field list is back to six, and
+//     roles is configured via the profile yaml instead (agent-guided). Root-cause backdrop (verified against the
 //     running host 2026-11-04): the host Plugins page (ItemDetail in
 //     dsh-client-ui-plugin-manager) renders a plugin's configuration ONLY
 //     through its slot cards and draws no fields itself;
@@ -3062,21 +3065,20 @@ async function loadSettingsCard(formForApply) {
   const h = await loadSettingsCard((id) => { assert.equal(id, 'dsh-cybernetics'); return form })
   const face = { form, view: 'page', t: h.t }
 
-  // (a) Field清单：all seven volatile fields render their labels, and the six
-  // non-toggle fields render their controls showing the snapshot values.
+  // (a) Field清单：the SIX card fields render their labels (roles is NOT one
+  // of them since v0.8.4), and the non-toggle fields render their controls
+  // showing the snapshot values.
   const text = h.flatten(h.render(face)).join('\n')
   for (const key of ['settings.title', 'settings.taskAgentModel', 'settings.verifyAgentModel', 'settings.triageAgentModel',
-    'settings.roundsPerSubgoal', 'settings.maxConcurrentRounds', 'settings.roles']) {
+    'settings.roundsPerSubgoal', 'settings.maxConcurrentRounds']) {
     assert.ok(text.includes(key), `page view renders the ${key} row`)
   }
+  assert.equal(h.findByLabel(face, 'settings.roles'), undefined, 'no roles JSON textarea on the card since v0.8.4')
+  assert.equal(h.findApply(face), undefined, 'no Apply button on the card since v0.8.4 (roles JSON editing removed)')
   assert.equal(h.findByLabel(face, 'settings.roundsPerSubgoal').props.value, '3', 'number input shows the snapshot value')
   assert.equal(h.findByLabel(face, 'settings.verifyAgentModel').props.value, 'v-prov/v-model', 'text input shows the snapshot value')
   assert.equal(h.findByLabel(face, 'settings.taskAgentModel').props.value, '', 'empty model field renders blank')
   assert.equal(h.findByLabel(face, 'settings.triageAgentModel').props.value, 't-model', 'triage model input shows the snapshot value')
-  const rolesArea = h.findByLabel(face, 'settings.roles')
-  assert.equal(rolesArea.type, 'textarea', 'roles is edited as a JSON textarea')
-  assert.equal(rolesArea.props.value, '{}', 'empty roles dict renders as a JSON object skeleton')
-  assert.equal(h.findApply(face).props.disabled, true, 'Apply stays disabled until the roles draft changes')
 
   // (b) Number write: edit + Enter → ConfigForm.set with the parsed integer.
   h.findByLabel(face, 'settings.roundsPerSubgoal').props.onChange({ target: { value: '5' } })
@@ -3128,28 +3130,13 @@ async function loadSettingsCard(formForApply) {
   await new Promise((r) => setImmediate(r))
   assert.equal(sets.length, setsBefore, 'an unchanged draft never writes')
 
-  // (g) roles: valid JSON commits the PARSED object (not the text); the Apply
-  // button is the write trigger (Enter inside the textarea stays a newline).
-  const rolesJson = '{"default":{"provider":"zai-coding-cn","model":"glm-5.3"}}'
-  h.findByLabel(face, 'settings.roles').props.onChange({ target: { value: rolesJson } })
-  assert.equal(h.findApply(face).props.disabled, false, 'a pending roles draft enables Apply')
-  h.findApply(face).props.onClick()
-  await new Promise((r) => setImmediate(r))
-  assert.deepEqual(sets.at(-1), { field: 'roles', value: { default: { provider: 'zai-coding-cn', model: 'glm-5.3' } } },
-    'roles Apply writes the parsed object through ConfigForm.set')
-
-  // (h) roles validation: malformed JSON and a wrong shape both refuse BEFORE
-  // the write path and surface the invalid hint.
+  // (g) roles is NOT panel-editable since v0.8.4 — a card write to the roles
+  // field is impossible by construction (no control exists); assert the
+  // snapshot roles value never reaches any control.
   const setsBeforeBad = sets.length
-  h.findByLabel(face, 'settings.roles').props.onChange({ target: { value: '{not json' } })
-  h.findApply(face).props.onClick()
-  h.findByLabel(face, 'settings.roles').props.onChange({ target: { value: '{"default":{"provider":1}}' } })
-  h.findApply(face).props.onClick()
-  h.findByLabel(face, 'settings.roles').props.onChange({ target: { value: '[1,2]' } })
-  h.findApply(face).props.onClick()
-  assert.equal(sets.length, setsBeforeBad, 'malformed / wrong-shape roles JSON never reaches the write path')
-  assert.match(h.flatten(h.render(face)).join('\n'), /settings\.invalidJson/, 'the roles invalid hint renders')
-  console.log('✓ 65 settings card full coverage (live ConfigForm): seven volatile fields rendered (incl. triageAgentModel); set/unset writes, number validation, blank=unset, unchanged=no-write, roles JSON validated')
+  assert.equal(h.findByLabel(face, 'settings.roles'), undefined, 'roles edits cannot even be attempted on the card')
+  assert.equal(sets.length, setsBeforeBad, 'no roles write path exists on the card')
+  console.log('✓ 65 settings card full coverage (live ConfigForm): six volatile fields rendered (roles JSON textarea removed in v0.8.4); set/unset writes, number validation, blank=unset, unchanged=no-write')
 }
 
 // 66. v0.8.1 settings card field writes on the HOST ConfigPageForm shape
@@ -3486,4 +3473,72 @@ async function loadSettingsCard(formForApply) {
   }
 }
 
-console.log('\nALL 68 CHECKS PASSED')
+// 69. v0.8.4: roles advanced configuration — off the panel, alive via yaml.
+//     The GUI decision: hand-editing a JSON object in the settings card is
+//     unfriendly, so the card drops the roles textarea + Apply button and the
+//     schema drops the `.volatile()` mark. Consequences locked here:
+//     (a) schema semantics — roles is non-volatile, so the host panel neither
+//     serves nor writes it (already covered by test 57); a profile yaml
+//     value survives schemastery resolution as a PLAIN object (live config
+//     path), while named task roles keep their shape.
+//     (b) runtime semantics — readConfigField in src/index.ts unwraps BOTH
+//     shapes: a volatile live reference ({get}) AND a plain object; the
+//     plain-object roles then merge with the flat panel fields into the
+//     canonical roleOverrides the round script consumes (named roles such as
+//     'frontend' pass through untouched).
+//     (c) the yaml documentation path exists: README documents editing the
+//     profile config yaml `config.roles` and the host-reload requirement.
+{
+  // (a) yaml-shaped profile config resolves cleanly; roles stays a plain object.
+  const yamlConfig = Config['~standard'].validate({
+    roles: {
+      default: { provider: 'deepseek', model: 'glm-5.3' },
+      frontend: { provider: 'openai', model: 'gpt-5' },
+    },
+  }).value
+  assert.equal(yamlConfig.issues, undefined, 'a roles-bearing profile config passes schema validation')
+  assert.equal(Config.dict.roles.meta?.volatile, undefined, 'roles carries no volatile mark (host panel drops it)')
+  assert.ok(!yamlConfig.roles?.get, 'roles resolves to a PLAIN object (not a live reference) once non-volatile')
+  assert.deepEqual(yamlConfig.roles.default, { provider: 'deepseek', model: 'glm-5.3' })
+  assert.deepEqual(yamlConfig.roles.frontend, { provider: 'openai', model: 'gpt-5' }, 'named task roles keep their {provider, model} shape')
+
+  // (b) runtime: the wiring reads roles through readConfigField, which accepts
+  //     a plain object exactly like a volatile live ref — verify against the
+  //     real function semantics replicated here plus the source wiring.
+  const readConfigField69 = (field, fallback) => {
+    if (field === undefined) return fallback
+    if (typeof field === 'object' && field !== null && typeof field.get === 'function') {
+      const value = field.get()
+      return value === undefined ? fallback : value
+    }
+    return field
+  }
+  const plainRoles = { default: { provider: 'deepseek', model: 'glm-5.3' }, frontend: { provider: 'openai', model: 'gpt-5' } }
+  assert.deepEqual(readConfigField69(plainRoles, {}), plainRoles, 'non-volatile roles: the plain object is returned as-is')
+  assert.deepEqual(readConfigField69({ get: () => plainRoles }, {}), plainRoles, 'volatile roles (legacy config): the live ref is unwrapped')
+  assert.deepEqual(readConfigField69(undefined, {}), {}, 'absent roles falls back to an empty dict')
+  const indexSrc = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.match(indexSrc, /\{\ \.\.\.readConfigField\(config\.roles, \{\}\ as RolesConfig\)\ \}/,
+    'the wiring spreads roles through readConfigField (plain object or live ref)')
+  assert.match(indexSrc, /roleOverrides\.default = \{ \.\.\.roleOverrides\.default, \.\.\.taskSpec \}/,
+    'flat taskAgentModel still merges over the yaml-configured roles.default')
+  // The flat panel field overrides only its one role; the named role survives.
+  const roleOverrides = { ...readConfigField69(plainRoles, {}) }
+  const taskSpec = parseAgentModelSpec('zai-coding-cn/glm-5.3-flash')
+  roleOverrides.default = { ...roleOverrides.default, ...taskSpec }
+  assert.deepEqual(roleOverrides.default, { provider: 'zai-coding-cn', model: 'glm-5.3-flash' }, 'panel flat field overrides roles.default')
+  assert.deepEqual(roleOverrides.frontend, { provider: 'openai', model: 'gpt-5' }, 'named task role survives the merge')
+
+  // (c) docs: the README advanced-configuration section records the yaml path
+  //     and the host-reload requirement (both language editions).
+  for (const [file, mustMatch] of [
+    ['../README.md', /roles[\s\S]{0,2000}cordis\.patch\.yml[\s\S]{0,2000}(reload|Restart|restart)/],
+    ['../README.zh-CN.md', /roles[\s\S]{0,2000}(cordis\.patch\.yml|profile)[\s\S]{0,2000}(重载|重启)/],
+  ]) {
+    const md = await readFile(new URL(file, import.meta.url), 'utf8')
+    assert.match(md, mustMatch, `${file} documents the roles yaml configuration path + reload requirement`)
+  }
+  console.log('✓ 69 roles advanced configuration: non-volatile schema (plain-object resolution), readConfigField dual semantics (plain object + legacy live ref), named roles survive the flat-field merge, README yaml path documented')
+}
+
+console.log('\nALL 69 CHECKS PASSED')

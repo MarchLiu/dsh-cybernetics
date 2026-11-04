@@ -119,9 +119,12 @@ export interface Config extends ControllerConfig {
 // served at all; a volatile edit is committed into the running fiber's
 // reference without a remount and announced via `loader/volatile-update`.
 // The user-facing knobs (taskAgentModel / verifyAgentModel / triageAgentModel /
-// roles / roundsPerSubgoal / maxConcurrentRounds / allGoalsMode) are all
+// roundsPerSubgoal / maxConcurrentRounds / allGoalsMode) are all
 // volatile so they are visible AND writable in the settings panel and take
-// effect on the next goal round. hardGate and the gate fields stay non-volatile: the panel
+// effect on the next goal round. roles stays in the schema but is NOT
+// volatile (v0.8.4): the panel serves only volatile fields, so it no longer
+// shows in the GUI — advanced users (agent-guided) configure it directly in
+// the profile config yaml; a host reload applies it. hardGate and the gate fields stay non-volatile: the panel
 // cannot write them (they change structural wiring — tool stripping listener —
 // so they belong in the profile config document instead).
 export const Config = z.object({
@@ -129,11 +132,21 @@ export const Config = z.object({
   toolName: z.string().default('cybernetics').description('模型侧工具名（缺省 cybernetics）。'),
   /** Inject the implicit goal-loop guidance section. */
   implicitTrigger: z.boolean().default(true).description('注入隐式 goal-loop 系统提示段（缺省开启）。'),
-  /** Per-role sub-agent model/provider overrides: role -> {provider, model}. */
+  /**
+   * Per-role sub-agent model/provider overrides: role -> {provider, model}.
+   * v0.8.4: NOT volatile — the settings card no longer exposes the roles JSON
+   * textarea (hand-editing JSON in the GUI is unfriendly), and the host panel
+   * serves only volatile fields, so a non-volatile roles simply disappears
+   * from the GUI while remaining configurable in the profile config yaml
+   * (save triggers a plugin-row remount / host reload, which is fine for an
+   * advanced setting an agent guides the user through). Runtime semantics are
+   * unchanged: readConfigField accepts a plain object (non-volatile) exactly
+   * like a live reference (volatile), and named task roles keep working.
+   */
   roles: z.dict(z.object({
     provider: z.string(),
     model: z.string(),
-  })).volatile().description('按角色的子 agent provider/model 覆盖：role -> {provider, model}（如 default/verify/triage/frontend）。保存后下一轮 goal 即生效，无需重载。'),
+  })).description('按角色的子 agent provider/model 覆盖：role -> {provider, model}（如 default/verify/triage/frontend）。高级配置：直接编辑 profile 配置 yaml 后需宿主重载生效（GUI 不再提供此字段的编辑控件）。'),
   /**
    * Flat task-agent model override ("provider/model" or a bare model name).
    * Empty = inherit the session agent. Merged over roles.default at wiring
@@ -891,8 +904,10 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       // All three fields are volatile (task/verify v0.7.7, triage v0.8.2), so
       // the loader hands back live references — unwrap through readConfigField
       // ('' = inherit) exactly like the allGoalsMode live ref above.
-      // roles is volatile too: unwrap the live reference before spreading,
-      // otherwise the ref object itself would become the override.
+      // roles may be volatile (a live reference, pre-0.8.3 configs) or a plain
+      // object (non-volatile since v0.8.4, configured via profile yaml) —
+      // readConfigField handles both shapes: a live ref is unwrapped, a plain
+      // object is returned as-is (hardGate and friends take the same path).
       const roleOverrides: RolesConfig = { ...readConfigField(config.roles, {} as RolesConfig) }
       const taskSpec = parseAgentModelSpec(readConfigField(config.taskAgentModel, ''))
       if (taskSpec) roleOverrides.default = { ...roleOverrides.default, ...taskSpec }

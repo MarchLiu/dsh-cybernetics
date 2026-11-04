@@ -40,8 +40,10 @@
         # gateAllowlist: [...]   # override the built-in survival set
         # gateMode: denylist + gatedTools: [bash, edit, write]  # legacy stance
         #
-        # GUI 配置（v0.7.9+）：六个 volatile 字段（allGoalsMode / taskAgentModel /
-        # verifyAgentModel / roundsPerSubgoal / maxConcurrentRounds / roles）出现在
-        # Web「插件」页卡片；volatile 保存落为 profile cordis.patch.yml 的用户 patch
-        # 行（{id, name, config}，无 insert）并即时生效。注意：link: 安装的 src/
-        # schema 只在宿主启动时 import——改 schema 后必须重启宿主，面板才会出现新字段。
+        # GUI 配置（v0.8.4）：卡片渲染六个 volatile 字段（allGoalsMode /
+        # taskAgentModel / verifyAgentModel / triageAgentModel / roundsPerSubgoal /
+        # maxConcurrentRounds）；volatile 保存落为 profile cordis.patch.yml 的用户
+        # patch 行（{id, name, config}，无 insert）并即时生效。roles 已不在卡片上
+        # （v0.8.4 起非 volatile，GUI 不暴露）——高级配置直接编辑上方注释示例的
+        # config.roles 后重启宿主生效。注意：link: 安装的 src/ schema 只在宿主启动时
+        # import——改 schema 后必须重启宿主，面板才会出现新字段。

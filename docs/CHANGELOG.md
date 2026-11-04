@@ -4,6 +4,16 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.8.4（2026-11-04）：配置卡片移除 roles JSON 编辑项（roles 改经 profile yaml 高级配置）
+
+**决策理由（记录在案）**：v0.8.1 起 roles 以 JSON 文本域 +「应用」按钮的形式上卡片，用户实测反馈：在 GUI 卡片里手工编辑一个 JSON 对象（`role → {provider, model}`）对用户不友善——JSON 语法错误校验、转义、role 名拼写全暴露给用户。roles 能力本身保留在 schema/运行时（命名角色进阶场景仍可用），但 GUI 不再暴露；确需配置时由 agent 指导用户直接编辑 profile 配置 yaml（用户 patch 行），README/README.zh-CN 各新增「roles 高级配置」小节记录字段位置示例与重载要求。
+
+- **`src/index.ts`**：`roles` 去掉 `.volatile()` 标记（description 文案同步改为「高级配置：直接编辑 profile 配置 yaml 后需宿主重载生效」）。面板语义后果：宿主 `volatileForm` 只服务 volatile 字段，roles 从面板消失且不可经面板写入——这正是想要的行为（同 `hardGate` 等结构字段的既有处置）。**运行时语义核实（双语义均正确）**：接线处 `roleOverrides = { ...readConfigField(config.roles, {}) }` 的 `readConfigField` 同时接受 live reference（volatile，`{get}` → 解引用）与普通对象（非 volatile，原样返回）——`hardGate` 等非 volatile 字段走的就是同一条「普通值」路径，roles 与之同构，无需解 ref 的特殊处理；宿主重载后经 schemastery resolve 出的 roles 就是普通对象，合并逻辑（扁平字段覆盖 `roles.default`/`roles.verify`/`roles.triage`、命名角色透传）完全不变。兼容性：早前经面板写入的 volatile roles 配置在宿主重启后同样 resolve 为普通对象，读取路径不变。
+- **`lib/client.js`**：卡片移除 roles JSON 文本域、「应用」按钮及其全部配套（`settings.roles` / `settings.rolesHint` / `settings.apply` / `settings.invalidJson` 四条 locale 词条 ×2 语言、`isRolesValue` 校验、`commitRoles` 提交逻辑、`rolesRow` JSX、`textarea`/`apply` 两条样式）。字段清单回到**六个**：allGoalsMode / taskAgentModel / verifyAgentModel / triageAgentModel / roundsPerSubgoal / maxConcurrentRounds。
+- **文档**：README / README.zh-CN 新增「roles 高级配置（profile yaml，agent 指导）」小节——何时需要 roles（命名角色分模型）、`cordis.patch.yml` 用户 patch 行的字段位置 yaml 示例、保存后需宿主重载生效、agent 可指导用户完成；两份 README 的卡片字段清单、GUI 验证步骤与 volatile/非 volatile 语义清单同步为六字段版本。
+- **测试**：离线测试增至 **69 项**——51（roles 非 volatile 断言、普通对象 resolve）、57（volatileForm/isVolatilePath 收敛到六字段，roles 路径断言转为非 volatile 负向控制，含宿主真实函数交叉验证）、65（卡片断言：无 roles 文本域、无「应用」按钮、六字段清单）更新；新增 69（roles 非 volatile 双语义：profile yaml 配置 resolve 为普通对象、`readConfigField` 对普通对象与遗留 live ref 双语义、命名角色在扁平字段合并后透传、README yaml 配置路径文档断言）。
+- **生效手段**：`src/` 与 `lib/client.js` 均有改动——**重启宿主 + 强刷浏览器**后卡片即为六字段版本；已有 yaml roles 配置经宿主重载照常生效（含命名角色）。
+
 ## v0.8.3（2026-11-04）：模型下拉选择 + 失效模型处理（配置卡可用性闭环）
 
 **数据源核实（宿主源码，2026-11-04）**：官方「子智能体」设置页（`@deepseek-ai/dsh-client-ui-settings-subagent`）的模型勾选列表读的是 `ctx.remote.session.modelCatalog()`（`@deepseek-ai/dsh-api-session-controller` 的 `@Remote('modelCatalog')`），返回 `{ ok, value: { groups: [{id, name, models: [{id, name}]}], failures } }` = 当前全部可路由模型按 provider 分组；provider 变更经 `ctx.remote.$on('llm/adapters-updated', …)` 推送刷新。本插件客户端照同一契约接入。
