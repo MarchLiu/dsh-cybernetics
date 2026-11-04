@@ -1,83 +1,85 @@
 # dsh-cybernetics
 
-![version](https://img.shields.io/badge/version-0.7.8-blue) ![protocol](https://img.shields.io/badge/license-MIT-lightgrey) ![platform](https://img.shields.io/badge/platform-DSH%20plugin-9b59b6)
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-**dsh-cybernetics 是一个把 LLM Agent 编排明确设计成控制回路的 DSH 插件**：session goal 作为 agent 的思考产物持久存在，task agent 行动、verify agent 测量、triage agent 分诊，controller 在轮间推进，用户通过对话完成外环校准——目标、行动、测量、校准的负反馈闭环。
+![version](https://img.shields.io/badge/version-0.8.2-blue) ![protocol](https://img.shields.io/badge/license-MIT-lightgrey) ![platform](https://img.shields.io/badge/platform-DSH%20plugin-9b59b6)
 
-这套协议得名于维纳的控制论：设定目标（setpoint）、行动、测量输出与目标的偏差、用偏差修正下一次行动。传统的一次性 prompt 是开环系统——目标只活在当前 prompt 里，测量的责任全在人；本项目把回路搬进系统本身，让人从「逐条 prompt 的作者」变成「目标的设定者与外环的校准者」。设计理念详见博客文章《[Cybernetics Agent——人工智能应用的新范式](https://marchliu.github.io/2026/11/03/cybernetics-agent-new-paradigm)》。
+**dsh-cybernetics is a DSH plugin that explicitly designs LLM agent orchestration as a control loop**: the session goal persists as an artifact of the agent's thinking; the task agent acts, the verify agent measures, the triage agent triages, the controller advances between rounds, and the user calibrates the outer loop through conversation — a negative-feedback loop of goal, action, measurement, and calibration.
 
-- 协议全文：[docs/protocol.md](docs/protocol.md)
-- 演进历史：[docs/CHANGELOG.md](docs/CHANGELOG.md)
+The protocol takes its name from Wiener's cybernetics: set a goal (setpoint), act, measure the deviation of the output from the goal, and use that deviation to correct the next action. A traditional one-shot prompt is an open-loop system — the goal lives only inside the current prompt, and the burden of measurement falls entirely on the human; this project moves the loop into the system itself, transforming the human from "the author of prompts, one by one" into "the setter of goals and the calibrator of the outer loop." The design rationale is described in the blog post "[Cybernetics Agent — A New Paradigm for AI Applications](https://marchliu.github.io/2026/11/03/cybernetics-agent-new-paradigm)" (in Chinese).
 
-## 核心概念
+- Full protocol: [docs/protocol.md](docs/protocol.md) (Chinese)
+- Evolution history: [docs/CHANGELOG.md](docs/CHANGELOG.md) (Chinese)
+
+## Core Concepts
 
 ```mermaid
 flowchart TB
-    user["用户<br/>（外环校准者）"] -- "对话校准 / 确认完成" --> sa
-    sa["session agent<br/>（编排者 / 控制器）"]
-    subgraph loop["内环：一轮（workflows/round.js）"]
-        ta["task agent<br/>执行者"] --> va["verify agent<br/>独立测量"] --> ga["triage agent<br/>四分拣"]
+    user["User<br/>（outer-loop calibrator）"] -- "dialog calibration / confirm completion" --> sa
+    sa["session agent<br/>（orchestrator / controller）"]
+    subgraph loop["inner loop: one round (workflows/round.js)"]
+        ta["task agent<br/>executor"] --> va["verify agent<br/>independent measurement"] --> ga["triage agent<br/>four-way triage"]
     end
-    sa -- "委托书 brief" --> ta
-    ga -- "verdict 决策" --> sa
-    sa -- "维护 / 推进" --> goal[("goal 板<br/>append-only")]
+    sa -- "work-order brief" --> ta
+    ga -- "verdict decision" --> sa
+    sa -- "maintain / advance" --> goal[("goal board<br/>append-only")]
 ```
 
-| 角色 | 职责 |
+| Role | Responsibility |
 |---|---|
-| **session agent** | 编排者（控制器）：识别用户输入、维护 goal 板、启动/收取/取消轮、向用户转述；从不亲自执行任务 |
-| **controller** | `src/controller.ts` 的轮间状态机：`startRound`/`foldRound`/`runRound`，按轮推进 subgoal（task → verify → triage），维护审计日志 |
-| **task agent** | 执行器：无对话历史的独立 sub agent，面向工作委托书（brief）实际执行，产出结构化交付报告 |
-| **verify agent** | 测量仪器：独立于执行者验收，产出结构化 verdict `{met, criteria, gaps, goalItselfQuestionable}` |
-| **triage agent** | 分诊：对 verdict 暴露的后续线索四分拣 auto / defer / reject / human |
-| **用户** | 外环校准者：对话校准（goal 修订经 session agent 的 `revise` 执行）、裁定 human 类目、确认完成——controller 永不自宣完成 |
+| **session agent** | Orchestrator (controller): recognizes user input, maintains the goal board, starts/collects/cancels rounds, relays results to the user; never executes tasks itself |
+| **controller** | The inter-round state machine in `src/controller.ts`: `startRound`/`foldRound`/`runRound`, advancing the subgoal round by round (task → verify → triage), maintaining the audit log |
+| **task agent** | Executor: an independent sub agent with no conversation history, actually executing against the work-order brief, producing a structured delivery report |
+| **verify agent** | Measuring instrument: accepts/rejects independently of the executor, producing a structured verdict `{met, criteria, gaps, goalItselfQuestionable}` |
+| **triage agent** | Triage: sorts the follow-up leads exposed by the verdict into four categories — auto / defer / reject / human |
+| **User** | Outer-loop calibrator: calibrates through conversation (goal revisions go through the session agent's `revise`), adjudicates human-class items, confirms completion — the controller never declares completion by itself |
 
-**goal** 是一等公民的持久状态（objective + 当前 subgoal + 完整工作委托书），构建在 dsh-goal 服务之上，v0.2 起不再依赖 goal.md 文件。内环（task → verify → triage → subgoal 修正）在目标不变时自动迭代，每轮有连续迭代上限兜底；外环（用户 ↔ session agent）只在目标本身有问题时介入——verdict 的 `goalItselfQuestionable=true` 会禁止自动迭代、强制回对话。
+**goal** is a first-class, persistent state (objective + current subgoal + full work-order brief), built on top of the dsh-goal service; since v0.2 it no longer depends on a goal.md file. The inner loop (task → verify → triage → subgoal correction) iterates automatically while the goal is unchanged, with a per-round cap on consecutive iterations as a backstop; the outer loop (user ↔ session agent) intervenes only when the goal itself is in question — a verdict with `goalItselfQuestionable=true` forbids automatic iteration and forces a return to conversation.
 
-## 功能特性
+## Features
 
-### 全量 goal 模式（`allGoalsMode`，默认 false）
+### All-goals mode (`allGoalsMode`, default false)
 
-开启后注入「ALL-GOALS MODE ACTIVE」路由协议：**任何用户请求一律先建 goal 再执行**，session agent 禁止用读工具就地完成任务——哪怕单文件查询或一次计算也走回路。简单只读请求 → `quick` 单轮；复杂分析/写任务 → `full` 多轮渐进（`start` 异步启动 + 逐轮 `collect` 收敛）。关闭模式时提示段与 revise 行为与 v0.6 完全一致。
+When enabled, injects the "ALL-GOALS MODE ACTIVE" routing protocol: **every user request first creates a goal, then executes**; the session agent is forbidden from completing tasks in place with read tools — even a single-file lookup or one calculation goes through the loop. Simple read-only requests → a single `quick` round; complex analysis / write tasks → progressive multi-round `full` (async `start` + round-by-round `collect` convergence). When the mode is off, the prompt segments and revise behavior are exactly the same as v0.6.
 
-### 硬门（`hardGate`，默认 false）
+### Hard gate (`hardGate`, default false)
 
-装配期从顶层 session agent 的工具清单中**物理移除**执行工具（默认 bash/edit/write，可用 `gatedTools` 覆盖）——模型看不见这些工具，自然无法调用，编排从劝告变成结构。`gateMode: 'allowlist'` 反转语义：顶层 agent 只保留读 + 对话 + 展示 + goal/编排动词（内置 DEFAULT_GATE_ALLOWLIST，可 `gateAllowlist`/`gateAllowlistExtra` 覆盖），针对变更类工具的长尾（farm_*/taskboard_*/schedule_*……）。task/verify/triage 子 agent 从不在门禁范围内，保留全部工具。
+At assembly time, execution tools (default bash/edit/write, overridable via `gatedTools`) are **physically removed** from the top-level session agent's tool list — the model cannot see these tools and therefore cannot call them; orchestration turns from exhortation into structure. `gateMode: 'allowlist'` inverts the semantics: the top-level agent keeps only read + conversation + presentation + goal/orchestration verbs (a built-in DEFAULT_GATE_ALLOWLIST, overridable via `gateAllowlist`/`gateAllowlistExtra`), targeting the long tail of change-class tools (farm_*/taskboard_*/schedule_*…). The task/verify/triage sub agents are never subject to the gate and keep all tools.
 
-### append-only goals 与 revise 决策树
+### Append-only goals and the revise decision tree
 
-goal 一经存在不再原地修改。`revise` 是唯一的改目标动词（必填 `reason`）：创建带 `parentGoalId` 的新 goal 并立即启动其第 1 轮，旧 goal 置 `superseded` + 记录 `supersededBy`；每次修订追加审计行到 `.cybernetics/revisions-<新goalId>.jsonl`。v0.7 起 `abortPrevious` 缺省时按自动决策树裁定（纯函数 `decideAbort`，依据 goal 板 running 状态）：
+Once a goal exists, it is never modified in place. `revise` is the only goal-changing verb (with required `reason`): it creates a new goal with `parentGoalId` and immediately starts its first round, marks the old goal `superseded` + records `supersededBy`, and appends an audit line per revision to `.cybernetics/revisions-<newGoalId>.jsonl`. Since v0.7, when `abortPrevious` is omitted, an automatic decision tree (the pure function `decideAbort`, based on the goal board's running state) decides:
 
-- (a) 旧轮在跑且修订改写目标本身（objective/depth 变化）→ **自动中止旧轮**；
-- (b) 旧轮在跑但目标不变（仅 brief/title/role 修正）→ **等待旧轮自然结束**；
-- (c) 旧 task agent 已结束 → **直接启动新 goal**。
+- (a) An old round is still running and the revision rewrites the goal itself (objective/depth changed) → **automatically abort the old round**;
+- (b) An old round is still running but the goal is unchanged (only brief/title/role corrections) → **wait for the old round to finish naturally**;
+- (c) The old task agent has already finished → **just start the new goal**.
 
-显式传 `abortPrevious: true/false` 保持人工控制；每次修订的审计行与 `revise` 返回值都携带 `abort: {abort, mode: auto|explicit, basis}`。
+Passing `abortPrevious: true/false` explicitly keeps manual control; every revision's audit line and the `revise` return value carry `abort: {abort, mode: auto|explicit, basis}`.
 
-### quick / full 双档轮次（depth）
+### quick / full round depths (depth)
 
-- `quick`：单 task agent 一轮出结果直接反馈，跳过 verify/triage，成本约 1/3，verdict 由任务报告派生；
-- `full`（默认）：完整 工作 → 验证 → 分诊 循环，验收通过才交付。协议明令禁止用 quick 抄近路做变更。
+- `quick`: a single task-agent round whose result is fed straight back, skipping verify/triage, at roughly one-third the cost; the verdict is derived from the task report;
+- `full` (default): the complete work → verify → triage loop; delivery only after acceptance passes. The protocol explicitly forbids using quick as a shortcut for changes.
 
-### 持久执行者（persistent executor）
+### Persistent executor
 
-`executor: 'ephemeral' | 'persistent'`，与 depth 正交。persistent 用 Agent Teams 的持久 teammate 执行 task 工作：首轮 `spawnTeammate(context:'fresh')` 投生，后续轮只投递**委托书修订**（新增约束/验收标准变化/范围收窄，禁止开放式对话）；full 轮中 teammate 报告直接作为 task 报告，verify/triage 仍以临时 agent 独立运行——验证不继承任务叙述。软集成 Agent Teams（无注入反射 + 异常安全探测），取不到即回退 ephemeral。goal 板持久化到 `<workspace>/.cybernetics/board-<sessionId>.json`，宿主重启后自动 rehydrate，「目标」页签不清空。
+`executor: 'ephemeral' | 'persistent'`, orthogonal to depth. persistent uses a persistent teammate from Agent Teams to perform task work: the first round spawns it via `spawnTeammate(context:'fresh')`, and subsequent rounds deliver only **brief revisions** (added constraints / changed acceptance criteria / narrowed scope; open-ended conversation is forbidden); in a full round the teammate's report serves directly as the task report, while verify/triage still run independently as ephemeral agents — verification never inherits the task narrative. Agent Teams is integrated softly (no injected reflection + exception-safe probing), falling back to ephemeral when unavailable. The goal board persists to `<workspace>/.cybernetics/board-<sessionId>.json` and automatically rehydrates after host restarts, so the "Goals" tab is never emptied.
 
-### 多 goal 板与「目标 / 控制」客户端页签
+### Multiple goal boards and the "Goals / Control" client tabs
 
-同一 session 支持多个并发 goal（插件自有 goal 板；dsh-goal 的单槽降级为焦点 goal）。客户端 `lib/client.js` 提供两个会话页签，经插件自有 session 投影 `cyberneticsGoals` 实时推送、就地更新：
+One session supports multiple concurrent goals (the plugin's own goal board; dsh-goal's single slot demotes to the focus goal). The client `lib/client.js` provides two session tabs, pushed live and updated in place via the plugin's own session projection `cyberneticsGoals`:
 
-- **「目标 / Goal」**：本会话全部 goal（标题 / 状态徽标 / 第 N 轮 / 当前 subgoal / depth、executor 小标签 / 被取代与修订来源标注），按「未完成在前、已完成在后」两段排序；空板回退 dsh-goal 单 goal 渲染。
-- **「控制 / Control」**：递归展示本会话全部 agent（主控 + subagent catalog）的运行状态与各自 goal 视图，顶部汇总运行中数量，并列出每个 goal 的执行者行（状态 + 标题 + executor 临时/持久 + 持久 teammate 名称 + 轮次），与「目标」页签同一数据源。
+- **"Goals"**: all goals of this session (title / status badge / round N / current subgoal / depth and executor chips / superseded and revision-source annotations), sorted in two segments — unfinished first, completed last; an empty board falls back to dsh-goal's single-goal rendering.
+- **"Control"**: recursively shows the run state of every agent in this session (main controller + subagent catalog) with each one's goal view, a running-count summary at the top, and an executor row per goal (status + title + executor ephemeral/persistent + persistent teammate name + round count), sharing the same data source as the "Goals" tab.
 
-### 插件页配置卡片
+### Plugin-page config card
 
-`src/index.ts` 导出 schemastery `Config` schema，宿主据此派生 Web 编辑器「插件」页的本插件设置卡片；`lib/client.js` 注册 `plugins.item` / `plugins.bundle.config` / `plugins.row.config` 三个席位（bundle 详情页与组件详情页都能配置）。volatile 字段保存即时生效（loader 直接提交进运行实例，不 remount）；非 volatile 字段保存触发插件行 remount（需宿主重载）。写入落点是用户 patch 行（profile `cordis.patch.yml` 的 `{id, name, config}` 行）。
+`src/index.ts` exports a schemastery `Config` schema that decides which fields the host settings transport serves and accepts (only `.volatile()` fields); the card UI itself is drawn by `lib/client.js`, which registers three seats — `plugins.item` / `plugins.bundle.config` / `plugins.row.config` (both the bundle detail page and the component detail page can configure). **The card is the ONLY GUI surface for the plugin's settings**: the host Plugins page renders a plugin's configuration exclusively through its slot cards and draws no fields of its own, and `@deepseek-ai/dsh-client-ui-settings` ships the `configForms` service (transport), not a generic field renderer — so since v0.8.1 the card renders editable controls for ALL volatile fields (seven since v0.8.2): the all-goals-mode toggle, task/verify/triage agent model text fields, the rounds-per-subgoal and concurrent-round-cap number fields, and the roles table as a validated JSON object field. Saving a volatile field takes effect immediately (the loader commits it straight into the running instance, no remount); saving a non-volatile field triggers a plugin-row remount (requires a host reload). The write lands in the user's patch row (a `{id, name, config}` row in the profile's `cordis.patch.yml`).
 
-### agent 模型选择
+### Agent model selection
 
-- **扁平字段**：`taskAgentModel` / `verifyAgentModel`（「provider/model」或裸模型名，volatile）；**留空 = 与 session agent 一致**（fallback 语义）。保存后下一轮 goal 即生效，无需重载。
-- **roles 表**：按角色覆盖 sub agent 模型（`default`/`verify`/`triage` 固定槽位 + 任意命名任务角色）：
+- **Flat fields**: `taskAgentModel` / `verifyAgentModel` / `triageAgentModel` ("provider/model" or a bare model name, volatile); **empty = same as the session agent** (inheritance semantics). Takes effect on the next goal round after saving, no reload needed. The triage role reads the task/verify results and emits the round's convergence decision (met/continue/human-input/...); quick-depth rounds skip verify+triage entirely, so `triageAgentModel` only fires on full rounds. Since v0.8.3 the three fields are dropdown-backed: a `<datalist>` fed by the host's live model catalog (`remote.session.modelCatalog` — the same directory the official 子智能体 settings page renders, refreshed on `llm/adapters-updated`), with free manual entry preserved (a datalist input accepts any text). A configured value that is no longer in the catalog (e.g. the model's subscription was deleted) renders an "unavailable — runtime will fall back to the session agent model" warning plus a one-click **Clear** (an explicit unset write — stored config is never silently rewritten); the runtime fallback itself is v0.8.0's `callRoleAgent` (AGENT_START `no subagent provider registered` covers a removed provider; model-level "model not found / unknown model" messages were added to the availability patterns in v0.8.3).
+- **roles table**: per-role model overrides for sub agents (fixed `default`/`verify`/`triage` slots + any named task roles):
 
 ```yaml
 - id: dsh-cybernetics
@@ -88,99 +90,105 @@ goal 一经存在不再原地修改。`revise` 是唯一的改目标动词（必
       writer:  { provider: zai-coding-cn, model: glm-5-turbo }
 ```
 
-## 安装与使用
+- **Call-level fallback (v0.8)**: when a role's configured model cannot be called — an *availability* failure such as exhausted quota/rate limit, unreachable network, or a provider error — the round no longer fails as a whole: `workflows/round.js` drops that role's provider/model override and retries the role's sub-agent once on the **session agent's** model configuration. The decision signal comes from the workflow runtime's (`@deepseek-ai/dsh-workflow-ptc`) `agent()` hook error type/message: a thrown `WorkflowError` (`AGENT_START` always counts; `AGENT_RESULT`/uncoded errors count when the message matches quota/auth/5xx/network/provider patterns), or a `null` return (the runtime flattens a child run ending with `stopReason ≠ "completed"` — the most common shape of a mid-run LLM call failure — into null without the cause; retried only when an override is in effect). **Logic failures never swap models**: a task agent that delivers a `done=false` report or a verify agent returning an unmet verdict flows through unchanged, and non-availability errors (schema/option/cap guard errors) propagate as before. Every fallback is recorded on the round result's `fallbacks` array (`{role, from, trigger, reason}`), narrated into `workflow/log`, persisted in the `.cybernetics/round-*.json` audit log, and surfaced in the decision note of the `cybernetics` tool result. Configuration stays backward compatible: empty = inherit the session agent (no fallback needed); configured = the configured model wins, with fallback on availability failure. Changes to `workflows/round.js` take effect hot.
 
-### 安装
+## Installation and Usage
 
-npm 包名 [`@mars.liu/dsh-cybernetics`](https://www.npmjs.com/package/@mars.liu/dsh-cybernetics)。在 DSH profile 中以 `link:` 方式安装本目录即可——插件对宿主包零运行时依赖（工具注册用裸 JSON Schema + 内联校验），不需要自己的 node_modules；要求 Node >= 23.6。
+### Installation
 
-从源码安装：
+npm package name: [`@mars.liu/dsh-cybernetics`](https://www.npmjs.com/package/@mars.liu/dsh-cybernetics). In a DSH profile, install this directory via `link:` — the plugin has zero runtime dependency on host packages (tool registration uses bare JSON Schema + inline validation) and doesn't need its own node_modules; requires Node >= 23.6.
+
+Install from source:
 
 ```bash
 git clone https://github.com/MarchLiu/dsh-cybernetics.git
 cd dsh-cybernetics
 ```
 
-在你的 DSH profile（如 `~/.dsh/profiles/web/`）中 link 安装：
+Link-install in your DSH profile (e.g. `~/.dsh/profiles/web/`):
 
 ```bash
-# profile/package.json 的 dependencies 添加：
+# Add to dependencies in profile/package.json:
 #   "dsh-cybernetics": "link:/path/to/dsh-cybernetics"
-# 然后在 profile 目录执行：
+# Then run in the profile directory:
 pnpm install
 ```
 
-安装后：
+After installation:
 
-- 服务端：`src/index.ts`（`cybernetics` 工具 + 隐式触发提示段）+ `src/controller.ts`（轮间状态机）+ `src/executor.ts`（执行者适配层）；
-- 客户端：`lib/client.js`（「目标 / 控制」页签 + 插件页配置卡片），**改动后需重启宿主**（客户端模块图在宿主启动时构建）并刷新浏览器；`src/` 改动需宿主重载；`workflows/round.js` 改动热生效。
+- Server side: `src/index.ts` (the `cybernetics` tool + implicit trigger prompt segments) + `src/controller.ts` (inter-round state machine) + `src/executor.ts` (executor adapter layer);
+- Client side: `lib/client.js` (the "Goals / Control" tabs + plugin-page config card), **requires a host restart after changes** (the client module graph is built at host startup) plus a browser refresh; `src/` changes require a host reload; changes to `workflows/round.js` take effect hot.
 
-### 插件页配置
+### Plugin-page configuration
 
-Web 编辑器「插件」页的本插件卡片上直接配置（字段说明见 `Config` schema 的 description）：
+Configure directly on this plugin's card on the Web editor's "Plugins" page — since v0.8.1 the card itself renders every volatile field (field descriptions in the `Config` schema):
 
-- **全目标模式**（`allGoalsMode`，volatile）：切换保存即时生效，提示段即时重挂；
-- **task/verify agent 模型**（volatile）：留空继承 session agent；
-- **递归深度 / 并行上限**（`roundsPerSubgoal` / `maxConcurrentRounds`，volatile）：同一子目标最大连续轮数、全局并行轮数上限；
-- **roles**（volatile，dict）：role → {provider, model} 的角色级模型覆盖；
-- **硬门相关**（`hardGate`/`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`，非 volatile）：保存触发插件重载。
+- **All-goals mode** (`allGoalsMode`, volatile): toggle, takes effect immediately on save, prompt segments remount instantly;
+- **task/verify/triage agent models** (`taskAgentModel` / `verifyAgentModel` / `triageAgentModel`, volatile): dropdown-backed text fields — pick from the live system model list (shown as `providerName · provider/model`) or type "provider/model" / a bare model name; Enter or blur saves, empty inherits from the session agent (triage = the convergence-decision role, full rounds only). A configured value missing from the live model list shows an unavailable warning (runtime falls back to the session agent model) with a one-click Clear;
+- **Recursion depth / parallel cap** (`roundsPerSubgoal` integer ≥1 / `maxConcurrentRounds` integer ≥0, volatile): number fields, Enter or blur saves, blank restores the default (an `unset` write);
+- **roles** (volatile, dict): a JSON object field (`role → {provider, model}`) validated before writing, saved via its "Apply" button;
+- **Hard gate fields** (`hardGate`/`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`, non-volatile): not served to the card; edit them in the profile config document (saving triggers a plugin reload).
 
-> **GUI 验证步骤**：(1) 重启宿主（`link:` 安装的 `src/` schema 只在启动时 import——不重启面板只会显示旧 schema 的字段，例如只有「全目标模式」）并强刷浏览器；(2) 打开 Web 编辑器「插件」页 → 本插件卡片/详情页，确认六个 volatile 字段（全目标模式 / task 模型 / verify 模型 / 递归深度 / 并行上限 / roles）齐全；(3) 改动任一字段保存，确认卡片不回弹且 profile `cordis.patch.yml` 出现/更新 `{id: dsh-cybernetics, name: '@mars.liu/dsh-cybernetics', config: …}` 用户 patch 行；(4) 会话里跑一轮 goal 验证新值生效（如 roundsPerSubgoal 改为 2 后同一子目标第 2 轮即暂停）。
+> **GUI verification steps**: (1) restart the host and hard-refresh the browser — `lib/client.js` changes load only with the client module graph built at host startup (without the restart the card keeps its old field set, e.g. just "All-goals mode"), and the `link:`-installed `src/` schema is likewise imported only at startup; (2) open the Web editor's "Plugins" page → this plugin's card/detail page, and confirm all seven volatile fields are present (all-goals mode / task model / verify model / triage model / recursion depth / parallel cap / roles); (3) change any field (Enter/blur, or "Apply" for roles), confirm the control doesn't snap back and that the profile's `cordis.patch.yml` gains/updates the `{id: dsh-cybernetics, name: '@mars.liu/dsh-cybernetics', config: …}` user patch row; (4) run a goal round in a session to confirm the new value takes effect (e.g. with roundsPerSubgoal set to 2, the same subgoal pauses at its 2nd round).
 
-> **已知宿主缺陷（两个，均已定位）**：① 面板字段不全 = 运行时陈旧——`link:` 安装的 schema 在宿主启动时缓存，重启宿主即愈（见 [docs/CHANGELOG.md](docs/CHANGELOG.md) v0.7.10 第 1 条）。② 保存被拒并报 "dsh: profile reload requires the root Include entry" = 宿主 dsh-app-boot 双模块实例——全局 CLI（npm 树）与 profile 侧 dsh-config-editor（pnpm 树）各持一份模块拷贝，`recompose` 的模块级 WeakMap 守卫（`bootstrapIncludes`）永远 miss，**任何**插件的面板保存都在落盘前被拒；插件仓库内无法修复，需把两侧收敛到同一份模块实例（如把 profile 的 `node_modules/@deepseek-ai/dsh-app-boot` 软链到 CLI 引导用的那份拷贝）或等上游修复（CHANGELOG v0.7.10 第 2 条）。workaround：手工在 profile `cordis.patch.yml` 维护用户 patch 行（如 `- id: dsh-cybernetics` + `config: { roundsPerSubgoal: 3, allGoalsMode: true }`）后重启宿主。v0.7.6 起卡片本身不再吞错：仍被拒时会显示宿主拒绝原文并回弹开关。
+> **Known host defects (root-caused)**: ① *Fields missing from the card* had TWO stacked causes: the card only rendered `allGoalsMode` before v0.8.1 (the host has no generic field renderer — fixed by this version, effective after a host restart + browser refresh), and on a host booted before v0.7.7 the served schema itself only carries `allGoalsMode` as volatile (stale runtime — the `link:`-installed schema is cached at host startup; restarting the host fixes it, see [docs/CHANGELOG.md](docs/CHANGELOG.md), v0.7.10 item 1). ② Saving rejected with "dsh: profile reload requires the root Include entry" = host dsh-app-boot dual module instances — the global CLI (npm tree) and the profile-side dsh-config-editor (pnpm tree) each hold their own module copy, so the module-level WeakMap guard (`bootstrapIncludes`) in `recompose` always misses, and **any** plugin's panel save is rejected before reaching disk; this cannot be fixed inside the plugin repo — either converge both sides onto the same module instance (e.g. symlink the profile's `node_modules/@deepseek-ai/dsh-app-boot` to the copy the CLI bootstraps with) or wait for an upstream fix (CHANGELOG v0.7.10 item 2). Workaround: manually maintain user patch rows in the profile's `cordis.patch.yml` (e.g. `- id: dsh-cybernetics` + `config: { roundsPerSubgoal: 3, allGoalsMode: true }`) and restart the host. Since v0.7.6 the card no longer swallows errors: if still rejected, it shows the host's rejection verbatim and snaps the control back.
 
-### 会话内使用：`cybernetics` 工具
+### In-session usage: the `cybernetics` tool
 
-session agent 在会话内通过 `cybernetics` 工具（`toolName` 可配置）驱动回路，隐式触发提示段（`implicitTrigger: false` 可关）会指导它不等显式要求就按输入分类协议调用：
+The session agent drives the loop in-session via the `cybernetics` tool (`toolName` is configurable); the implicit trigger prompt segments (`implicitTrigger: false` to disable) instruct it to classify input and call the tool per protocol without waiting for an explicit request:
 
-| action | 语义 |
+| action | Semantics |
 |---|---|
-| `start` | 新任务：`{action:'start', title, brief}` 建 goal 并（默认后台）启动第 1 轮 |
-| `round` | 阻塞式驱动一轮（对既有 goal 或新建 goal） |
-| `collect` | 折叠已完成的后台轮，得到 controller 决策（continue/pause） |
-| `revise` | 修订目标：创建新 goal（append-only），`reason` 必填，可选 objective/title/depth/executor/abortPrevious |
-| `cancel` | 中止在跑的轮（不改目标；只中止不改目标时用） |
-| `list` | 查看本会话 goal 板全部 goal 的状态、轮次与运行句柄 |
+| `start` | New task: `{action:'start', title, brief}` creates a goal and (by default, in the background) starts its first round |
+| `round` | Drives one round, blocking (on an existing goal or a newly created one) |
+| `collect` | Folds a completed background round, yielding the controller decision (continue/pause) |
+| `revise` | Revises the goal: creates a new goal (append-only), `reason` required, optional objective/title/depth/executor/abortPrevious |
+| `cancel` | Aborts a running round (does not change the goal; use when only aborting, not revising) |
+| `list` | Shows the state, round counts, and run handles of all goals on this session's goal board |
 
-配套审计：每轮结构化结果落 `.cybernetics/round-<goalId>-<N>.json`；修订落 `.cybernetics/revisions-<新goalId>.jsonl`；goal 板快照落 `.cybernetics/board-<sessionId>.json`。
+Companion auditing: each round's structured result lands in `.cybernetics/round-<goalId>-<N>.json`; revisions land in `.cybernetics/revisions-<newGoalId>.jsonl`; goal-board snapshots land in `.cybernetics/board-<sessionId>.json`.
 
-## 设计动机与原理
+## Design Motivation and Rationale
 
-（提炼自博客文章，完整叙事见原文；协议细节见 [docs/protocol.md](docs/protocol.md)。）
+(Distilled from the blog post; see the original for the full narrative; protocol details in [docs/protocol.md](docs/protocol.md).)
 
-- **为什么「goal 是 agent 的思考产物」**：传统范式里人是控制器、模型是执行器，回路只存在于人的脑子里。让 session agent 自己把用户输入整理为持久 goal（用户通过对话校准 agent，agent 修订 goal），目标才成为系统里可跟踪的一等公民状态——反馈回路的第一块积木。
-- **为什么 append-only**：目标被悄悄改写，会摧毁「经 goal 跟踪 agent」的全部价值——页签上的目标不再是你当初设定的目标。身份与历史由 goal 链表达，正如 git 用不可变 commit 表达历史；每次修订的 reason + 审计行就是校准的显式变更记录。
-- **为什么 verify 独立于 task**：验证者若看执行者的叙述，会退化成「检查自述是否自洽」而非「检查事实是否满足目标」。测量仪器必须独立于被测对象——协议的核心不变量：**上下文是被配给的，不是被继承的**（task 只拿委托书、verify 只拿 goal + 报告 + 证据、triage 只拿 verdict，永不用 `context: 'fork'`）。持久的是身份和 goal 边界，不是会话历史。
-- **为什么硬门**：早期的「session agent 不亲自执行」只是提示里的劝告，模型看到琐碎任务就会内联干完。硬门在装配期物理移除执行工具，把劝告变成结构——编排者的全部产出是 goal 和 brief（信息），执行者的全部产出是对世界的改变（行动），可观测性与可控性的边界划在角色上，不依赖模型自觉。
-- **振荡防御与升级路径**：每轮连续迭代上限是对「反馈延迟过大导致振荡」的工程化防御；triage 的 human 分拣是控制器为「不可自动处理的扰动」预留的升级路径；`goalItselfQuestionable` 在结构上区分「方向错了」和「执行得不好」。
+- **Why "the goal is an artifact of the agent's thinking"**: in the traditional paradigm the human is the controller and the model is the actuator, and the loop exists only in the human's head. Letting the session agent itself organize user input into a persistent goal (the user calibrates the agent through conversation, the agent revises the goal) is what makes the goal a trackable first-class state in the system — the first building block of the feedback loop.
+- **Why append-only**: quietly rewriting a goal destroys all the value of "tracking an agent via a goal" — the goal on the tab is no longer the goal you originally set. Identity and history are expressed by the goal chain, just as git expresses history with immutable commits; each revision's reason + audit line is the explicit change record of calibration.
+- **Why verify is independent of task**: if the verifier sees the executor's narrative, it degenerates into "checking whether the self-report is self-consistent" instead of "checking whether facts satisfy the goal." The measuring instrument must be independent of the thing measured — the protocol's core invariant: **context is rationed, not inherited** (task gets only the brief, verify only goal + report + evidence, triage only the verdict; `context: 'fork'` is never used). What persists is identity and the goal boundary, not the conversation history.
+- **Why a hard gate**: early on, "the session agent does not execute tasks itself" was merely an exhortation in the prompt, and the model would inline-finish trivial tasks the moment it saw them. The hard gate physically removes execution tools at assembly time, turning exhortation into structure — the orchestrator's entire output is goals and briefs (information), the executor's entire output is changes to the world (action); the boundary of observability and controllability is drawn on roles, not on model self-discipline.
+- **Oscillation defense and escalation path**: the per-round cap on consecutive iterations is an engineering defense against "oscillation caused by excessive feedback delay"; triage's human category is the controller's reserved escalation path for "disturbances that cannot be handled automatically"; `goalItselfQuestionable` structurally distinguishes "the direction is wrong" from "the execution is poor."
 
-## 与 DSH 现有机制的关系
+## Relationship to Existing DSH Mechanisms
 
-- **goal**：不替代——dsh-goal 仍是 durable setpoint 与续跑驱动；本插件是它的工作回路。
-- **workflow**：每轮就是一次 `ctx.workflowEngine.start()` run；不新增编排机制（构建在 `dsh-workflow` 之上）。
-- **完成确认**：controller 永不自宣完成、不代改 goal phase；`met` 也只暂停等用户。
+- **goal**: not a replacement — dsh-goal remains the durable setpoint and resume driver; this plugin is its working loop.
+- **workflow**: each round is one `ctx.workflowEngine.start()` run; no new orchestration mechanism is added (built on top of `dsh-workflow`).
+- **Completion confirmation**: the controller never declares completion by itself and never changes a goal's phase on the user's behalf; even `met` merely pauses and waits for the user.
 
-## 已知限制
+## Known Limitations
 
-1. **settings 写入的宿主缺陷**：如「插件页配置」一节所述，该运行时上卡片保存可能被宿主在落盘前拒绝（上游 [#12045](https://github.com/deepseek-ai/dsh/discussions/12045)）；workaround：重启宿主 + 强刷浏览器，或手工 patch 行 + 重启。
-2. **volatile 与非 volatile 字段的保存语义差异**：volatile 字段（`allGoalsMode`、`taskAgentModel`、`verifyAgentModel`）保存即时生效、不 remount；非 volatile 字段（`hardGate`、`gateMode`、`gatedTools`、`gateAllowlist*`、`roles`、`toolName`、`implicitTrigger`）保存触发插件行 remount，需宿主重载完成。且宿主设置表单只服务也只接受 volatile 路径——运行中宿主的 schema 过旧时，volatile 写也会被拒（重启即愈）。
-3. **`link:` 安装注意事项**：客户端 bundle 的注册 id 必须等于 package.json 的 `name`（`@mars.liu/dsh-cybernetics`）；loader 行 id 可用短名 `dsh-cybernetics`。插件需挂在本 profile 的**顶层** loader entries（客户端扫描只枚举顶层行）；`src/` 改动需宿主重载、`lib/` 改动需重启宿主 + 刷新浏览器。
-4. 其他协议边界（硬门在装配层不在执行层、dsh-goal 焦点槽不随 superseded 迁移等）见 [docs/protocol.md](docs/protocol.md) 各「已知边界」小节。
+1. **Host defect in settings writes**: as described in the "Plugin-page configuration" section, on this runtime, card saves may be rejected by the host before reaching disk (upstream [#12045](https://github.com/deepseek-ai/dsh/discussions/12045)); workarounds: restart the host + hard-refresh the browser, or manual patch rows + restart.
+2. **Save-semantics difference between volatile and non-volatile fields**: volatile fields (`allGoalsMode`, `taskAgentModel`, `verifyAgentModel`, `triageAgentModel`, `roles`, `roundsPerSubgoal`, `maxConcurrentRounds`) take effect immediately on save without remount; non-volatile fields (`hardGate`, `gateMode`, `gatedTools`, `gateAllowlist*`, `toolName`, `implicitTrigger`) trigger a plugin-row remount on save, requiring a host reload to complete. Moreover, the host settings form only serves and only accepts volatile paths — if the running host's schema is too old, even volatile writes are rejected (a restart fixes it).
+3. **`link:` installation caveats**: the client bundle's registration id must equal the package.json `name` (`@mars.liu/dsh-cybernetics`); the loader row id may use the short name `dsh-cybernetics`. The plugin must hang at the **top level** of the profile's loader entries (the client scan enumerates only top-level rows); `src/` changes require a host reload, `lib/` changes require a host restart + browser refresh.
+4. Other protocol boundaries (the hard gate operating at the assembly layer rather than the execution layer, dsh-goal's focus slot not migrating on supersede, etc.) are covered in the "Known Boundaries" subsections of [docs/protocol.md](docs/protocol.md).
 
-## 演进历史
+## Evolution History
 
-| 版本 | 关键节点 |
+| Version | Key milestones |
 |---|---|
-| v0.2 | session-goal 模式 + 隐式触发 + 角色化 sub agent + 客户端 goal 页签 |
-| v0.3 | 多 goal 板 + 编排者协议 + 异步轮（start/collect/cancel/list）+ 委托书 brief |
-| v0.4 / v0.4.1 | 硬门；allowlist 门模式（封住变更工具长尾） |
-| v0.5 | 双档轮次 depth（quick / full） |
-| v0.6 | append-only goals、持久执行者、多 goal 投影、板持久化与 rehydrate、控制页签执行者行 |
-| v0.7–v0.7.8 | 全量 goal 模式 + revise 自动决策树；插件页配置卡片；volatile 模型字段；写入落点取证与保存失败可见化（离线测试 56 项） |
-| v0.7.9–v0.7.10 | roles / roundsPerSubgoal / maxConcurrentRounds volatile 化；基于真实宿主源码定位面板渲染（陈旧运行时）与保存拒绝（dsh-app-boot 双模块实例 WeakMap miss）双根因（离线测试 58 项） |
+| v0.2 | session-goal mode + implicit trigger + role-based sub agents + client Goals tab |
+| v0.3 | multi-goal board + orchestrator protocol + async rounds (start/collect/cancel/list) + work-order briefs |
+| v0.4 / v0.4.1 | hard gate; allowlist gate mode (sealing the change-tool long tail) |
+| v0.5 | dual round depth (quick / full) |
+| v0.6 | append-only goals, persistent executor, multi-goal projection, board persistence & rehydrate, Control-tab executor rows |
+| v0.7–v0.7.8 | all-goals mode + revise auto decision tree; plugin-page config card; volatile model fields; write-landing forensics and save-failure visibility (56 offline tests) |
+| v0.7.9–v0.7.10 | roles / roundsPerSubgoal / maxConcurrentRounds made volatile; dual root causes (stale-runtime panel rendering; dsh-app-boot dual-module-instance WeakMap miss on save rejection) located against real host source (58 offline tests) |
+| v0.8.0 | call-level model fallback: a role's configured model failing with an availability error (quota/network/provider — signaled by the workflow runtime agent() hook's error type/message) retries once on the session agent's model; logic failures never swap models; fallbacks recorded on the round result, workflow/log, audit log and decision note (64 offline tests) |
+| v0.8.1 | settings card covers all six volatile fields — the card is the only GUI surface (the host Plugins page draws no fields itself; dsh-client-ui-settings is the transport service, not a renderer); text/number/roles-JSON controls with validation, blank = restore default (unset), same write paths and failure fallback as the toggle (66 offline tests) |
+| v0.8.2 | new `triageAgentModel` flat volatile field (isomorphic to task/verify: parsed into `roles.triage`, empty = inherit; triage = convergence-decision role, full rounds only; v0.8.0 fallback semantics pinned: no retry without an override); card covers all seven volatile fields (67 offline tests) |
+| v0.8.3 | model dropdown + invalid-model handling: the three model fields are datalist-backed by the host's live model catalog (`remote.session.modelCatalog`, refreshed on `llm/adapters-updated`) with manual entry kept; a configured model deleted from the model settings renders an unavailable warning + one-click Clear (explicit unset — never a silent auto-unset, the trade-off is recorded in docs/CHANGELOG.md) and the runtime falls back to the session agent model (model-level deletion messages joined the v0.8.0 availability patterns; provider deletion was already covered by `no subagent provider registered` / AGENT_START) (68 offline tests) |
 
-完整逐版记录与 dogfooding 实测修正（含 2026-11-02 启动链路四次修正、页签渲染两连修等）见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
+For the complete version-by-version record and dogfooding-verified corrections (including the four startup-chain corrections of 2026-11-02, two consecutive tab-rendering fixes, etc.), see [docs/CHANGELOG.md](docs/CHANGELOG.md).
 
-## 许可
+## License
 
-MIT License，Copyright (c) 2026 MarchLiu。完整许可文本见 [LICENSE](LICENSE)。
+MIT License, Copyright (c) 2026 MarchLiu. See [LICENSE](LICENSE) for the full license text.

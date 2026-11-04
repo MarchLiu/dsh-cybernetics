@@ -2517,11 +2517,12 @@ console.log(JSON.stringify({
 //     (a) dsh-app-boot validateVolatilePlacement (lib/index.js:2606-2621) — the
 //     native containment check every plugin Config passes when its settings
 //     schema is projected: a volatile field must sit on a fixed object path
-//     with no enclosing volatile field. The v0.7.9 schema (six volatile
+//     with no enclosing volatile field. The current schema (seven volatile
 //     fields, roles a volatile z.dict over a plain inner object) must pass.
 //     (b) dsh-settings volatileForm over the REAL shipped schema must serve
-//     all SIX fields — roles / taskAgentModel / verifyAgentModel /
-//     roundsPerSubgoal / maxConcurrentRounds / allGoalsMode — and a roles
+//     all SEVEN fields — roles / taskAgentModel / verifyAgentModel /
+//     triageAgentModel / roundsPerSubgoal / maxConcurrentRounds /
+//     allGoalsMode — and a roles
 //     sub-op path must pass isVolatilePath (write gate).
 //     (c) STALE-RUNTIME CONTROL: the running host imports the plugin's
 //     link: source ONCE at boot (loader module cache; no source watcher), so
@@ -2544,7 +2545,7 @@ console.log(JSON.stringify({
     for (const [index, child] of (node.list ?? []).entries()) validateVolatilePlacement(child, `${path}/${index}`, true, seen)
   }
   assert.doesNotThrow(() => validateVolatilePlacement(Config, 'config'),
-    'the v0.7.9 Config passes the host native volatile-containment check (all six fields on fixed object paths)')
+    'the Config passes the host native volatile-containment check (all seven fields on fixed object paths)')
   // Negative control: a volatile field INSIDE the volatile roles dict would be refused.
   const nestedVolatile = z.dict(z.object({ provider: z.string().volatile() })).volatile()
   assert.throws(() => validateVolatilePlacement(z.object({ roles: nestedVolatile }), 'config'),
@@ -2571,8 +2572,8 @@ console.log(JSON.stringify({
   }
   const form57 = volatileForm57(Config)
   assert.deepEqual(Object.keys(form57.dict ?? {}).sort(),
-    ['allGoalsMode', 'maxConcurrentRounds', 'roles', 'roundsPerSubgoal', 'taskAgentModel', 'verifyAgentModel'],
-    'the served settings form exposes all six v0.7.9 volatile fields (roles/roundsPerSubgoal/maxConcurrentRounds/taskAgentModel/verifyAgentModel/allGoalsMode)')
+    ['allGoalsMode', 'maxConcurrentRounds', 'roles', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
+    'the served settings form exposes all seven volatile fields (roles/roundsPerSubgoal/maxConcurrentRounds/taskAgentModel/verifyAgentModel/triageAgentModel/allGoalsMode)')
   assert.equal(isVolatilePath57(Config, ['roles', 'default', 'model']), true,
     'a roles.default.model write path lies beneath the volatile roles node (write gate passes)')
   // STALE-RUNTIME CONTROL: the pre-0.7.7 runtime face (only allGoalsMode
@@ -2608,9 +2609,9 @@ console.log(JSON.stringify({
     const hostForm = hostSchema.volatileForm(Config)
     assert.notEqual(hostForm, undefined, 'host volatileForm serves a form for the current schema')
     assert.deepEqual(Object.keys(hostForm.dict ?? {}).sort(),
-      ['allGoalsMode', 'maxConcurrentRounds', 'roles', 'roundsPerSubgoal', 'taskAgentModel', 'verifyAgentModel'],
-      'the REAL host volatileForm serves exactly the six volatile fields')
-    for (const path of [['roles', 'default', 'model'], ['roundsPerSubgoal'], ['maxConcurrentRounds'], ['taskAgentModel'], ['verifyAgentModel'], ['allGoalsMode']]) {
+      ['allGoalsMode', 'maxConcurrentRounds', 'roles', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
+      'the REAL host volatileForm serves exactly the seven volatile fields')
+    for (const path of [['roles', 'default', 'model'], ['roundsPerSubgoal'], ['maxConcurrentRounds'], ['taskAgentModel'], ['verifyAgentModel'], ['triageAgentModel'], ['allGoalsMode']]) {
       assert.equal(hostSchema.isVolatilePath(Config, path), true, `host write gate accepts ${path.join('.')}`)
     }
     for (const path of [['hardGate'], ['gateMode'], ['toolName'], ['implicitTrigger']]) {
@@ -2624,7 +2625,7 @@ console.log(JSON.stringify({
   } else {
     console.log('  (skipping the real-host volatileForm cross-check: host profile absent)')
   }
-  console.log('✓ 57 panel fidelity: volatile placement legal, volatileForm serves all six v0.7.9 fields; stale-runtime control reproduces the one-field (全目标模式) panel — render root cause is the boot-time module cache (restart required), not the schema')
+  console.log('✓ 57 panel fidelity: volatile placement legal, volatileForm serves all seven volatile fields; stale-runtime control reproduces the one-field (全目标模式) panel — render root cause is the boot-time module cache (restart required), not the schema')
 }
 
 // 58. ROOT-INCLUDE ENTRY refusal: the exact user-observed save rejection
@@ -2676,11 +2677,813 @@ console.log(JSON.stringify({
   const profileCopy = '/Users/mars/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js'
   if (existsSync(cliCopy) && existsSync(profileCopy)) {
     const a = realpathSync(cliCopy); const b = realpathSync(profileCopy)
-    assert.notEqual(a, b, 'deployed environment: CLI-boot copy and profile-editor copy of dsh-app-boot are distinct module instances')
+    if (a === b) {
+      // The v0.7.10 remedy APPLIED (user, 2026-11-04): both sides resolve one
+      // module instance, the bootstrapIncludes WeakMap lookup hits and panel
+      // saves proceed. The dual-instance mechanism above stays proven by the
+      // two-WeakMap replica; the probe now certifies the healed deployment.
+      console.log('  (deployed environment healed: CLI and profile resolve the SAME dsh-app-boot copy — the v0.7.10 symlink remedy is in effect)')
+    } else {
+      assert.notEqual(a, b, 'deployed environment: CLI-boot copy and profile-editor copy of dsh-app-boot are distinct module instances')
+    }
   } else {
     console.log('  (skipping the real-environment inode probe: host paths absent)')
   }
   console.log('✓ 58 root-include refusal: module-global bootstrapIncludes WeakMap is keyed per module copy — CLI boot copy vs profile editor copy can never meet, every settings write dies pre-write; save root cause is host module duplication (dedupe/restart assembly), not the plugin schema')
 }
 
-console.log('\nALL 58 CHECKS PASSED')
+// --- v0.8: 调用级模型回退（call-level model fallback） -------------------------
+// Shared round.js driver: load the script once per scenario, run it with mock
+// agent/phase/log hooks exactly like tests 14/15/32.
+const roundCode = await readFile(new URL('../workflows/round.js', import.meta.url), 'utf8')
+const driveRound = (agent, roundArgs, logs = []) =>
+  new (async function () {}.constructor)('agent', 'phase', 'args', 'log', roundCode)(
+    agent, async () => {}, roundArgs, (m) => logs.push(m),
+  )
+const okReport = { summary: 's', done: true, artifacts: [], evidence: 'e', nextStepThoughts: [] }
+const okVerdict = { met: true, criteria: [], gaps: [], goalItselfQuestionable: false }
+const okTriage = { auto: [], defer: [], reject: [], human: [] }
+const baseArgs = (extra = {}) => ({
+  goal: { objective: 'O' }, state: { round: 1, doneSummary: '' },
+  subgoal: 'S', brief: 'B', ...extra,
+})
+
+// 59. fallback 触发（AGENT_START）：task 角色的覆盖 provider 未注册 → agent()
+//     抛出 WorkflowError(AGENT_START) → 撤销覆盖（不传 provider/model = 继承
+//     session agent）重试一次；回退记录进轮结果并经 log() 可见
+{
+  const calls = []
+  const logs = []
+  const agent = async (_prompt, opts) => {
+    calls.push(opts)
+    if (calls.length === 1) {
+      const err = new Error('agent() could not start a child: no subagent provider registered for "glm-5.3"')
+      err.code = 'AGENT_START' // workflow runtime 的错误类型（dsh-workflow WorkflowError.code）
+      throw err
+    }
+    if (calls.length === 2) return okReport
+    if (calls.length === 3) return okVerdict
+    return okTriage
+  }
+  const out = await driveRound(agent, baseArgs({
+    roles: { default: { provider: 'glm-5.3', model: 'glm-5.3-flash' } },
+  }), logs)
+  assert.equal(calls.length, 4, 'task retry + verify + triage')
+  assert.equal(calls[0].provider, 'glm-5.3', 'first attempt uses the configured override')
+  assert.equal(calls[0].model, 'glm-5.3-flash')
+  assert.equal(calls[1].provider, undefined, 'fallback target: NO provider opt = inherit session agent')
+  assert.equal(calls[1].model, undefined, 'fallback target: NO model opt = inherit session agent')
+  assert.equal(calls[2].provider, undefined, 'verify has no override → single direct call')
+  assert.equal(out.fallbacks.length, 1, 'one fallback recorded on the round result')
+  assert.equal(out.fallbacks[0].role, 'default')
+  assert.equal(out.fallbacks[0].trigger, 'availability-error')
+  assert.deepEqual(out.fallbacks[0].from, { provider: 'glm-5.3', model: 'glm-5.3-flash' })
+  assert.match(out.fallbacks[0].reason, /no subagent provider registered/)
+  assert.ok(logs.some((m) => /fallback/.test(m) && /session agent/.test(m)), 'fallback narrated into workflow/log')
+  assert.equal(out.verdict.met, true, 'the round completes normally after the fallback')
+  console.log('✓ 59 fallback on AGENT_START: override bypassed, session-model retry succeeds, event recorded + logged')
+}
+
+// 60. fallback 触发（verify 角色，AGENT_RESULT + quota 消息）：verify 的覆盖
+//     模型限额耗尽 → child agent run failed: 429/quota → 仅 verify 回退，task
+//     无覆盖不重试
+{
+  const calls = []
+  const agent = async (_prompt, opts) => {
+    calls.push(opts)
+    if (opts.label === 'verify' && calls.filter((c) => c.label === 'verify').length === 1) {
+      const err = new Error('child agent run failed: Error: HTTP 429 too many requests: quota exhausted')
+      err.code = 'AGENT_RESULT'
+      throw err
+    }
+    if (opts.label?.startsWith('task:')) return okReport
+    if (opts.label === 'verify') return okVerdict
+    return okTriage
+  }
+  const out = await driveRound(agent, baseArgs({
+    roles: { verify: { provider: 'v-prov', model: 'v-model' } },
+  }))
+  const taskCalls = calls.filter((c) => c.label?.startsWith('task:'))
+  const verifyCalls = calls.filter((c) => c.label === 'verify')
+  assert.equal(taskCalls.length, 1, 'task agent has no override → no retry')
+  assert.equal(taskCalls[0].provider, undefined, 'task agent ran on the inherited session model')
+  assert.equal(verifyCalls.length, 2, 'verify retried once')
+  assert.equal(verifyCalls[0].provider, 'v-prov', 'first verify attempt uses the override')
+  assert.equal(verifyCalls[1].provider, undefined, 'verify retry inherits the session agent')
+  assert.equal(out.fallbacks.length, 1)
+  assert.equal(out.fallbacks[0].role, 'verify')
+  assert.equal(out.fallbacks[0].trigger, 'availability-error')
+  assert.match(out.fallbacks[0].reason, /429|quota/)
+  assert.equal(out.verdict.met, true)
+  console.log('✓ 60 fallback on verify quota (AGENT_RESULT + 429/quota): only the failing role falls back')
+}
+
+// 61. 不触发场景（逻辑失败）：(a) task agent 正常交付 done=false 报告——逻辑
+//     失败是返回值层面的判定，哪怕配置了覆盖也绝不重试换模型；(b) 非可用性抛错
+//     （UNSUPPORTED_SCHEMA 等脚本/守卫错误）原样上抛；(c) 无覆盖时 agent()
+//     返回 null 维持原失败语义（无处可退，不重试）
+{
+  // (a) done=false report with an override configured: exactly one task call
+  const callsA = []
+  const outA = await driveRound(async (_p, opts) => {
+    callsA.push(opts)
+    if (opts.label?.startsWith('task:')) return { ...okReport, done: false, summary: '做了一半' }
+    if (opts.label === 'verify') return { met: false, criteria: [], gaps: ['另一半没做'], goalItselfQuestionable: false }
+    return okTriage
+  }, baseArgs({ roles: { default: { provider: 'p', model: 'm' } } }))
+  assert.equal(callsA.filter((c) => c.label?.startsWith('task:')).length, 1, 'logic failure: no model swap retry')
+  assert.deepEqual(outA.fallbacks, [], 'logic failure records no fallback')
+  assert.equal(outA.verdict.met, false, 'the unmet verdict flows through normally')
+
+  // (b) non-availability thrown error propagates (no retry, round errors)
+  let threw61 = false
+  const callsB = []
+  try {
+    await driveRound(async (_p, opts) => {
+      callsB.push(opts)
+      const err = new Error('agent() schema is outside the supported subset — schema.type must be "object"')
+      err.code = 'UNSUPPORTED_SCHEMA'
+      throw err
+    }, baseArgs({ roles: { default: { provider: 'p', model: 'm' } } }))
+  } catch { threw61 = true }
+  assert.equal(threw61, true, 'script/guard errors propagate unchanged')
+  assert.equal(callsB.length, 1, 'no retry on non-availability errors')
+
+  // (c) null WITHOUT an override: no retry (already on the session model)
+  const callsC = []
+  const outC = await driveRound(async (_p, opts) => { callsC.push(opts); return null }, baseArgs())
+  assert.equal(callsC.length, 1, 'null without an override does not retry')
+  assert.match(outC.failed, /task agent 失败/, 'the original failure semantics are preserved')
+  assert.deepEqual(outC.fallbacks, [])
+  console.log('✓ 61 no-fallback: done=false 逻辑失败 / 非可用性抛错 / 无覆盖 null 均不换模型')
+}
+
+// 62. null-result 回退：覆盖模型执行后 agent() 返回 null（runtime 把子 run
+//     stopReason ≠ completed 压成 null，不透传原因——限额/网络/provider 报错
+//     的常见形态）→ 撤销覆盖以 session 模型重试一次；重试再败降级为原失败路径
+//     且回退记录仍可见
+{
+  const calls = []
+  const out = await driveRound(async (_p, opts) => {
+    calls.push(opts)
+    if (opts.label?.startsWith('task:') && opts.model === 'weak-model') return null // 覆盖模型无产出
+    if (opts.label?.startsWith('task:')) return okReport
+    if (opts.label === 'verify') return okVerdict
+    return okTriage
+  }, baseArgs({ roles: { default: { model: 'weak-model' } } }))
+  const taskCalls = calls.filter((c) => c.label?.startsWith('task:'))
+  assert.equal(taskCalls.length, 2, 'null with an override retries once')
+  assert.equal(taskCalls[0].model, 'weak-model')
+  assert.equal(taskCalls[1].model, undefined, 'retry inherits the session agent model')
+  assert.equal(out.fallbacks.length, 1)
+  assert.equal(out.fallbacks[0].trigger, 'null-result')
+  assert.equal(out.fallbacks[0].role, 'default')
+  assert.equal(out.verdict.met, true, 'the retry rescues the round')
+
+  // Retry also yields null → original failure path, fallback record survives
+  const outFail = await driveRound(async () => null, baseArgs({ roles: { default: { model: 'weak-model' } } }))
+  assert.match(outFail.failed, /task agent 失败/, 'a failed retry degrades to the original failure')
+  assert.equal(outFail.fallbacks.length, 1, 'the fallback stays visible even when the retry fails')
+  assert.equal(outFail.fallbacks[0].trigger, 'null-result')
+  console.log('✓ 62 null-result fallback: override bypassed on null, retry rescues / degrades with the record intact')
+}
+
+// 63. 可用性判定矩阵：quota（中英文）/ 网络不可达 / 5xx / AGENT_RESULT 配额 →
+//     回退；非匹配消息（含 AGENT_RESULT 包裹的逻辑错误）与 INVALID_ARGUMENT →
+//     原样上抛。判定信号 = workflow runtime agent() hook 的错误类型/消息
+{
+  const triggers = [
+    Object.assign(new Error('agent() could not start a child: spawn EACCES'), { code: 'AGENT_START' }),
+    Object.assign(new Error('child agent run failed: 429 rate limit'), { code: 'AGENT_RESULT' }),
+    Object.assign(new Error('child agent run failed: quota exceeded，账户余额不足'), { code: 'AGENT_RESULT' }),
+    new Error('fetch failed: connect ECONNREFUSED 10.0.0.1:443'), // 无 code：按消息模式判定
+    new Error('503 Service Unavailable: model overloaded'),
+    new Error('ETIMEDOUT network unreachable'),
+    // v0.8.3: deleted-subscription shapes — provider removed (AGENT_START, the
+    // runtime's NO_PROVIDER wrap) and model removed while the provider stays
+    // (model-level error surfaces as AGENT_RESULT or a bare throw).
+    new Error('no subagent provider registered for "p"'),
+    Object.assign(new Error('child agent run failed: 400 model not found: m'), { code: 'AGENT_RESULT' }),
+    new Error('unknown model: m (subscription was removed)'),
+  ]
+  for (const trigger of triggers) {
+    const calls = []
+    const out = await driveRound(async (_p, opts) => {
+      calls.push(opts)
+      if (calls.length === 1) throw trigger
+      return okReport
+    }, baseArgs({ depth: 'quick', roles: { default: { provider: 'p', model: 'm' } } }))
+    assert.equal(calls.length, 2, `${trigger.message.slice(0, 40)}: availability failure retried`)
+    assert.equal(calls[1].provider, undefined)
+    assert.equal(out.fallbacks.length, 1)
+    assert.equal(out.fallbacks[0].trigger, 'availability-error')
+    assert.equal(out.report.summary, 's', 'quick round completes on the session model')
+  }
+  const nonTriggers = [
+    Object.assign(new Error('child agent run failed: some internal logic boom'), { code: 'AGENT_RESULT' }),
+    Object.assign(new Error('agent() option "effort" is deferred and not supported by this engine'), { code: 'UNSUPPORTED_OPTION' }),
+    Object.assign(new Error('this run reached its total agent cap (1000)'), { code: 'AGENT_CAP' }),
+  ]
+  for (const trigger of nonTriggers) {
+    let threw = false
+    const calls = []
+    try {
+      await driveRound(async (_p, opts) => { calls.push(opts); throw trigger }, baseArgs({ depth: 'quick', roles: { default: { provider: 'p', model: 'm' } } }))
+    } catch { threw = true }
+    assert.equal(threw, true, `${trigger.message.slice(0, 40)}: non-availability error propagates`)
+    assert.equal(calls.length, 1, 'no model swap on non-availability errors')
+  }
+  console.log('✓ 63 availability matrix: quota/network/5xx/AGENT_START → fallback; 逻辑错误/cap/option 错误 → 上抛不换模型')
+}
+
+// 64. 回退可见性（controller 层）：轮结果里的 fallbacks 追加进决策 note（工具
+//     结果行可见）并随 round-<goal>-<n>.json 审计日志落盘
+{
+  const engine64 = fakeEngine()
+  const host64 = fakeHost(engine64, { sessionId: 'sess-test-64' })
+  host64.ctx.workingDirectory = { get: () => root }
+  apply(host64.ctx, {})
+  const tool64 = host64.tools[0]
+  const exec64 = { agent: host64.parent, signal: undefined }
+
+  const started = await tool64.execute({ action: 'start', title: '回退可见性', brief: 'b' }, exec64)
+  engine64.runs[0].settle({
+    stopReason: 'completed',
+    value: {
+      round: 1,
+      report: okReport,
+      verdict: okVerdict,
+      triage: okTriage,
+      fallbacks: [{
+        role: 'default', from: { provider: 'glm-5.3', model: 'glm-5.3-flash' },
+        trigger: 'availability-error', reason: 'agent() could not start a child: no subagent provider registered for "glm-5.3"',
+      }],
+    },
+  })
+  await new Promise((r) => setImmediate(r))
+  const collected = await tool64.execute({ action: 'collect', goalId: started.goalId }, exec64)
+  assert.equal(collected.decision.reason, 'met')
+  assert.match(collected.decision.note, /模型回退 1 次/, 'the decision note surfaces the fallback')
+  assert.match(collected.decision.note, /default\(glm-5.3\/glm-5.3-flash→session 模型/, 'the note names role + failed override + fallback target')
+  const log64 = JSON.parse(await readFile(join(root, '.cybernetics', `round-${started.goalId}-1.json`), 'utf8'))
+  assert.equal(log64.fallbacks.length, 1, 'the audit log carries the fallback record')
+  assert.equal(log64.fallbacks[0].role, 'default')
+  assert.equal(log64.fallbacks[0].trigger, 'availability-error')
+
+  // No fallback → the note stays clean (no suffix regression).
+  const plain = await tool64.execute({ action: 'start', title: '无回退任务', brief: 'b' }, exec64)
+  engine64.runs.at(-1).settle({
+    stopReason: 'completed',
+    value: { round: 1, report: okReport, verdict: okVerdict, triage: okTriage, fallbacks: [] },
+  })
+  await new Promise((r) => setImmediate(r))
+  const plainCollected = await tool64.execute({ action: 'collect', goalId: plain.goalId }, exec64)
+  assert.doesNotMatch(plainCollected.decision.note, /模型回退/, 'no fallback → no note suffix')
+  console.log('✓ 64 fallback visibility: decision note suffix + round-*.json audit record; clean rounds unaffected')
+}
+
+// --- v0.8.1: 设置卡片全字段覆盖（all six volatile fields editable） ------------
+// Shared loader for the settings-card checks: identical ModuleLoader replay as
+// tests 52–54, with the STATEFUL useState stub (drafts persist across renders
+// exactly like React) and a node walker for finding controls by aria-label.
+async function loadSettingsCard(formForApply) {
+  const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  let loaded
+  globalThis.window = { __ModuleLoader__: { load: (m) => { loaded = m } } }
+  new Function('window', client)(globalThis.window)
+  const jsx = {
+    jsx: (type, props, key) => ({ type, props: props ?? {}, key }),
+    jsxs: (type, props, key) => ({ type, props: props ?? {}, key }),
+  }
+  const slotsMem = []
+  let slotIndex = 0
+  const react = {
+    useSyncExternalStore: (_sub, getSnapshot) => getSnapshot(),
+    useState: (initial) => {
+      const i = slotIndex++
+      if (slotsMem[i] === undefined) {
+        slotsMem[i] = {
+          value: initial,
+          set: (nv) => { slotsMem[i].value = typeof nv === 'function' ? nv(slotsMem[i].value) : nv },
+        }
+      }
+      return [slotsMem[i].value, slotsMem[i].set]
+    },
+  }
+  const mod = loaded.factory((req) => (req === 'react' ? react : jsx))
+  const registered = []
+  const t = (key, params) => key + (params && params.message !== undefined ? ':' + params.message : '')
+  mod.apply({
+    effect: (fn) => fn(),
+    locale: { register: () => () => {}, bind: () => t },
+    slots: { inject: (_n, cb) => cb(), register: (spec, view) => { registered.push({ spec, view }) } },
+    sessions: {},
+    configForms: {
+      get: formForApply,
+      whileServed: (_namespaces, register) => { register(new Set()); return () => {} },
+    },
+  })
+  const seat = registered.find((e) => e.spec.name === 'plugins.item')
+  assert.ok(seat, 'plugins.item seat registered')
+  const flatten = (node, out = []) => {
+    if (node === null || node === undefined || typeof node === 'boolean') return out
+    if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
+    if (Array.isArray(node)) { for (const n of node) flatten(n, out); return out }
+    if (typeof node.type === 'function') { flatten(node.type(node.props), out); return out }
+    if (node.props && node.props.children !== undefined) flatten(node.props.children, out)
+    return out
+  }
+  const walk = (node, fn) => {
+    if (node === null || node === undefined || typeof node !== 'object') return
+    if (Array.isArray(node)) { for (const n of node) walk(n, fn); return }
+    fn(node)
+    if (node.props && node.props.children !== undefined) walk(node.props.children, fn)
+  }
+  // React semantics: after an onChange the component re-renders and the DOM
+  // node carries FRESH handlers — always re-render + re-find before the next
+  // interaction, never reuse a stale node's props.
+  const render = (face) => { slotIndex = 0; return seat.view(face) }
+  const findByLabel = (face, label) => {
+    let hit
+    walk(render(face), (n) => { if (n.props && n.props['aria-label'] === label) hit = n })
+    return hit
+  }
+  const findApply = (face) => {
+    let hit
+    walk(render(face), (n) => { if (n.type === 'button' && n.props && n.props.children === 'settings.apply') hit = n })
+    return hit
+  }
+  return { t, render, flatten, walk, findByLabel, findApply, resetState: () => { slotsMem.length = 0 } }
+}
+
+// 65. v0.8.1/v0.8.2 settings card full volatile coverage (live ConfigForm
+//     shape): the page view renders editable controls for ALL SEVEN volatile
+//     fields (allGoalsMode toggle + task/verify/triage model text + rounds/cap
+//     numbers + roles JSON), and every control writes through the SAME live ConfigForm
+//     (set / unset / mutate sugar) — number parsing and range validation,
+//     blank = unset (restore default), unchanged = no write, roles JSON
+//     validated before writing. Root-cause backdrop (verified against the
+//     running host 2026-11-04): the host Plugins page (ItemDetail in
+//     dsh-client-ui-plugin-manager) renders a plugin's configuration ONLY
+//     through its slot cards and draws no fields itself;
+//     dsh-client-ui-settings ships the configForms SERVICE (transport +
+//     volatileForm gates) with NO generic field renderer, and
+//     dsh-client-ui-settings-plugins is a read-only inventory shell — so any
+//     volatile field this card did not render was editable nowhere in the GUI
+//     (the v0.7.9–v0.8.0 panel gap).
+{
+  const sets = []
+  const unsets = []
+  let snap = {
+    status: 'ready',
+    value: {
+      allGoalsMode: false, taskAgentModel: '', verifyAgentModel: 'v-prov/v-model', triageAgentModel: 't-model',
+      roundsPerSubgoal: 3, maxConcurrentRounds: 0, roles: {},
+    },
+    writable: true,
+  }
+  const form = {
+    getSnapshot: () => snap,
+    subscribe: () => () => {},
+    set: async (field, value) => {
+      sets.push({ field, value })
+      snap = { ...snap, value: { ...snap.value, [field]: value } }
+      return true
+    },
+    unset: async (field) => {
+      unsets.push(field)
+      const value = { ...snap.value }
+      delete value[field]
+      snap = { ...snap, value }
+      return true
+    },
+    mutate: async () => true,
+  }
+  const h = await loadSettingsCard((id) => { assert.equal(id, 'dsh-cybernetics'); return form })
+  const face = { form, view: 'page', t: h.t }
+
+  // (a) Field清单：all seven volatile fields render their labels, and the six
+  // non-toggle fields render their controls showing the snapshot values.
+  const text = h.flatten(h.render(face)).join('\n')
+  for (const key of ['settings.title', 'settings.taskAgentModel', 'settings.verifyAgentModel', 'settings.triageAgentModel',
+    'settings.roundsPerSubgoal', 'settings.maxConcurrentRounds', 'settings.roles']) {
+    assert.ok(text.includes(key), `page view renders the ${key} row`)
+  }
+  assert.equal(h.findByLabel(face, 'settings.roundsPerSubgoal').props.value, '3', 'number input shows the snapshot value')
+  assert.equal(h.findByLabel(face, 'settings.verifyAgentModel').props.value, 'v-prov/v-model', 'text input shows the snapshot value')
+  assert.equal(h.findByLabel(face, 'settings.taskAgentModel').props.value, '', 'empty model field renders blank')
+  assert.equal(h.findByLabel(face, 'settings.triageAgentModel').props.value, 't-model', 'triage model input shows the snapshot value')
+  const rolesArea = h.findByLabel(face, 'settings.roles')
+  assert.equal(rolesArea.type, 'textarea', 'roles is edited as a JSON textarea')
+  assert.equal(rolesArea.props.value, '{}', 'empty roles dict renders as a JSON object skeleton')
+  assert.equal(h.findApply(face).props.disabled, true, 'Apply stays disabled until the roles draft changes')
+
+  // (b) Number write: edit + Enter → ConfigForm.set with the parsed integer.
+  h.findByLabel(face, 'settings.roundsPerSubgoal').props.onChange({ target: { value: '5' } })
+  h.findByLabel(face, 'settings.roundsPerSubgoal').props.onKeyDown({ key: 'Enter' })
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(sets, [{ field: 'roundsPerSubgoal', value: 5 }], 'Enter commits a parsed integer through ConfigForm.set')
+  assert.equal(h.findByLabel(face, 'settings.roundsPerSubgoal').props.value, '5', 'accepted write clears the draft; control shows the new snapshot')
+
+  // (c) Blank = restore default: an emptied number field writes an `unset` op.
+  h.findByLabel(face, 'settings.roundsPerSubgoal').props.onChange({ target: { value: '' } })
+  h.findByLabel(face, 'settings.roundsPerSubgoal').props.onBlur()
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(unsets, ['roundsPerSubgoal'], 'blank input restores the default via ConfigForm.unset')
+  assert.equal(h.findByLabel(face, 'settings.roundsPerSubgoal').props.value, '', 'unset field renders blank (schema default applies server-side)')
+
+  // (d) Range validation: 0 is below roundsPerSubgoal's ≥1 floor — no write,
+  // the invalid hint renders and the draft is kept for correction.
+  h.findByLabel(face, 'settings.maxConcurrentRounds').props.onChange({ target: { value: '-2' } })
+  h.findByLabel(face, 'settings.maxConcurrentRounds').props.onBlur()
+  await new Promise((r) => setImmediate(r))
+  assert.equal(sets.filter((s) => s.field === 'maxConcurrentRounds').length, 0, 'out-of-range number never reaches the write path')
+  assert.match(h.flatten(h.render(face)).join('\n'), /settings\.invalidNumber/, 'the invalid hint renders under the field')
+  assert.equal(h.findByLabel(face, 'settings.maxConcurrentRounds').props.value, '-2', 'the rejected draft is kept for correction')
+  // Escape reverts the draft.
+  h.findByLabel(face, 'settings.maxConcurrentRounds').props.onKeyDown({ key: 'Escape' })
+  assert.equal(h.findByLabel(face, 'settings.maxConcurrentRounds').props.value, '0', 'Escape reverts to the snapshot value')
+
+  // (e) Text write: blur commits a "provider/model" string verbatim.
+  h.findByLabel(face, 'settings.taskAgentModel').props.onChange({ target: { value: 'glm-5.3/glm-5.3-flash' } })
+  h.findByLabel(face, 'settings.taskAgentModel').props.onBlur()
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(sets.at(-1), { field: 'taskAgentModel', value: 'glm-5.3/glm-5.3-flash' }, 'blur commits the text field through ConfigForm.set')
+
+  // (e2) Triage text write: Enter commits the bare model name; a blank triage
+  // field restores the schema default (inherit the session agent) via unset.
+  h.findByLabel(face, 'settings.triageAgentModel').props.onChange({ target: { value: 't-prov/t-model-2' } })
+  h.findByLabel(face, 'settings.triageAgentModel').props.onKeyDown({ key: 'Enter' })
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(sets.at(-1), { field: 'triageAgentModel', value: 't-prov/t-model-2' }, 'Enter commits the triage field through ConfigForm.set')
+  h.findByLabel(face, 'settings.triageAgentModel').props.onChange({ target: { value: '' } })
+  h.findByLabel(face, 'settings.triageAgentModel').props.onBlur()
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(unsets.at(-1), 'triageAgentModel', 'a blank triage field restores the default (inherit) via ConfigForm.unset')
+
+  // (f) Unchanged edit = no write: draft equals the snapshot value.
+  const setsBefore = sets.length
+  h.findByLabel(face, 'settings.taskAgentModel').props.onChange({ target: { value: 'glm-5.3/glm-5.3-flash' } })
+  h.findByLabel(face, 'settings.taskAgentModel').props.onBlur()
+  await new Promise((r) => setImmediate(r))
+  assert.equal(sets.length, setsBefore, 'an unchanged draft never writes')
+
+  // (g) roles: valid JSON commits the PARSED object (not the text); the Apply
+  // button is the write trigger (Enter inside the textarea stays a newline).
+  const rolesJson = '{"default":{"provider":"zai-coding-cn","model":"glm-5.3"}}'
+  h.findByLabel(face, 'settings.roles').props.onChange({ target: { value: rolesJson } })
+  assert.equal(h.findApply(face).props.disabled, false, 'a pending roles draft enables Apply')
+  h.findApply(face).props.onClick()
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(sets.at(-1), { field: 'roles', value: { default: { provider: 'zai-coding-cn', model: 'glm-5.3' } } },
+    'roles Apply writes the parsed object through ConfigForm.set')
+
+  // (h) roles validation: malformed JSON and a wrong shape both refuse BEFORE
+  // the write path and surface the invalid hint.
+  const setsBeforeBad = sets.length
+  h.findByLabel(face, 'settings.roles').props.onChange({ target: { value: '{not json' } })
+  h.findApply(face).props.onClick()
+  h.findByLabel(face, 'settings.roles').props.onChange({ target: { value: '{"default":{"provider":1}}' } })
+  h.findApply(face).props.onClick()
+  h.findByLabel(face, 'settings.roles').props.onChange({ target: { value: '[1,2]' } })
+  h.findApply(face).props.onClick()
+  assert.equal(sets.length, setsBeforeBad, 'malformed / wrong-shape roles JSON never reaches the write path')
+  assert.match(h.flatten(h.render(face)).join('\n'), /settings\.invalidJson/, 'the roles invalid hint renders')
+  console.log('✓ 65 settings card full coverage (live ConfigForm): seven volatile fields rendered (incl. triageAgentModel); set/unset writes, number validation, blank=unset, unchanged=no-write, roles JSON validated')
+}
+
+// 66. v0.8.1 settings card field writes on the HOST ConfigPageForm shape
+//     (plugins.item / plugins.row.config detail pages): every field write goes
+//     through host.mutate carrying the snapshot revision; a refused field write
+//     retries ONCE through directMutate with no expectedRevision and surfaces
+//     the host message; an unserved namespace renders labels + the unavailable
+//     line with NO controls (never a crash).
+{
+  const mutations = []
+  let state = {
+    status: 'ready',
+    value: { allGoalsMode: false, taskAgentModel: '', roundsPerSubgoal: 3, maxConcurrentRounds: 0, roles: {} },
+    writable: true,
+    revision: 11,
+  }
+  const hostForm = {
+    get state() { return state },
+    mutate: async (ops, revision) => {
+      mutations.push({ ops, revision })
+      return true
+    },
+  }
+  const h = await loadSettingsCard(() => { throw new Error('namespace not served in this harness') })
+  const face = { form: hostForm, view: 'page', t: h.t }
+
+  // (a) Number field write on the host shape: mutate([set], revision).
+  h.findByLabel(face, 'settings.maxConcurrentRounds').props.onChange({ target: { value: '4' } })
+  h.findByLabel(face, 'settings.maxConcurrentRounds').props.onKeyDown({ key: 'Enter' })
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(mutations, [{ ops: [{ op: 'set', path: ['maxConcurrentRounds'], value: 4 }], revision: 11 }],
+    'host-shape number write goes through ConfigPageForm.mutate carrying the snapshot revision')
+
+  // (b) Blank on the host shape: the restore-default write is an `unset` op.
+  h.findByLabel(face, 'settings.roundsPerSubgoal').props.onChange({ target: { value: ' ' } })
+  h.findByLabel(face, 'settings.roundsPerSubgoal').props.onBlur()
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(mutations.at(-1), { ops: [{ op: 'unset', path: ['roundsPerSubgoal'] }], revision: 11 },
+    'host-shape blank write is an unset op carrying the revision')
+
+  // (c) Refusal → one directMutate retry (no expectedRevision) → the host's
+  // exact message renders in the failure line. Field writes share the
+  // v0.7.6 path-(b) fallback with the toggle.
+  h.resetState()
+  const directCalls = []
+  const refusing = {
+    get state() { return state },
+    mutate: async () => false,
+  }
+  const faceRefused = {
+    form: refusing,
+    directMutate: async (ops, expectedRevision) => {
+      directCalls.push({ ops, expectedRevision })
+      return { ok: false, error: { message: 'Config field "taskAgentModel" is not volatile' } }
+    },
+    view: 'page',
+    t: h.t,
+  }
+  h.findByLabel(faceRefused, 'settings.taskAgentModel').props.onChange({ target: { value: 'p/m' } })
+  h.findByLabel(faceRefused, 'settings.taskAgentModel').props.onBlur()
+  await new Promise((r) => setImmediate(r))
+  await new Promise((r) => setImmediate(r))
+  assert.deepEqual(directCalls, [{ ops: [{ op: 'set', path: ['taskAgentModel'], value: 'p/m' }], expectedRevision: undefined }],
+    'a refused field write retries once through directMutate with no expectedRevision')
+  assert.match(h.flatten(h.render(faceRefused)).join('\n'), /settings\.saveFailedDetail:Config field "taskAgentModel" is not volatile/,
+    'the host refusal message surfaces verbatim for field writes too')
+
+  // (d) Unserved namespace: labels render, the unavailable line shows, and NO
+  // input/textarea is mounted — the card degrades instead of crashing.
+  h.resetState()
+  const unready = { form: { get state() { return { status: 'loading', value: undefined, writable: false } }, mutate: async () => true }, view: 'page', t: h.t }
+  const unreadyText = h.flatten(h.render(unready)).join('\n')
+  assert.match(unreadyText, /settings\.unavailable/, 'not-ready snapshot renders the unavailable line')
+  assert.match(unreadyText, /settings\.roundsPerSubgoal/, 'field labels still render (structure visible)')
+  assert.equal(h.findByLabel(unready, 'settings.roundsPerSubgoal'), undefined, 'no number input while not ready')
+  assert.equal(h.findByLabel(unready, 'settings.roles'), undefined, 'no roles textarea while not ready')
+  console.log('✓ 66 settings card host shape: field writes via mutate(revision), blank=unset op, refusal → directMutate retry + verbatim message, unavailable = labels only, no controls')
+}
+
+// 67. v0.8.2 triageAgentModel: the third flat agent-model field, isomorphic to
+//     taskAgentModel/verifyAgentModel — volatile on the schema (host form
+//     serves + accepts it), "provider/model" or bare-name parsing, live-ref
+//     unwrap + merge into roles.triage at round wiring (empty = inherit the
+//     session agent), the v0.8.0 callRoleAgent fallback on the triage call
+//     point (override + availability failure → one session-model retry; no
+//     override → no retry, no phantom fallback), quick rounds never invoke
+//     triage at all, and the settings card renders the field.
+{
+  // (a) Schema: volatile, default '', description names the triage role's job.
+  assert.ok(Config.dict.triageAgentModel, 'Config schema exposes the flat triageAgentModel field')
+  assert.equal(Config.dict.triageAgentModel.meta?.volatile, true, 'triageAgentModel is volatile (host form serves + accepts volatile paths only)')
+  assert.match(Config.dict.triageAgentModel.meta?.description ?? '', /triage/, 'the description names the triage role')
+  assert.match(Config.dict.triageAgentModel.meta?.description ?? '', /quick/, 'the description notes quick rounds skip triage')
+  const v67 = Config['~standard'].validate({ triageAgentModel: 't-prov/t-model' }).value
+  assert.equal(v67.issues, undefined)
+  assert.equal(v67.triageAgentModel.get?.(), 't-prov/t-model', 'volatile triageAgentModel resolves to a live reference')
+  const v67default = Config['~standard'].validate({}).value
+  assert.equal(v67default.triageAgentModel.get?.(), '', 'unset triageAgentModel defaults to "" (inherit the session agent)')
+
+  // (b) Wiring: parsed through parseAgentModelSpec (same parser as task/verify)
+  //     and merged over roles.triage at round start, after the live-ref unwrap.
+  const index67 = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.match(index67, /parseAgentModelSpec\(readConfigField\(config\.triageAgentModel, ''\)\)/,
+    'triageAgentModel read unwraps the volatile live reference')
+  assert.match(index67, /roleOverrides\.triage = \{ \.\.\.roleOverrides\.triage, \.\.\.triageSpec \}/,
+    'triageAgentModel merges over roles.triage exactly like task/verify')
+  assert.deepEqual(parseAgentModelSpec('t-prov/t-model'), { provider: 't-prov', model: 't-model' })
+  assert.equal(parseAgentModelSpec(''), undefined, 'empty triageAgentModel = inherit session agent (no override)')
+
+  // (c) Fallback on the triage call point: override + availability failure →
+  //     one retry on the inherited session model, recorded with role 'triage'.
+  const calls67 = []
+  const out67 = await driveRound(async (_p, opts) => {
+    calls67.push(opts)
+    if (opts.label === 'triage' && opts.provider === 't-prov') {
+      const err = new Error('child agent run failed: Error: HTTP 503 service unavailable: model overloaded')
+      err.code = 'AGENT_RESULT'
+      throw err
+    }
+    if (opts.label?.startsWith('task:')) return okReport
+    if (opts.label === 'verify') return okVerdict
+    return okTriage
+  }, baseArgs({ roles: { triage: { provider: 't-prov', model: 't-model' } } }))
+  const triageCalls67 = calls67.filter((c) => c.label === 'triage')
+  assert.equal(triageCalls67.length, 2, 'triage retried once on availability failure')
+  assert.equal(triageCalls67[0].provider, 't-prov', 'first triage attempt uses the override')
+  assert.equal(triageCalls67[1].provider, undefined, 'triage retry inherits the session agent (no provider/model opts)')
+  assert.equal(triageCalls67[1].model, undefined)
+  assert.equal(out67.fallbacks.length, 1)
+  assert.equal(out67.fallbacks[0].role, 'triage')
+  assert.equal(out67.fallbacks[0].trigger, 'availability-error')
+  assert.deepEqual(out67.fallbacks[0].from, { provider: 't-prov', model: 't-model' })
+  assert.equal(out67.verdict.met, true, 'the round completes normally after the triage fallback')
+
+  // (d) No override (empty triageAgentModel): a null triage result does NOT
+  //     retry — there is nowhere to fall back to, and no phantom record.
+  const calls67d = []
+  const out67d = await driveRound(async (_p, opts) => {
+    calls67d.push(opts)
+    if (opts.label?.startsWith('task:')) return okReport
+    if (opts.label === 'verify') return okVerdict
+    return null // triage无产出
+  }, baseArgs())
+  assert.equal(calls67d.filter((c) => c.label === 'triage').length, 1, 'no override → no triage retry')
+  assert.deepEqual(out67d.fallbacks, [], 'no override → no fallback record')
+  assert.deepEqual(out67d.triage, { auto: [], defer: [], reject: [], human: [] }, 'null triage degrades to the empty triage shape')
+
+  // (e) quick depth never invokes triage (the field only fires on full rounds).
+  const calls67e = []
+  await driveRound(async (_p, opts) => { calls67e.push(opts); return okReport },
+    baseArgs({ depth: 'quick', roles: { triage: { provider: 't-prov', model: 't-model' } } }))
+  assert.equal(calls67e.length, 1, 'quick round runs the task agent only')
+  assert.equal(calls67e.some((c) => c.label === 'triage'), false, 'quick round never calls triage')
+
+  // (f) The settings card renders the field (source-level pin; the rendered
+  //     row itself is asserted in test 65). v0.8.3: model fields are now
+  //     kind 'model' (catalog-backed datalist + invalid-model warning).
+  const client67 = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  assert.match(client67, /\{ field: 'triageAgentModel', labelKey: 'settings\.triageAgentModel', hintKey: 'settings\.triageModelHint', kind: 'model' \}/,
+    'the card field list includes triageAgentModel as a model field')
+  assert.ok(client67.includes("'settings.triageModelHint'"), 'the triage hint string exists (role duty + quick-round note)')
+  console.log('✓ 67 triageAgentModel: volatile schema field, parse + live-ref unwrap + roles.triage merge, triage fallback / no-override no-retry, quick rounds skip triage, card renders the field')
+}
+
+// 68. v0.8.3 model dropdown + invalid-model handling: the three model fields
+//     read the host catalog (remote.session.modelCatalog, refreshed on
+//     llm/adapters-updated) into a datalist dropdown while keeping free manual
+//     entry; a configured value no longer in the catalog (deleted
+//     subscription) renders an "unavailable → runtime falls back to the
+//     session agent" warning plus an explicit one-click Clear that writes an
+//     unset op — never a silent auto-unset; a failed catalog never warns.
+{
+  // Harness: same loader as 65, with ctx.remote wired (session.modelCatalog
+  // + the $on invalidation bus).
+  async function loadWithCatalog({ catalogPayload, onUpdated } = {}) {
+    const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+    let loaded
+    globalThis.window = { __ModuleLoader__: { load: (m) => { loaded = m } } }
+    new Function('window', client)(globalThis.window)
+    const jsx = {
+      jsx: (type, props, key) => ({ type, props: props ?? {}, key }),
+      jsxs: (type, props, key) => ({ type, props: props ?? {}, key }),
+    }
+    const slotsMem = []
+    let slotIndex = 0
+    const react = {
+      useSyncExternalStore: (_sub, getSnapshot) => getSnapshot(),
+      useState: (initial) => {
+        const i = slotIndex++
+        if (slotsMem[i] === undefined) {
+          slotsMem[i] = { value: initial, set: (nv) => { slotsMem[i].value = typeof nv === 'function' ? nv(slotsMem[i].value) : nv } }
+        }
+        return [slotsMem[i].value, slotsMem[i].set]
+      },
+    }
+    const mod = loaded.factory((req) => (req === 'react' ? react : jsx))
+    const registered = []
+    const t = (key, params) => key + (params && params.message !== undefined ? ':' + params.message : '')
+    let catalogCalls = 0
+    const session = {
+      modelCatalog: async () => {
+        catalogCalls += 1
+        if (typeof catalogPayload === 'function') return catalogPayload(catalogCalls)
+        return catalogPayload
+      },
+    }
+    const updatedHandlers = []
+    mod.apply({
+      effect: (fn) => fn(),
+      locale: { register: () => () => {}, bind: () => t },
+      slots: { inject: (_n, cb) => cb(), register: (spec, view) => { registered.push({ spec, view }) } },
+      sessions: {},
+      remote: {
+        $on: (event, cb) => { updatedHandlers.push(cb); if (onUpdated) onUpdated(event) },
+        session,
+      },
+      configForms: { get: () => undefined, whileServed: (_ns, register) => { register(new Set()); return () => {} } },
+    })
+    const seat = registered.find((e) => e.spec.name === 'plugins.item')
+    assert.ok(seat, 'plugins.item seat registered')
+    const walk = (node, fn) => {
+      if (node === null || node === undefined || typeof node !== 'object') return
+      if (Array.isArray(node)) { for (const n of node) walk(n, fn); return }
+      fn(node)
+      if (node.props && node.props.children !== undefined) walk(node.props.children, fn)
+    }
+    const render = (face) => { slotIndex = 0; return seat.view(face) }
+    const findByLabel = (face, label) => {
+      let hit
+      walk(render(face), (n) => { if (n.props && n.props['aria-label'] === label) hit = n })
+      return hit
+    }
+    // Same flatten contract as the shared harness above: strings/numbers are
+    // leaves, function-typed nodes are components called with their props.
+    const flatten = (node, out = []) => {
+      if (node === null || node === undefined || typeof node === 'boolean') return out
+      if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
+      if (Array.isArray(node)) { for (const n of node) flatten(n, out); return out }
+      if (typeof node.type === 'function') { flatten(node.type(node.props), out); return out }
+      if (node.props && node.props.children !== undefined) flatten(node.props.children, out)
+      return out
+    }
+    return {
+      t, render, walk, flatten, findByLabel,
+      catalogCalls: () => catalogCalls,
+      triggerAdapterUpdate: () => { for (const h of updatedHandlers) h() },
+      resetState: () => { slotsMem.length = 0 },
+    }
+  }
+
+  const CATALOG = {
+    ok: true,
+    value: {
+      groups: [
+        { id: 'deepseek', name: 'DeepSeek', models: [{ id: 'glm-5.3-flash', name: 'GLM 5.3 Flash' }, { id: 'glm-5.3', name: 'GLM 5.3' }] },
+        { id: 'openai', name: 'OpenAI', models: [{ id: 'gpt-5', name: 'GPT-5' }] },
+      ],
+      failures: [],
+    },
+  }
+
+  // (a) Dropdown data source: with the catalog served, each model input gains
+  //     list=<datalist> and the datalist carries one option per catalog model,
+  //     labeled `providerName · provider/model`; manual entry stays possible
+  //     (the control is still a free text input, not a locked <select>).
+  {
+    const h = await loadWithCatalog({ catalogPayload: CATALOG })
+    assert.equal(h.catalogCalls(), 1, 'catalog fetched once at apply time')
+    const snap = { status: 'ready', writable: true, value: { allGoalsMode: false, taskAgentModel: '', verifyAgentModel: '', triageAgentModel: '', roundsPerSubgoal: 3, maxConcurrentRounds: 0, roles: {} } }
+    const form = { getSnapshot: () => snap, subscribe: () => () => {}, set: async () => true, unset: async () => true, mutate: async () => true }
+    const face = { form, view: 'page', t: h.t, catalog: { subscribe: (cb) => { h.__subs = (h.__subs ?? new Set()); h.__subs.add(cb); return () => h.__subs.delete(cb) }, getSnapshot: () => ({ status: 'ready', options: [
+      { value: 'deepseek/glm-5.3-flash', provider: 'deepseek', model: 'glm-5.3-flash', label: 'DeepSeek · deepseek/glm-5.3-flash' },
+      { value: 'deepseek/glm-5.3', provider: 'deepseek', model: 'glm-5.3', label: 'DeepSeek · deepseek/glm-5.3' },
+      { value: 'openai/gpt-5', provider: 'openai', model: 'gpt-5', label: 'OpenAI · openai/gpt-5' },
+    ] }) } }
+    const taskInput = h.findByLabel(face, 'settings.taskAgentModel')
+    assert.equal(taskInput.props.list, 'cybernetics-models-taskAgentModel', 'model input binds the catalog datalist')
+    assert.equal(typeof taskInput.props.onChange, 'function', 'model input keeps free manual entry (text input, not a locked select)')
+    let datalist
+    h.walk(h.render(face), (n) => { if (n.type === 'datalist') datalist = n })
+    assert.ok(datalist, 'datalist rendered')
+    const options = datalist.props.children
+    assert.equal(options.length, 3, 'one option per catalog model')
+    assert.deepEqual(options.map((o) => o.props.value), ['deepseek/glm-5.3-flash', 'deepseek/glm-5.3', 'openai/gpt-5'], 'option values are provider/model routes')
+    assert.equal(options[0].props.label, 'DeepSeek · deepseek/glm-5.3-flash', 'options label providerName · provider/model')
+
+    // (b) Invalid configured model (deleted subscription): provider/model value
+    //     not in the catalog → warning text + Clear button; Clear writes an
+    //     unset op (explicit user action, NOT a silent auto-unset on render).
+    const unsets = []
+    const snapInvalid = { status: 'ready', writable: true, value: { allGoalsMode: false, taskAgentModel: 'deepseek/gone-model', verifyAgentModel: 'bare-gone-model', triageAgentModel: '', roundsPerSubgoal: 3, maxConcurrentRounds: 0, roles: {} } }
+    const formInvalid = { ...form, getSnapshot: () => snapInvalid, unset: async (field) => { unsets.push(field); return true } }
+    const faceInvalid = { ...face, form: formInvalid }
+    const warnText = h.flatten(h.render(faceInvalid)).join('\n')
+    assert.ok(warnText.includes('settings.modelUnavailable'), 'unavailable warning rendered for a catalog-missing provider/model value')
+    assert.ok(warnText.includes('settings.modelUnavailable'), 'bare-name value also warned when no option matches')
+    let clearBtn
+    h.walk(h.render(faceInvalid), (n) => {
+      if (n.type === 'button' && n.props && typeof n.props['aria-label'] === 'string' && n.props['aria-label'].startsWith('settings.modelClear') && clearBtn === undefined) clearBtn = n
+    })
+    assert.ok(clearBtn, 'Clear button rendered next to the warning')
+    const unsetsBefore = unsets.length
+    clearBtn.props.onClick()
+    assert.equal(unsets.length, unsetsBefore + 1, 'Clear performs exactly one unset write')
+    assert.equal(unsets[unsets.length - 1], 'taskAgentModel', 'Clear unsets the field whose model is unavailable')
+    // Rendering alone never writes: a fresh render with the invalid value and
+    // no click performs no unset.
+    const h2 = await loadWithCatalog({ catalogPayload: CATALOG })
+    const snapB = { status: 'ready', writable: true, value: { allGoalsMode: false, taskAgentModel: 'deepseek/gone-model', verifyAgentModel: '', triageAgentModel: '', roundsPerSubgoal: 3, maxConcurrentRounds: 0, roles: {} } }
+    const formB = { getSnapshot: () => snapB, subscribe: () => () => {}, set: async () => true, unset: async () => { throw new Error('render must not write') }, mutate: async () => true }
+    h2.render({ form: formB, view: 'page', t: h2.t, catalog: face.catalog })
+    // (no throw = render never auto-unsets)
+
+    // (c) Valid configured model: no warning. provider/model exact match and
+    //     bare-name match both count as available.
+    const snapValid = { status: 'ready', writable: true, value: { allGoalsMode: false, taskAgentModel: 'deepseek/glm-5.3', verifyAgentModel: 'gpt-5', triageAgentModel: '', roundsPerSubgoal: 3, maxConcurrentRounds: 0, roles: {} } }
+    const faceValid = { form: { ...form, getSnapshot: () => snapValid }, view: 'page', t: h.t, catalog: face.catalog }
+    const textValid2 = h.flatten(h.render(faceValid)).join('\n')
+    assert.ok(!textValid2.includes('settings.modelUnavailable'), 'valid provider/model value → no warning')
+    assert.ok(!textValid2.includes('settings.modelClear'), 'valid value → no Clear button')
+
+    // (d) Failed/absent catalog never warns (no false positives when the host
+    //     does not serve the model directory or discovery errored).
+    const faceErr = { form: formInvalid, view: 'page', t: h.t, catalog: { subscribe: () => () => {}, getSnapshot: () => ({ status: 'error', options: [] }) } }
+    assert.ok(!h.flatten(h.render(faceErr)).join('\n').includes('settings.modelUnavailable'), 'catalog error → no warning')
+    const faceNoCat = { form: formInvalid, view: 'page', t: h.t, catalog: undefined }
+    assert.ok(!h.flatten(h.render(faceNoCat)).join('\n').includes('settings.modelUnavailable'), 'no catalog prop → no warning')
+
+    // (e) The invalidation bus is subscribed: an llm/adapters-updated event
+    //     refetches the catalog (the deleted-subscription case flips live).
+    h.triggerAdapterUpdate()
+    assert.ok(h.catalogCalls() >= 2, 'llm/adapters-updated refetches the model catalog')
+    console.log('✓ 68 model dropdown + invalid-model handling: catalog datalist with manual entry, unavailable warning + explicit Clear (unset op, never silent), no warning on valid/failed catalog, adapters-updated refetch')
+  }
+}
+
+console.log('\nALL 68 CHECKS PASSED')

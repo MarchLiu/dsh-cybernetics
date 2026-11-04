@@ -4,6 +4,47 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.8.3（2026-11-04）：模型下拉选择 + 失效模型处理（配置卡可用性闭环）
+
+**数据源核实（宿主源码，2026-11-04）**：官方「子智能体」设置页（`@deepseek-ai/dsh-client-ui-settings-subagent`）的模型勾选列表读的是 `ctx.remote.session.modelCatalog()`（`@deepseek-ai/dsh-api-session-controller` 的 `@Remote('modelCatalog')`），返回 `{ ok, value: { groups: [{id, name, models: [{id, name}]}], failures } }` = 当前全部可路由模型按 provider 分组；provider 变更经 `ctx.remote.$on('llm/adapters-updated', …)` 推送刷新。本插件客户端照同一契约接入。
+
+- **模型下拉**（`lib/client.js`）：三个模型字段（taskAgentModel / verifyAgentModel / triageAgentModel）从纯文本框改为 **datalist 加持的文本框**——`<datalist>` 逐项列出目录模型（value = `provider/model`，label = `providerName · provider/model` 便于识别），输入框本体仍是自由文本，**手工输入兜底天然保留**（datalist 不是锁定 select，目录外的值照常提交——与运行时 `parseAgentModelSpec` 接受任意「provider/model」/裸模型名的语义一致）。目录经 `remote.session` 命名空间异步加载（新增 inject 声明 `remote.session`，全程 try/guard：宿主不服务该命名空间或 `modelCatalog` 缺失时下拉为空、不警告、行为与 v0.8.2 完全一致，绝不崩），并订阅 `llm/adapters-updated` 实时刷新（模型设置增删订阅即时反映）。
+- **失效模型处理（配置页）**：卡片渲染时把**已保存的配置值**与实时目录比对（`provider/model` 精确匹配选项 value；裸模型名匹配任意 provider 的 model id）——命中失败即显示「该模型已不在当前系统模型列表中，运行时将回退到 session agent 模型」警告 + 一键「清除」按钮（走与留空保存完全相同的 `unset` op 写路径）。**取舍（记录在案）**：选择「警告 + 显式清除」而非「渲染时自动 unset」——自动改写用户配置有副作用（重新订阅后原值即恢复有效；用户应保有对已存配置的所有权），且 unset 本身就是一次面板写入、失败时还会弹保存失败提示，静默化反而更危险。目录未加载/加载失败时**永不**警告（判定必须可证，避免误报）；警告只针对快照值，草稿未提交文本不触发。roles JSON 内的失效项本轮不做逐行校验（委托书明确允许，扁平三字段已覆盖主要交互面）。
+- **失效模型处理（运行时，核实 + 补充）**：核实 v0.8.0 回退路径确实覆盖「模型订阅已删」——provider 被删时 dsh-subagent 在 spawn 前抛 `no subagent provider registered for "x"`（`SubagentError NO_PROVIDER`），workflow runtime 包装为 `WorkflowError code AGENT_START`，`round.js` 的 `isAvailabilityFailure` 恒判真 → 撤销覆盖重试（既有测试 59 已锁）。**补充**：provider 仍在但该 model 订阅被删时，失败以模型级报错形态出现（AGENT_RESULT 内嵌或无 code 直抛），本次在 `AVAILABILITY_PATTERNS` 加入 `model not found / no such model / unknown model / invalid model / not subscribed / model …not available/enabled/found` 模式（测试 63 矩阵新增三行触发器）。`workflows/round.js` 改动热生效。
+- **测试**：离线测试增至 **68 项**——新增 68（下拉数据源：datalist/option 形状与 providerName 标注、手工输入保留；失效判定：provider/model 与裸名两形态、有效值与目录失败时零警告；清除交互：显式 unset 写入、纯渲染零写入；`llm/adapters-updated` 触发目录重取），63 矩阵扩展删除订阅触发器，67 的字段 kind 断言同步为 `model`。
+- **生效手段**：`lib/client.js` 改动需**重启宿主 + 强刷浏览器**；`workflows/round.js` 热生效。验证：重启后打开插件页卡片 → 三个模型字段出现下拉（选项为 `providerName · provider/model`）→ 填入一个已删除订阅的模型回车保存 → 字段下方出现不可用警告 → 点「清除」恢复继承。
+
+## v0.8.2（2026-11-04）：新增 triageAgentModel（第三个扁平角色模型字段，卡片覆盖全部七个 volatile 字段）
+
+- **新增 `triageAgentModel`**（`src/index.ts` schema + Config 接口）：与 `taskAgentModel` / `verifyAgentModel` 完全同构的扁平 volatile 字段——「provider/model」或裸模型名，**留空 = 继承 session agent**；经 `readConfigField` 解 live ref 后由 `parseAgentModelSpec` 解析，在轮启动接线处合并进 `roles.triage`（与 task→roles.default、verify→roles.verify 同一模式）。description 文案写明 triage 角色职责：读 task/verify 结果输出本轮收敛决策（met/continue/human-input 等），**quick 轮不启用**（quick 深度在 verify/triage 之前直接返回）。
+- **fallback 语义**：沿用 v0.8.0 `callRoleAgent`——triage 调用点（普通轮与 persistent executor 的 `taskReport` 分支共两处）本就走 `callRoleAgent('triage', …)`，本次零改动；测试 67 锁死：triage 覆盖 + 可用性失败 → 撤销覆盖以 session 模型重试一次并记录 `{role:'triage', trigger:'availability-error'}`；**空配置（无覆盖）时 triage 返回 null 不触发多余重试**、无伪造回退记录；quick 轮完全不调用 triage。`src/controller.ts` 无需改动：`RolesConfig` 本就有 `triage?: RoleSpec`，扁平字段只落在 `src/index.ts` 的 Config 接口上。
+- **设置卡片**（`lib/client.js`）：字段清单加入 `triageAgentModel` 文本框（专属 hint 写明 triage 职责与 quick 轮语义），卡片现覆盖全部**七个** volatile 字段（allGoalsMode / taskAgentModel / verifyAgentModel / triageAgentModel / roundsPerSubgoal / maxConcurrentRounds / roles）；读写路径、留空=unset、失败兜底与既有字段完全同构。
+- **生效手段**：`src/index.ts`（schema + 接线）改动需**宿主重载**；`lib/client.js`（卡片）改动需**重启宿主 + 强刷浏览器**（客户端模块图在宿主启动时构建，无 watcher）。验证步骤：重启宿主后强刷「插件」页 → 打开 cybernetics 卡片 → 应看到「Triage agent 模型」文本框（位于 Verify agent 模型之下），填入「provider/model」回车保存，下一轮 goal 的 triage 角色即用该模型；留空保存 = 恢复继承。
+- **测试**：离线测试增至 **67 项**——新增 67（triageAgentModel：volatile/live-ref/解析/合并接线/三处 fallback 语义/quick 轮跳过/卡片字段清单）；57（volatileForm 服务清单改断言七字段，含真实宿主 volatileForm 交叉核对）与 65（卡片快照 + 字段清单 + triage 字段 set/unset 写路径）同步扩展。
+
+## v0.8.1（2026-11-04）：设置卡片覆盖全部六个 volatile 字段（面板缺字段的真根因）
+
+用户实测（重启宿主 + 刷新浏览器后）：插件详情页的 cybernetics 卡片仍只有「全目标模式」一个开关，roles / roundsPerSubgoal / maxConcurrentRounds / taskAgentModel / verifyAgentModel 五个 volatile 字段在 GUI 无处可见。本轮重读宿主源码后定位到**与 v0.7.10 不同的第三层根因**：
+
+- **渲染来源核实**：插件详情页（`ItemDetail`，@deepseek-ai/dsh-client-ui-plugin-manager lib/client.js:2710）对插件配置的渲染**完全交给 slot 卡片**（`plugins.item` view "page"），页面自身一个字段都不画；@deepseek-ai/dsh-client-ui-settings 只提供 `configForms` **服务**（传输层 + `volatileForm` 决定服务/接受哪些字段），**没有按 schema 自动渲染字段的通用 ConfigForm UI**；dsh-client-ui-settings-plugins 是只读 inventory 壳（其 README 明言："Configuring a built-in plugin happens on the sidebar's Plugins page, where each official plugin's own companion package registers its page"）；官方插件（agent-loop / web-search 等）各自带手绘卡片。**结论：本插件自定义卡没画的 volatile 字段在整个 GUI 中不可见也不可配**——v0.7.2/0.7.3 起的卡片只渲染 allGoalsMode 开关 + summary 文案，这就是重启后其余五字段仍缺席的原因。宿主侧「通用 ConfigForm 服务全部六字段」指的是传输层（测试 57 已证），不是一张实际存在的表单 UI；两张 UI 并不并存，唯一 surface 就是自定义卡。
+- **卡片扩展**（`lib/client.js`）：同一 `SettingsCard` 现在渲染全部六个 volatile 字段——allGoalsMode 开关（不变）+ taskAgentModel / verifyAgentModel 文本框 + roundsPerSubgoal / maxConcurrentRounds 数字框 + roles JSON 文本域（「应用」按钮提交，写入前校验 `{role: {provider, model}}` 形状）。单行字段回车或失焦即提交；**留空 = 恢复默认**（`unset` op）；数字越界（<1 / <0）只标红不写；内容未变不写。写路径与开关完全同构：live ConfigForm `set`/`unset`（plugins.bundle.config 页）或宿主 ConfigPageForm `mutate(ops, revision)`（plugins.item / plugins.row.config 详情页），被拒时经 `remote.settings.mutate` 无 revision 兜底重试一次并原样展示宿主拒绝信息（v0.7.6 path-(b)），未就绪显示「配置不可用」行且不挂控件、15s 看守防挂起、控件值始终以宿主确认的快照为准——既有行为全部保留。
+- **生效手段**（`lib/client.js` 改动的固有约定）：**重启宿主 + 强刷浏览器**（客户端模块图在宿主启动时构建，无源码 watcher）。验证步骤见 README「插件页配置」。
+- **测试**：离线测试增至 **66 项**——新增 65（live ConfigForm 形状：六字段清单渲染、数字解析/越界标红、留空=unset、未变不写、roles JSON 校验与解析后写入、Escape 还原）与 66（宿主 ConfigPageForm 形状：字段写经 `mutate(ops, revision)`、blank=unset op、拒绝→directMutate 无 revision 重试并展示原文、未就绪只渲染标签不挂控件）。
+
+## v0.8.0（2026-11-04）：task/verify agent 模型覆盖的调用级回退（call-level fallback）
+
+为角色设定的模型无法调用时（限额/quota 耗尽、网络不可达、provider 报错等**可用性失败**），不再让整个 goal 轮失败：`workflows/round.js` 对每个角色的 `agent()` 调用包一层 `callRoleAgent`，命中可用性失败即**撤销该角色的 provider/model 覆盖**（不传覆盖 = 继承 session agent 的模型配置）重试一次。覆盖 task（含命名角色）、verify、triage 三个调用点；persistent executor 的 full 轮经 `taskReport` 分支同样走 verify/triage 的 `callRoleAgent`。
+
+**判定信号来自 workflow runtime（`@deepseek-ai/dsh-workflow-ptc`）`agent()` hook 的错误类型/消息**（对该 runtime 源码逐行核实）：
+
+- **抛出 `WorkflowError`** —— `code: 'AGENT_START'`（消息 `agent() could not start a child: …`，provider 解析/spawn/首调失败，**恒为可用性失败**，如 `no subagent provider registered for "x"`）；`code: 'AGENT_RESULT'`（`child agent run failed: …`，消息内嵌失败原因，命中可用性模式才回退）。模式表：限流（429/rate limit/too many requests）、限额（quota/insufficient/额度/余额/配额）、鉴权（401/403/unauthorized/invalid api key）、服务端不可用（502/503/529/overloaded/service unavailable）、网络（ECONNREFUSED/ETIMEDOUT/ENOTFOUND/fetch failed/network 等）。无 `code` 的错误（如离线 harness 的 mock）按消息模式判定。其余抛出（`INVALID_ARGUMENT`/`UNSUPPORTED_*`/`AGENT_CAP` 等脚本或守卫错误）**原样上抛，绝不换模型**。
+- **返回 `null`** —— runtime 把子 agent 的失败压成 null 且不透传原因（子 run `stopReason ≠ 'completed'`：LLM 调用中途失败经 dsh-subagent 的 `agent/error` → `stopReason: 'error'`，是限额/网络/provider 报错**最常见的形态**；或 completed 但无结构化产出）。仅当该角色**配置了模型覆盖**时把 null 视为「覆盖模型疑似不可调用」重试一次；无覆盖时 null 维持原失败语义（本来就跑在 session 模型上，无处可退）。重试再败降级为既有「本轮无结果」路径，回退记录仍保留。
+- **逻辑失败永不触发回退**：task agent 正常交付 `done=false` 报告、verify 给出未达成 verdict，都是返回值层面的判定，不换模型（离线测试 61 锁死）。
+
+**可见性**：每次回退记录 `{role, from, trigger: 'availability-error'|'null-result', reason}` 进轮结果的 `fallbacks` 数组（所有返回路径经 `withFallbacks` 携带），随 `.cybernetics/round-<goalId>-<n>.json` 审计日志落盘；`log()` 把回退原因 narrate 进 `workflow/log` 事件流；controller 的 `decide()` 把「⚠ 模型回退 N 次：role(覆盖→session 模型)」后缀追加进决策 note（cybernetics 工具结果行可见）。配置语义向后兼容：空配置 = 继承 session agent（无回退必要）；已配置 = 优先用配置模型，可用性失败时回退。离线测试增至 **64 项**（新增 59–64：AGENT_START/quota 触发、逻辑失败不触发、null-result 回退与再败降级、可用性判定矩阵、controller 层可见性）。`workflows/round.js` 改动**热生效**，无需宿主重载；`src/controller.ts` 的类型与决策 note 改动需宿主重载。
+
+另：用户已按 v0.7.10 第 2 条修复宿主部署（profile 侧 dsh-app-boot 收敛到 CLI 同一份模块实例），离线测试 58 的 inode 探针相应改为双态断言——两份拷贝 realpath 相同即认证「部署已修复」（面板保存恢复可用），相异则维持原有的双实例机制断言。
+
 ## v0.7.10（2026-11-04）：基于真实宿主源码的双根因定位（面板渲染 + 保存拒绝）与测试忠实化
 
 用户实测（2026-11-04 真实 GUI）：面板只显示「全目标模式」一项，v0.7.9 新 volatile 字段（roles / roundsPerSubgoal / maxConcurrentRounds / taskAgentModel / verifyAgentModel）全部缺席；且「全目标模式」开关保存被宿主拒绝："dsh: profile reload requires the root Include entry"。本轮重读宿主源码（@deepseek-ai/dsh-settings volatileForm/describe/write、@deepseek-ai/dsh-config-editor edit、@deepseek-ai/dsh-app-boot boot/mountRootInclude/recompose）后**修正 v0.7.9 的两个错误结论**：

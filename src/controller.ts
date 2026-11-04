@@ -15,6 +15,31 @@ import type { WorkflowEngine } from '@deepseek-ai/dsh-workflow'
 /** Directory holding per-round audit logs, relative to the workspace root. */
 export const STATE_DIR = '.cybernetics'
 
+/**
+ * One call-level model fallback within a round (v0.8): a role's configured
+ * model override failed to be called (availability failure) and the role's
+ * sub-agent was re-run on the session agent's model (no provider/model opts).
+ */
+export interface RoleFallback {
+  /** Role whose override was bypassed ('default'/named task role, 'verify', 'triage'). */
+  role: string
+  /** The configured override that failed. */
+  from: { provider?: string; model?: string }
+  /**
+   * Signal layer (workflow runtime agent() hook, @deepseek-ai/dsh-workflow-ptc):
+   * 'availability-error' = the hook THREW a WorkflowError whose code/message
+   * matches an availability failure (AGENT_START always; AGENT_RESULT or
+   * uncoded errors on quota/rate-limit/auth/5xx/network/provider patterns);
+   * 'null-result' = the hook returned null (the runtime flattens a child run
+   * that ends stopReason ≠ 'completed' — e.g. a mid-run LLM call failure via
+   * dsh-subagent agent/error — into null without the cause), retried only
+   * because an override was in effect.
+   */
+  trigger: 'availability-error' | 'null-result'
+  /** Human-readable reason (first line of the runtime error, or the null semantics). */
+  reason: string
+}
+
 /** One executed round, as returned by the workflow run. */
 export interface RoundResult {
   round: number
@@ -22,6 +47,8 @@ export interface RoundResult {
   verdict?: unknown
   triage?: unknown
   failed?: string
+  /** Call-level model fallbacks that occurred in this round (v0.8 audit). */
+  fallbacks?: RoleFallback[]
   /** Execution substrate used for this round (v0.6 audit). */
   executor?: 'ephemeral' | 'persistent'
 }
@@ -354,26 +381,42 @@ export async function runRound(
   }
 }
 
+/**
+ * v0.8 visibility: render the round's call-level model fallbacks as a decision
+ * note suffix, so the tool result names every fallback (role, failed override,
+ * trigger) instead of only living in the audit log.
+ */
+function fallbackSuffix(result: RoundResult): string {
+  const fallbacks = result.fallbacks ?? []
+  if (fallbacks.length === 0) return ''
+  const items = fallbacks.map((f) => {
+    const from = [f.from.provider, f.from.model].filter(Boolean).join('/') || '(inherit)'
+    return `${f.role}(${from}→session 模型，${f.trigger === 'null-result' ? '无产出' : '调用失败'})`
+  })
+  return `；⚠ 模型回退 ${fallbacks.length} 次：${items.join('，')}`
+}
+
 /** Fold one round result into a continue/pause decision. Pure. */
 function decide(result: RoundResult, state: LoopState, config: ControllerConfig): ControllerDecision {
+  const fb = fallbackSuffix(result)
   if (result.failed) {
-    return { action: 'pause', reason: 'failed', note: `第 ${result.round} 轮失败：${result.failed}` }
+    return { action: 'pause', reason: 'failed', note: `第 ${result.round} 轮失败：${result.failed}${fb}` }
   }
   const verdict = result.verdict as { met?: boolean; goalItselfQuestionable?: boolean; gaps?: string[] } | undefined
   if (verdict && verdict.goalItselfQuestionable) {
-    return { action: 'pause', reason: 'goal-questionable', note: 'verify 判定目标本身可能有问题，需通过对话重新校准' }
+    return { action: 'pause', reason: 'goal-questionable', note: `verify 判定目标本身可能有问题，需通过对话重新校准${fb}` }
   }
   if (verdict?.met) {
-    return { action: 'pause', reason: 'met', note: '验收全部通过；等待用户确认完成' }
+    return { action: 'pause', reason: 'met', note: `验收全部通过；等待用户确认完成${fb}` }
   }
   const triage = result.triage as { human?: { question?: string; step: string }[]; auto?: { step: string }[] } | undefined
   const human = triage?.human ?? []
   if (human.length > 0) {
-    return { action: 'pause', reason: 'human-input', note: `待用户裁定：${human.map((h) => h.question ?? h.step).join('；')}` }
+    return { action: 'pause', reason: 'human-input', note: `待用户裁定：${human.map((h) => h.question ?? h.step).join('；')}${fb}` }
   }
   const cap = config.roundsPerSubgoal ?? 3
   if (state.round >= cap) {
-    return { action: 'pause', reason: 'round-cap', note: `同一子目标已迭代 ${state.round} 轮仍未达成，升级用户` }
+    return { action: 'pause', reason: 'round-cap', note: `同一子目标已迭代 ${state.round} 轮仍未达成，升级用户${fb}` }
   }
   const gaps = verdict?.gaps ?? []
   const auto = triage?.auto ?? []
@@ -382,5 +425,5 @@ function decide(result: RoundResult, state: LoopState, config: ControllerConfig)
     : auto.length > 0
       ? auto.map((s) => s.step).join('；')
       : state.subgoal
-  return { action: 'continue', subgoal: nextSubgoal, note: `进入第 ${state.round + 1} 轮` }
+  return { action: 'continue', subgoal: nextSubgoal, note: `进入第 ${state.round + 1} 轮${fb}` }
 }

@@ -73,6 +73,8 @@ export interface Config extends ControllerConfig {
   taskAgentModel?: string
   /** Flat verify-agent model override (same format); empty = inherit session agent. */
   verifyAgentModel?: string
+  /** Flat triage-agent model override (same format); empty = inherit session agent. */
+  triageAgentModel?: string
   /**
    * Hard orchestration gate (default false): hide execution tools from
    * TOP-LEVEL session agents at prompt-assembly time, so the session agent
@@ -116,10 +118,10 @@ export interface Config extends ControllerConfig {
 // pattern). At least one field must be `.volatile()` for the page to be
 // served at all; a volatile edit is committed into the running fiber's
 // reference without a remount and announced via `loader/volatile-update`.
-// The user-facing knobs (taskAgentModel / verifyAgentModel / roles /
-// roundsPerSubgoal / maxConcurrentRounds / allGoalsMode) are all volatile so
-// they are visible AND writable in the settings panel and take effect on the
-// next goal round. hardGate and the gate fields stay non-volatile: the panel
+// The user-facing knobs (taskAgentModel / verifyAgentModel / triageAgentModel /
+// roles / roundsPerSubgoal / maxConcurrentRounds / allGoalsMode) are all
+// volatile so they are visible AND writable in the settings panel and take
+// effect on the next goal round. hardGate and the gate fields stay non-volatile: the panel
 // cannot write them (they change structural wiring — tool stripping listener —
 // so they belong in the profile config document instead).
 export const Config = z.object({
@@ -148,6 +150,14 @@ export const Config = z.object({
   taskAgentModel: z.string().default('').volatile().description('task agent 模型覆盖（「provider/model」或裸模型名）；留空 = 与 session agent 一致。保存后下一轮 goal 即生效，无需重载。'),
   /** Flat verify-agent model override; same format, fallback and volatile semantics as taskAgentModel. */
   verifyAgentModel: z.string().default('').volatile().description('verify agent 模型覆盖（「provider/model」或裸模型名）；留空 = 与 session agent 一致。保存后下一轮 goal 即生效，无需重载。'),
+  /**
+   * Flat triage-agent model override (v0.8.2); identical shape, fallback and
+   * volatile semantics as taskAgentModel/verifyAgentModel. The triage role
+   * reads the task/verify results and produces the round's convergence
+   * decision (met / continue / human-input / ...); quick-depth rounds skip
+   * verify+triage entirely, so this override only ever fires on full rounds.
+   */
+  triageAgentModel: z.string().default('').volatile().description('triage agent 模型覆盖（「provider/model」或裸模型名）；留空 = 与 session agent 一致。triage 角色读 task/verify 结果输出本轮收敛决策（met/continue/human-input 等）；quick 轮不启用。保存后下一轮 goal 即生效，无需重载。'),
   /**
    * Max consecutive rounds per subgoal before the loop pauses for the user
    * (controller round-cap, default 3). Volatile: read per round start, so the
@@ -878,9 +888,9 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
 
       // Flat settings-panel model fields fold into the canonical roles shape:
       // an unset field leaves its role untouched = inherit the session agent.
-      // Both fields are volatile (v0.7.7), so the loader hands back live
-      // references — unwrap through readConfigField ('' = inherit) exactly
-      // like the allGoalsMode live ref above.
+      // All three fields are volatile (task/verify v0.7.7, triage v0.8.2), so
+      // the loader hands back live references — unwrap through readConfigField
+      // ('' = inherit) exactly like the allGoalsMode live ref above.
       // roles is volatile too: unwrap the live reference before spreading,
       // otherwise the ref object itself would become the override.
       const roleOverrides: RolesConfig = { ...readConfigField(config.roles, {} as RolesConfig) }
@@ -888,6 +898,8 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       if (taskSpec) roleOverrides.default = { ...roleOverrides.default, ...taskSpec }
       const verifySpec = parseAgentModelSpec(readConfigField(config.verifyAgentModel, ''))
       if (verifySpec) roleOverrides.verify = { ...roleOverrides.verify, ...verifySpec }
+      const triageSpec = parseAgentModelSpec(readConfigField(config.triageAgentModel, ''))
+      if (triageSpec) roleOverrides.triage = { ...roleOverrides.triage, ...triageSpec }
       const controllerConfig: ControllerConfig = {
         roundScriptPath: config.roundScriptPath ?? fileURLToPath(new URL('../workflows/round.js', import.meta.url)),
         // Volatile schema fields surface as live references — unwrap per round

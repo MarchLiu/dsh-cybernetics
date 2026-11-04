@@ -36,13 +36,90 @@ const specFor = (key) => {
     : {}
 }
 
+// --- v0.8 调用级模型回退（call-level model fallback） --------------------------
+// 判定信号来自 workflow runtime（@deepseek-ai/dsh-workflow-ptc）的 agent() hook：
+//  - 抛出 WorkflowError：code AGENT_START（消息 `agent() could not start a child: …`，
+//    provider 解析 / 子 agent spawn / 首调失败——恒为可用性失败）或 AGENT_RESULT
+//    （`child agent run failed: …`，消息内嵌失败原因，需命中可用性模式才回退）；
+//    其余抛出（INVALID_ARGUMENT / UNSUPPORTED_* / AGENT_CAP 等脚本或守卫错误）
+//    原样上抛，绝不换模型。离线 harness 的 mock 错误没有 code 时按消息模式判定。
+//  - 返回 null：runtime 把子 agent 的失败压成 null 且不透传原因（子 run
+//    stopReason ≠ 'completed' —— LLM 调用中途失败（限额/网络/provider 报错经
+//    dsh-subagent 的 agent/error → stopReason 'error'）或无结构化产出）。仅当该
+//    角色配置了模型覆盖时，把 null 视为「覆盖模型疑似不可调用」，撤销覆盖以
+//    session agent 模型重试一次（无覆盖时 null 维持原失败语义——本来就跑在
+//    session 模型上，无处可退）。
+// 逻辑失败是返回值层面的判定（task agent 正常交付 done=false 的报告、verify
+// 给出未达成 verdict），从不触发回退。每次回退记录进 fallbacks（轮结果携带，
+// 随审计日志落盘），并经 log() 出现在 workflow/log 事件流。
+const fallbacks = []
+
+const errorTextOf = (err) => {
+  try { return String((err && (err.stack || err.message)) || err) } catch { return '' }
+}
+
+// 模型可用性失败的消息模式：限流/quota/鉴权/服务端不可用/网络/provider 解析。
+const AVAILABILITY_PATTERNS = [
+  /could not start a child/i,                                                    // AGENT_START 包装
+  /no subagent provider registered/i,                                            // 覆盖的 provider 未注册
+  // v0.8.3：配置的模型在模型设置里删除订阅（provider 仍在但该 model 不可路由）时
+  // 的典型报错形态（AGENT_RESULT 内嵌或无 code 的直抛），与既有模式互补。
+  /model not found|no such model|unknown model|invalid model|not subscribed|model .*not (?:available|enabled|found)/i,
+  /rate.?limit|\b429\b|too many requests/i,                                      // 限流
+  /quota|insufficient|额度|余额|配额/i,                                           // 限额 / quota 耗尽
+  /\b401\b|\b403\b|unauthorized|forbidden|invalid api key|authentication/i,      // 鉴权
+  /overloaded|service unavailable|temporarily unavailable|\b502\b|\b503\b|\b529\b/i, // 服务端不可用
+  /ECONNREFUSED|ECONNRESET|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|socket hang up|fetch failed|network/i, // 网络不可达
+]
+
+const isAvailabilityFailure = (err) => {
+  const code = err && typeof err === 'object' ? err.code : undefined
+  if (code === 'AGENT_START') return true // 子 agent 启动即失败恒为可用性失败
+  const text = errorTextOf(err)
+  return AVAILABILITY_PATTERNS.some((re) => re.test(text))
+}
+
+const specLabel = (spec) => [spec.provider, spec.model].filter(Boolean).join('/')
+
+/**
+ * 以角色模型覆盖调用 agent()；覆盖模型不可用（可用性错误或 null 无产出）时
+ * 回退到 session agent 的模型配置重试一次（不传 provider/model = 继承调用方）。
+ * 无覆盖 = 直接调用（无回退必要）；非可用性错误原样上抛；重试再失败降级为
+ * null（沿用既有「本轮无结果」路径，回退记录仍可见）。
+ */
+const callRoleAgent = async (roleKey, prompt, opts) => {
+  const spec = specFor(roleKey)
+  const overridden = !!(spec.provider || spec.model)
+  try {
+    const result = await agent(prompt, { ...opts, ...spec })
+    if (result === null && overridden) {
+      const reason = 'agent() 返回 null（runtime 未透传原因：子 agent 未完成或无结构化产出），疑似覆盖模型不可调用'
+      fallbacks.push({ role: roleKey, from: spec, trigger: 'null-result', reason })
+      log(`[cybernetics fallback] ${roleKey} 角色覆盖模型 ${specLabel(spec)} 执行无产出，回退到 session agent 模型重试`)
+      try { return await agent(prompt, opts) } catch { return null }
+    }
+    return result
+  } catch (err) {
+    if (overridden && isAvailabilityFailure(err)) {
+      const reason = errorTextOf(err).split('\n')[0].slice(0, 300)
+      fallbacks.push({ role: roleKey, from: spec, trigger: 'availability-error', reason })
+      log(`[cybernetics fallback] ${roleKey} 角色覆盖模型 ${specLabel(spec)} 调用失败（${reason}），回退到 session agent 模型重试`)
+      try { return await agent(prompt, opts) } catch { return null }
+    }
+    throw err
+  }
+}
+
+/** 轮结果统一携带回退记录（空数组 = 未发生回退）。 */
+const withFallbacks = (out) => ({ ...out, fallbacks })
+
 // v0.6 TeamExecutor: the persistent teammate already did the task work; the
 // controller hands its report in as `taskReport`. Skip the task agent entirely
 // and go straight to verify/triage (quick depth returns the derived verdict).
 if (taskReport && typeof taskReport === 'object') {
   const report = taskReport
   if (depth === 'quick') {
-    return {
+    return withFallbacks({
       round: state.round,
       report,
       verdict: {
@@ -53,10 +130,10 @@ if (taskReport && typeof taskReport === 'object') {
         goalItselfQuestionable: false,
       },
       triage: { auto: [], defer: [], reject: [], human: [] },
-    }
+    })
   }
   await phase('verify')
-  const verdict = await agent(
+  const verdict = await callRoleAgent('verify',
     [
       `你是独立的 verify agent：你没有、也不应获得 task agent 的叙述过程。`,
       `下面是目标、工作委托书和 task agent 的报告，请基于证据判定本轮是否达成目标。`,
@@ -72,7 +149,7 @@ if (taskReport && typeof taskReport === 'object') {
       ``,
       `判定标准：证据是否支撑报告的每一项结论；是否覆盖了本轮子目标；是否存在未验证的断言。`,
     ].join('\n'),
-    { label: 'verify', ...specFor('verify'), schema: {
+    { label: 'verify', schema: {
       type: 'object', additionalProperties: false,
       required: ['met', 'criteria', 'gaps', 'goalItselfQuestionable'],
       properties: {
@@ -84,7 +161,7 @@ if (taskReport && typeof taskReport === 'object') {
     } },
   )
   await phase('triage')
-  const triage = await agent(
+  const triage = await callRoleAgent('triage',
     [
       `你是 triage agent：把 verify 的缺口拆成四类处置建议。`,
       ``,
@@ -94,7 +171,7 @@ if (taskReport && typeof taskReport === 'object') {
       `【本轮子目标】`,
       subgoal || '',
     ].join('\n'),
-    { label: 'triage', ...specFor('triage'), schema: {
+    { label: 'triage', schema: {
       type: 'object', additionalProperties: false,
       required: ['auto', 'defer', 'reject', 'human'],
       properties: {
@@ -106,9 +183,9 @@ if (taskReport && typeof taskReport === 'object') {
     } },
   )
   if (verdict === null || triage === null) {
-    return { round: state.round, report, failed: 'verify/triage agent 失败，本轮无结论' }
+    return withFallbacks({ round: state.round, report, failed: 'verify/triage agent 失败，本轮无结论' })
   }
-  return { round: state.round, report, verdict, triage }
+  return withFallbacks({ round: state.round, report, verdict, triage })
 }
 
 await phase('task')
@@ -119,7 +196,7 @@ await phase('task')
 // enough to fully drive execution) falling back to the durable objective.
 const workOrder = (brief && brief.trim()) || goal.objective
 
-const report = await agent(
+const report = await callRoleAgent(role ?? 'default',
   [
     `你是一个独立的 task agent：不继承任何对话历史，从零开始工作。`,
     `下面这份工作委托书是你可以获得的全部任务信息，它被要求详细到足以让你独立完成当前工作；`,
@@ -142,7 +219,7 @@ const report = await agent(
     `完成后交付：summary、done、artifacts、evidence、nextStepThoughts。`,
     `nextStepThoughts 只记录"值得做但超出本轮子目标"的后续工作线索，不要执行它们。`,
   ].join('\n'),
-  { label: `task:${role ?? 'default'}`, ...specFor(role ?? 'default'), schema: {
+  { label: `task:${role ?? 'default'}`, schema: {
     type: 'object', additionalProperties: false,
     required: ['summary', 'done', 'artifacts', 'evidence', 'nextStepThoughts'],
     properties: {
@@ -155,14 +232,14 @@ const report = await agent(
 )
 
 if (report === null) {
-  return { round: state.round, failed: 'task agent 失败，本轮无结果' }
+  return withFallbacks({ round: state.round, failed: 'task agent 失败，本轮无结果' })
 }
 
 // quick depth: lightweight analysis — one agent, one round, direct feedback.
 // Skip verify/triage entirely; derive a verdict-shaped outcome from the
 // task report so the controller's decision logic works unchanged.
 if (depth === 'quick') {
-  return {
+  return withFallbacks({
     round: state.round,
     report,
     verdict: {
@@ -173,12 +250,12 @@ if (depth === 'quick') {
       goalItselfQuestionable: false,
     },
     triage: { auto: [], defer: [], reject: [], human: [] },
-  }
+  })
 }
 
 await phase('verify')
 
-const verdict = await agent(
+const verdict = await callRoleAgent('verify',
   [
     `你是 verify agent，独立验收 task agent 的交付。你只对照目标判定达成度，把目标拆成可判定的方面逐条列出并判定，每个判断必须给出证据；`,
     `不重做工作，不接受"大概完成了"。`,
@@ -192,7 +269,7 @@ const verdict = await agent(
     ``,
     `若你认为是目标本身有问题（而非执行缺口），置 goalItselfQuestionable=true。`,
   ].join('\n'),
-  { label: 'verify', ...specFor('verify'), schema: {
+  { label: 'verify', schema: {
     type: 'object', additionalProperties: false,
     required: ['met', 'criteria', 'gaps', 'goalItselfQuestionable'],
     properties: {
@@ -209,12 +286,12 @@ const verdict = await agent(
 )
 
 if (verdict === null) {
-  return { round: state.round, failed: 'verify agent 失败，本轮无结果', report }
+  return withFallbacks({ round: state.round, failed: 'verify agent 失败，本轮无结果', report })
 }
 
 await phase('triage')
 
-const triage = await agent(
+const triage = await callRoleAgent('triage',
   [
     `你是 goal agent。对 task agent 提出的后续工作线索做三分拣：`,
     `- auto：目标内、低风险、可自动执行的下一步工作`,
@@ -229,7 +306,7 @@ const triage = await agent(
     `待分拣线索：`,
     ...report.nextStepThoughts.map((s, i) => `${i + 1}. ${s}`),
   ].join('\n'),
-  { label: 'triage', ...specFor('triage'), schema: {
+  { label: 'triage', schema: {
     type: 'object', additionalProperties: false,
     required: ['auto', 'defer', 'reject', 'human'],
     properties: {
@@ -242,4 +319,4 @@ const triage = await agent(
   } },
 )
 
-return { round: state.round, report, verdict, triage: triage ?? { auto: [], defer: [], reject: [], human: [] } }
+return withFallbacks({ round: state.round, report, verdict, triage: triage ?? { auto: [], defer: [], reject: [], human: [] } })
