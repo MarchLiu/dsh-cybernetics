@@ -1995,7 +1995,11 @@ console.log(JSON.stringify({
   assert.equal(v.issues, undefined)
   assert.equal(v.hardGate, true, 'non-volatile boolean resolves to a plain value')
   assert.equal(v.allGoalsMode.get?.(), false, 'volatile boolean resolves to a live reference (default off)')
-  assert.deepEqual(v.roles.default, { provider: 'p', model: 'm' })
+  assert.equal(Config.dict.roles.meta?.volatile, true, 'roles is volatile (panel-editable, live next round)')
+  assert.equal(Config.dict.roundsPerSubgoal.meta?.volatile, true, 'roundsPerSubgoal is volatile (panel-editable)')
+  assert.equal(Config.dict.maxConcurrentRounds.meta?.volatile, true, 'maxConcurrentRounds is volatile (panel-editable)')
+  assert.equal(typeof v.roles.get, 'function', 'volatile roles resolves to a live reference')
+  assert.deepEqual(v.roles.get().default, { provider: 'p', model: 'm' })
   // Schema-resolved arrays arrive as [] when unset — apply() must fall back to
   // the built-in gate sets, otherwise the hard gate would keep/gate nothing.
   assert.deepEqual(v.gatedTools, [])
@@ -2509,4 +2513,174 @@ console.log(JSON.stringify({
   console.log('✓ 56 write landing: toggle write survives every host pre-write gate and lands as the user patch row {id, name, config} (no insert)')
 }
 
-console.log('\nALL 56 CHECKS PASSED')
+// 57. v0.7.9 panel-fidelity: replicate the REAL host serving path end-to-end.
+//     (a) dsh-app-boot validateVolatilePlacement (lib/index.js:2606-2621) — the
+//     native containment check every plugin Config passes when its settings
+//     schema is projected: a volatile field must sit on a fixed object path
+//     with no enclosing volatile field. The v0.7.9 schema (six volatile
+//     fields, roles a volatile z.dict over a plain inner object) must pass.
+//     (b) dsh-settings volatileForm over the REAL shipped schema must serve
+//     all SIX fields — roles / taskAgentModel / verifyAgentModel /
+//     roundsPerSubgoal / maxConcurrentRounds / allGoalsMode — and a roles
+//     sub-op path must pass isVolatilePath (write gate).
+//     (c) STALE-RUNTIME CONTROL: the running host imports the plugin's
+//     link: source ONCE at boot (loader module cache; no source watcher), so
+//     a host process booted before the v0.7.7 commit serves the pre-0.7.7
+//     runtime where ONLY allGoalsMode is volatile. Reproducing that face
+//     yields a form with exactly one field — which is precisely the user's
+//     screenshot (面板只显示「全目标模式」). Root cause of "new fields not
+//     rendered": stale runtime, fix = restart the host; NOT a schema defect.
+{
+  const validateVolatilePlacement = (node, path, blocked = false, seen = new Map()) => {
+    const states = seen.get(node) ?? new Set()
+    if (states.has(blocked)) return
+    states.add(blocked)
+    seen.set(node, states)
+    if (node.meta?.volatile && blocked) throw new Error(`${path}: volatile fields require a fixed object path without an enclosing volatile field`)
+    const nested = blocked || !!node.meta?.volatile
+    for (const [key, child] of Object.entries(node.dict ?? {})) validateVolatilePlacement(child, `${path}/${key}`, nested, seen)
+    if (node.sKey) validateVolatilePlacement(node.sKey, `${path}/keys`, true, seen)
+    if (node.inner) validateVolatilePlacement(node.inner, `${path}/inner`, true, seen)
+    for (const [index, child] of (node.list ?? []).entries()) validateVolatilePlacement(child, `${path}/${index}`, true, seen)
+  }
+  assert.doesNotThrow(() => validateVolatilePlacement(Config, 'config'),
+    'the v0.7.9 Config passes the host native volatile-containment check (all six fields on fixed object paths)')
+  // Negative control: a volatile field INSIDE the volatile roles dict would be refused.
+  const nestedVolatile = z.dict(z.object({ provider: z.string().volatile() })).volatile()
+  assert.throws(() => validateVolatilePlacement(z.object({ roles: nestedVolatile }), 'config'),
+    /fixed object path/, 'volatile under an enclosing volatile node is refused by the same check')
+  // volatileForm over the REAL schema serves exactly the six volatile fields.
+  const isPlainObject57 = (v) => typeof v === 'object' && v !== null && !Array.isArray(v)
+    && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null)
+  const volatileForm57 = (schema) => {
+    if (schema.meta?.volatile) return new z(schema.toJSON())
+    if (schema.type === 'object') {
+      const dict = Object.fromEntries(Object.entries(schema.dict ?? {}).flatMap(([k, child]) => {
+        const field = volatileForm57(child)
+        return field === undefined ? [] : [[k, field]]
+      }))
+      return Object.keys(dict).length === 0 ? undefined : z.object(dict)
+    }
+    return undefined
+  }
+  const isVolatilePath57 = (schema, path) => {
+    if (schema.meta?.volatile) return true
+    const [key, ...rest] = path
+    const child = key === undefined ? undefined : schema.dict?.[key]
+    return child !== undefined && isVolatilePath57(child, rest)
+  }
+  const form57 = volatileForm57(Config)
+  assert.deepEqual(Object.keys(form57.dict ?? {}).sort(),
+    ['allGoalsMode', 'maxConcurrentRounds', 'roles', 'roundsPerSubgoal', 'taskAgentModel', 'verifyAgentModel'],
+    'the served settings form exposes all six v0.7.9 volatile fields (roles/roundsPerSubgoal/maxConcurrentRounds/taskAgentModel/verifyAgentModel/allGoalsMode)')
+  assert.equal(isVolatilePath57(Config, ['roles', 'default', 'model']), true,
+    'a roles.default.model write path lies beneath the volatile roles node (write gate passes)')
+  // STALE-RUNTIME CONTROL: the pre-0.7.7 runtime face (only allGoalsMode
+  // volatile, the other five plain) reproduces the user's exact screenshot:
+  // the plugins page shows 全目标模式 alone.
+  const staleFace = z.object({
+    toolName: z.string().default('cybernetics'),
+    implicitTrigger: z.boolean().default(true),
+    roles: z.dict(z.object({ provider: z.string(), model: z.string() })),
+    taskAgentModel: z.string().default(''),
+    verifyAgentModel: z.string().default(''),
+    roundsPerSubgoal: z.number().default(3),
+    maxConcurrentRounds: z.number().default(0),
+    hardGate: z.boolean().default(false),
+    gateMode: z.union(['denylist', 'allowlist']).default('denylist'),
+    gatedTools: z.array(z.string()),
+    gateAllowlist: z.array(z.string()),
+    gateAllowlistExtra: z.array(z.string()),
+    allGoalsMode: z.boolean().default(false).volatile(),
+  })
+  const staleForm = volatileForm57(staleFace)
+  assert.deepEqual(Object.keys(staleForm.dict ?? {}), ['allGoalsMode'],
+    'a host serving the pre-0.7.7 runtime shows exactly one field (全目标模式) — the observed panel')
+  // REAL-MODULE cross-check (conditional, same portability pattern as test
+  // 58's inode probe): when the host profile is present, drive the host's OWN
+  // volatileForm/isVolatilePath (dsh-settings/lib/types/schema.js — the exact
+  // functions describe()/write() call) against the live Config schema instead
+  // of the replicas above. This pins the simulation to the shipped host code:
+  // any future host change to the serving/write gates fails here first.
+  const hostSchemaJs = '/Users/mars/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-settings/lib/types/schema.js'
+  if (existsSync(hostSchemaJs)) {
+    const hostSchema = await import(pathToFileURL(hostSchemaJs).href)
+    const hostForm = hostSchema.volatileForm(Config)
+    assert.notEqual(hostForm, undefined, 'host volatileForm serves a form for the current schema')
+    assert.deepEqual(Object.keys(hostForm.dict ?? {}).sort(),
+      ['allGoalsMode', 'maxConcurrentRounds', 'roles', 'roundsPerSubgoal', 'taskAgentModel', 'verifyAgentModel'],
+      'the REAL host volatileForm serves exactly the six volatile fields')
+    for (const path of [['roles', 'default', 'model'], ['roundsPerSubgoal'], ['maxConcurrentRounds'], ['taskAgentModel'], ['verifyAgentModel'], ['allGoalsMode']]) {
+      assert.equal(hostSchema.isVolatilePath(Config, path), true, `host write gate accepts ${path.join('.')}`)
+    }
+    for (const path of [['hardGate'], ['gateMode'], ['toolName'], ['implicitTrigger']]) {
+      assert.equal(hostSchema.isVolatilePath(Config, path), false, `host write gate keeps non-volatile ${path.join('.')} unwritable`)
+      assert.equal(Object.hasOwn(hostForm.dict ?? {}, path[0]), false, `host form does not serve non-volatile ${path[0]}`)
+    }
+    // The stale-runtime face through the REAL host function reproduces the
+    // one-field panel identically.
+    assert.deepEqual(Object.keys(hostSchema.volatileForm(staleFace)?.dict ?? {}), ['allGoalsMode'],
+      'real host volatileForm over the pre-0.7.7 face serves exactly 全目标模式 — the observed panel')
+  } else {
+    console.log('  (skipping the real-host volatileForm cross-check: host profile absent)')
+  }
+  console.log('✓ 57 panel fidelity: volatile placement legal, volatileForm serves all six v0.7.9 fields; stale-runtime control reproduces the one-field (全目标模式) panel — render root cause is the boot-time module cache (restart required), not the schema')
+}
+
+// 58. ROOT-INCLUDE ENTRY refusal: the exact user-observed save rejection
+//     ("dsh: profile reload requires the root Include entry") is thrown by
+//     dsh-app-boot recompose (lib/index.js:3803) when `bootstrapIncludes.get`
+//     (a module-GLOBAL WeakMap) misses the root context. bootstrapIncludes is
+//     keyed by MODULE INSTANCE: the booted CLI registers the root Include in
+//     ITS copy of dsh-app-boot, while the profile's dsh-config-editor calls
+//     reconcileProfilePatches through ITS OWN copy — two physical module
+//     instances (npm-global CLI tree vs pnpm profile tree, different inodes)
+//     means the lookup can NEVER hit, and EVERY plugin settings write dies.
+//     This test proves the mechanism and the preflight ordering that matches
+//     the observed "file untouched, fast rejection" signature.
+{
+  const ROOT = { ctx: 'root-context' }
+  const ENTRY = { id: 'include' }
+  // Two distinct instances of the dsh-app-boot module = two WeakMaps.
+  const bootCopyIncludes = new WeakMap() // the CLI's copy — boot() registers here
+  const editorCopyIncludes = new WeakMap() // the profile's copy — configEditor reads here
+  bootCopyIncludes.set(ROOT, ENTRY) // mountRootInclude: bootstrapIncludes.set(ctx, entry)
+  const editorCopyLookup = () => editorCopyIncludes.get(ROOT)
+  // configEditor.edit (dsh-config-editor lib/index.js:69-131) runs its
+  // preflight reconcileProfilePatches BEFORE reading/writing the patch file —
+  // so the miss aborts the write pre-落盘, leaving the file untouched (the
+  // observed signature: profile cordis.patch.yml mtime unchanged, fast reject).
+  const preflightReconcile = (includes) => {
+    if (includes.get(ROOT) === undefined) throw new Error('dsh: profile reload requires the root Include entry')
+    return 'reconciled'
+  }
+  const documentWritten = []
+  const editLikeConfigEditor = (includes) => {
+    preflightReconcile(includes) // line 74-75: BEFORE any document access
+    documentWritten.push('patch-row') // line 123: writeFileAtomic — never reached on miss
+  }
+  assert.throws(() => editLikeConfigEditor(editorCopyIncludes),
+    /profile reload requires the root Include entry/,
+    'dual dsh-app-boot instances: the editor copy misses the boot-registered root Include — the exact user-observed refusal')
+  assert.deepEqual(documentWritten, [],
+    'the refusal fires BEFORE the patch document write — profile file untouched, matching the observed fast-reject signature')
+  // DEDUPE CONTROL: when both sides share ONE module instance (single copy),
+  // the same write path succeeds.
+  const dedupedIncludes = bootCopyIncludes // one physical module
+  assert.doesNotThrow(() => editLikeConfigEditor(dedupedIncludes), 'a deduped dsh-app-boot copy lets the same write path proceed')
+  assert.deepEqual(documentWritten, ['patch-row'], 'the deduped write lands the patch row')
+  // REAL-ENVIRONMENT probe (conditional so the suite stays portable): the
+  // npm-global CLI tree and the pnpm profile tree hold physically distinct
+  // dsh-app-boot copies — the deployed condition this test models.
+  const cliCopy = '/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js'
+  const profileCopy = '/Users/mars/.dsh/profiles/web/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js'
+  if (existsSync(cliCopy) && existsSync(profileCopy)) {
+    const a = realpathSync(cliCopy); const b = realpathSync(profileCopy)
+    assert.notEqual(a, b, 'deployed environment: CLI-boot copy and profile-editor copy of dsh-app-boot are distinct module instances')
+  } else {
+    console.log('  (skipping the real-environment inode probe: host paths absent)')
+  }
+  console.log('✓ 58 root-include refusal: module-global bootstrapIncludes WeakMap is keyed per module copy — CLI boot copy vs profile editor copy can never meet, every settings write dies pre-write; save root cause is host module duplication (dedupe/restart assembly), not the plugin schema')
+}
+
+console.log('\nALL 58 CHECKS PASSED')

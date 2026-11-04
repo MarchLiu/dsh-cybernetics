@@ -121,9 +121,13 @@ Web 编辑器「插件」页的本插件卡片上直接配置（字段说明见 
 
 - **全目标模式**（`allGoalsMode`，volatile）：切换保存即时生效，提示段即时重挂；
 - **task/verify agent 模型**（volatile）：留空继承 session agent；
+- **递归深度 / 并行上限**（`roundsPerSubgoal` / `maxConcurrentRounds`，volatile）：同一子目标最大连续轮数、全局并行轮数上限；
+- **roles**（volatile，dict）：role → {provider, model} 的角色级模型覆盖；
 - **硬门相关**（`hardGate`/`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`，非 volatile）：保存触发插件重载。
 
-> **已知宿主缺陷**：在部分运行时上，卡片切换保存会被宿主**静默拒绝**（写不落盘、RPC 错误不上控制台）。经取证，拒绝发生在宿主 `ConfigEditor.edit` 落盘之前的预写闸门——运行中宿主装配的插件 schema 若早于 volatile 标注，宿主即以「Config field "…" is not volatile」在写前拒绝（见上游 Discussion [#12045](https://github.com/deepseek-ai/dsh/discussions/12045)）。**workaround**：重启宿主装配最新 schema + 强刷浏览器；或手工在 profile `cordis.patch.yml` 添加用户 patch 行（如 `- id: dsh-cybernetics` + `config: { allGoalsMode: true }`）后重启。v0.7.6 起卡片本身不再吞错：仍被拒时会显示宿主拒绝原文并回弹开关。详见 [docs/CHANGELOG.md](docs/CHANGELOG.md) v0.7.4–v0.7.8 各条。
+> **GUI 验证步骤**：(1) 重启宿主（`link:` 安装的 `src/` schema 只在启动时 import——不重启面板只会显示旧 schema 的字段，例如只有「全目标模式」）并强刷浏览器；(2) 打开 Web 编辑器「插件」页 → 本插件卡片/详情页，确认六个 volatile 字段（全目标模式 / task 模型 / verify 模型 / 递归深度 / 并行上限 / roles）齐全；(3) 改动任一字段保存，确认卡片不回弹且 profile `cordis.patch.yml` 出现/更新 `{id: dsh-cybernetics, name: '@mars.liu/dsh-cybernetics', config: …}` 用户 patch 行；(4) 会话里跑一轮 goal 验证新值生效（如 roundsPerSubgoal 改为 2 后同一子目标第 2 轮即暂停）。
+
+> **已知宿主缺陷（两个，均已定位）**：① 面板字段不全 = 运行时陈旧——`link:` 安装的 schema 在宿主启动时缓存，重启宿主即愈（见 [docs/CHANGELOG.md](docs/CHANGELOG.md) v0.7.10 第 1 条）。② 保存被拒并报 "dsh: profile reload requires the root Include entry" = 宿主 dsh-app-boot 双模块实例——全局 CLI（npm 树）与 profile 侧 dsh-config-editor（pnpm 树）各持一份模块拷贝，`recompose` 的模块级 WeakMap 守卫（`bootstrapIncludes`）永远 miss，**任何**插件的面板保存都在落盘前被拒；插件仓库内无法修复，需把两侧收敛到同一份模块实例（如把 profile 的 `node_modules/@deepseek-ai/dsh-app-boot` 软链到 CLI 引导用的那份拷贝）或等上游修复（CHANGELOG v0.7.10 第 2 条）。workaround：手工在 profile `cordis.patch.yml` 维护用户 patch 行（如 `- id: dsh-cybernetics` + `config: { roundsPerSubgoal: 3, allGoalsMode: true }`）后重启宿主。v0.7.6 起卡片本身不再吞错：仍被拒时会显示宿主拒绝原文并回弹开关。
 
 ### 会话内使用：`cybernetics` 工具
 
@@ -173,6 +177,7 @@ session agent 在会话内通过 `cybernetics` 工具（`toolName` 可配置）�
 | v0.5 | 双档轮次 depth（quick / full） |
 | v0.6 | append-only goals、持久执行者、多 goal 投影、板持久化与 rehydrate、控制页签执行者行 |
 | v0.7–v0.7.8 | 全量 goal 模式 + revise 自动决策树；插件页配置卡片；volatile 模型字段；写入落点取证与保存失败可见化（离线测试 56 项） |
+| v0.7.9–v0.7.10 | roles / roundsPerSubgoal / maxConcurrentRounds volatile 化；基于真实宿主源码定位面板渲染（陈旧运行时）与保存拒绝（dsh-app-boot 双模块实例 WeakMap miss）双根因（离线测试 58 项） |
 
 完整逐版记录与 dogfooding 实测修正（含 2026-11-02 启动链路四次修正、页签渲染两连修等）见 [docs/CHANGELOG.md](docs/CHANGELOG.md)。
 

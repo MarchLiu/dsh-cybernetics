@@ -101,6 +101,12 @@ export interface Config extends ControllerConfig {
    * Off (default) keeps the v0.6 implicit-trigger behavior exactly unchanged.
    */
   allGoalsMode?: boolean
+  /**
+   * Max concurrent rounds across ALL sessions (default 0 = unlimited): a new
+   * round (blocking, 'start' or 'revise') is refused while this many rounds
+   * are in flight, protecting the host from parallel-agent storms.
+   */
+  maxConcurrentRounds?: number
 }
 
 // Under the host's 0.1.7 settings model, an exported schemastery `Config`
@@ -110,10 +116,12 @@ export interface Config extends ControllerConfig {
 // pattern). At least one field must be `.volatile()` for the page to be
 // served at all; a volatile edit is committed into the running fiber's
 // reference without a remount and announced via `loader/volatile-update`.
-// allGoalsMode is volatile so the panel toggle is live; hardGate and the
-// gate/roles fields are deliberately non-volatile — they change structural
-// wiring (tool stripping listener, per-role routing), so an edit remounts
-// the row, which is the correct behavior for them.
+// The user-facing knobs (taskAgentModel / verifyAgentModel / roles /
+// roundsPerSubgoal / maxConcurrentRounds / allGoalsMode) are all volatile so
+// they are visible AND writable in the settings panel and take effect on the
+// next goal round. hardGate and the gate fields stay non-volatile: the panel
+// cannot write them (they change structural wiring — tool stripping listener —
+// so they belong in the profile config document instead).
 export const Config = z.object({
   /** Model-facing tool name. */
   toolName: z.string().default('cybernetics').description('模型侧工具名（缺省 cybernetics）。'),
@@ -123,7 +131,7 @@ export const Config = z.object({
   roles: z.dict(z.object({
     provider: z.string(),
     model: z.string(),
-  })).description('按角色的子 agent provider/model 覆盖：role -> {provider, model}（如 default/verify/triage/frontend）。'),
+  })).volatile().description('按角色的子 agent provider/model 覆盖：role -> {provider, model}（如 default/verify/triage/frontend）。保存后下一轮 goal 即生效，无需重载。'),
   /**
    * Flat task-agent model override ("provider/model" or a bare model name).
    * Empty = inherit the session agent. Merged over roles.default at wiring
@@ -140,6 +148,17 @@ export const Config = z.object({
   taskAgentModel: z.string().default('').volatile().description('task agent 模型覆盖（「provider/model」或裸模型名）；留空 = 与 session agent 一致。保存后下一轮 goal 即生效，无需重载。'),
   /** Flat verify-agent model override; same format, fallback and volatile semantics as taskAgentModel. */
   verifyAgentModel: z.string().default('').volatile().description('verify agent 模型覆盖（「provider/model」或裸模型名）；留空 = 与 session agent 一致。保存后下一轮 goal 即生效，无需重载。'),
+  /**
+   * Max consecutive rounds per subgoal before the loop pauses for the user
+   * (controller round-cap, default 3). Volatile: read per round start, so the
+   * panel edit governs the very next goal round without a remount.
+   */
+  roundsPerSubgoal: z.number().default(3).volatile().description('同一子目标的最大连续轮数（递归深度上限，缺省 3）：超过即暂停并升级给用户。保存后下一轮 goal 即生效，无需重载。'),
+  /**
+   * Max concurrent rounds across all sessions (default 0 = unlimited).
+   * Volatile: enforced at every launch, live on the next tool call.
+   */
+  maxConcurrentRounds: z.number().default(0).volatile().description('全局并行轮数上限（缺省 0 = 不限）：在跑轮数达到上限时拒绝启动新一轮，防止并行风暴。保存后即时生效，无需重载。'),
   /** Hard orchestration gate (default false). */
   hardGate: z.boolean().default(false).description('硬编排门：装配期从顶层 session agent 摘除执行工具，所有改动必须经 cybernetics goal + task agent。修改会触发插件重载。'),
   /** Tool names hidden in denylist mode (default DEFAULT_GATED_TOOLS). */
@@ -862,15 +881,31 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       // Both fields are volatile (v0.7.7), so the loader hands back live
       // references — unwrap through readConfigField ('' = inherit) exactly
       // like the allGoalsMode live ref above.
-      const roleOverrides: RolesConfig = { ...(config.roles ?? {}) }
+      // roles is volatile too: unwrap the live reference before spreading,
+      // otherwise the ref object itself would become the override.
+      const roleOverrides: RolesConfig = { ...readConfigField(config.roles, {} as RolesConfig) }
       const taskSpec = parseAgentModelSpec(readConfigField(config.taskAgentModel, ''))
       if (taskSpec) roleOverrides.default = { ...roleOverrides.default, ...taskSpec }
       const verifySpec = parseAgentModelSpec(readConfigField(config.verifyAgentModel, ''))
       if (verifySpec) roleOverrides.verify = { ...roleOverrides.verify, ...verifySpec }
       const controllerConfig: ControllerConfig = {
         roundScriptPath: config.roundScriptPath ?? fileURLToPath(new URL('../workflows/round.js', import.meta.url)),
-        roundsPerSubgoal: config.roundsPerSubgoal,
+        // Volatile schema fields surface as live references — unwrap per round
+        // start so a settings-panel edit governs the next round (0/undefined
+        // falls back to the controller's built-in default).
+        roundsPerSubgoal: Math.max(1, Math.floor(readConfigField(config.roundsPerSubgoal, 3))),
         roles: roleOverrides,
+      }
+      // Concurrent-round cap (0 = unlimited), read live at every launch.
+      const maxConcurrentRounds = () => {
+        const raw = Math.floor(readConfigField(config.maxConcurrentRounds, 0))
+        return Number.isFinite(raw) && raw > 0 ? raw : 0
+      }
+      const concurrentCapError = () => {
+        const cap = maxConcurrentRounds()
+        return cap > 0 && running.size >= cap
+          ? `cybernetics: 已有 ${running.size} 个运行中的轮，达到全局并行上限 ${cap}（可在设置面板调高 maxConcurrentRounds 或等待完成）`
+          : undefined
       }
       const objective = loop.objective ?? goalView?.objective ?? loop.title ?? ''
 
@@ -904,6 +939,8 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
        * goal's status is already 'running' when this is called.
        */
       const launchBackground = async (target: LoopState): Promise<{ round: number }> => {
+        const blocked = concurrentCapError()
+        if (blocked) throw new Error(blocked)
         const controller = new AbortController()
         if (exec.signal) {
           if (exec.signal.aborted) controller.abort()
@@ -1046,6 +1083,8 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       if (running.has(loop.goalId!)) {
         throw new Error(`cybernetics: goal "${loop.goalId}" already has a round in flight — collect or cancel it first`)
       }
+      const blocked = concurrentCapError()
+      if (blocked) throw new Error(blocked)
       loop.status = 'running'
       // In-flight visibility: the blocking 'round' path can run for minutes, so
       // publish before awaiting it (the async path needs no second publish —

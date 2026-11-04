@@ -39,3 +39,9 @@
         gateAllowlistExtra: [spawn_teammate, send_message, interrupt_agent]
         # gateAllowlist: [...]   # override the built-in survival set
         # gateMode: denylist + gatedTools: [bash, edit, write]  # legacy stance
+        #
+        # GUI 配置（v0.7.9+）：六个 volatile 字段（allGoalsMode / taskAgentModel /
+        # verifyAgentModel / roundsPerSubgoal / maxConcurrentRounds / roles）出现在
+        # Web「插件」页卡片；volatile 保存落为 profile cordis.patch.yml 的用户 patch
+        # 行（{id, name, config}，无 insert）并即时生效。注意：link: 安装的 src/
+        # schema 只在宿主启动时 import——改 schema 后必须重启宿主，面板才会出现新字段。
