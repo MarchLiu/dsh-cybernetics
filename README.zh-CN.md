@@ -74,12 +74,12 @@ goal 一经存在不再原地修改。`revise` 是唯一的改目标动词（必
 
 ### 插件页配置卡片
 
-`src/index.ts` 导出 schemastery `Config` schema，它决定宿主设置传输层服务与接受哪些字段（仅 `.volatile()` 字段）；卡片 UI 本身由 `lib/client.js` 绘制，注册 `plugins.item` / `plugins.bundle.config` / `plugins.row.config` 三个席位（bundle 详情页与组件详情页都能配置）。**这张卡片是本插件设置在 GUI 中的唯一 surface**：宿主「插件」页对插件配置完全交给 slot 卡片渲染、自身一个字段都不画，@deepseek-ai/dsh-client-ui-settings 只提供 `configForms` 服务（传输层）而非通用字段渲染器——因此 v0.8.1 起卡片渲染全部 volatile 字段的可编辑控件（v0.8.2 起共七个）：全目标模式开关、task/verify/triage agent 模型文本框、子目标轮数上限与并行轮数上限数字框、roles 表（JSON 对象域，写入前校验）。volatile 字段保存即时生效（loader 直接提交进运行实例，不 remount）；非 volatile 字段保存触发插件行 remount（需宿主重载）。写入落点是用户 patch 行（profile `cordis.patch.yml` 的 `{id, name, config}` 行）。
+`src/index.ts` 导出 schemastery `Config` schema，它决定宿主设置传输层服务与接受哪些字段（仅 `.volatile()` 字段）；卡片 UI 本身由 `lib/client.js` 绘制，注册 `plugins.item` / `plugins.bundle.config` / `plugins.row.config` 三个席位（bundle 详情页与组件详情页都能配置）。**这张卡片是本插件设置在 GUI 中的唯一 surface**：宿主「插件」页对插件配置完全交给 slot 卡片渲染、自身一个字段都不画，@deepseek-ai/dsh-client-ui-settings 只提供 `configForms` 服务（传输层）而非通用字段渲染器——因此 v0.8.1 起卡片渲染全部 volatile 字段的可编辑控件（v0.8.4 起共六个）：全目标模式开关、task/verify/triage agent 模型文本框、子目标轮数上限与并行轮数上限数字框。`roles` 表**不在卡片上**（v0.8.4）：在 GUI 里手工编辑 JSON 对象对用户不友善，roles 改为非 volatile——面板不再服务也不接受写入——改经 profile 配置 yaml 直接配置（见下文「roles 高级配置」小节）。volatile 字段保存即时生效（loader 直接提交进运行实例，不 remount）；非 volatile 字段保存触发插件行 remount（需宿主重载）。写入落点是用户 patch 行（profile `cordis.patch.yml` 的 `{id, name, config}` 行）。
 
 ### agent 模型选择
 
 - **扁平字段**：`taskAgentModel` / `verifyAgentModel` / `triageAgentModel`（「provider/model」或裸模型名，volatile）；**留空 = 与 session agent 一致**（继承语义）。保存后下一轮 goal 即生效，无需重载。triage 角色读 task/verify 结果输出本轮收敛决策（met/continue/human-input 等）；quick 轮完全跳过 verify/triage，`triageAgentModel` 只在 full 轮生效。v0.8.3 起三个字段为下拉加持：`<datalist>` 由宿主实时模型目录驱动（`remote.session.modelCatalog`——与官方「子智能体」设置页同一数据源，`llm/adapters-updated` 事件时刷新），同时保留手工输入（datalist 输入框接受任意文本）。配置值已不在目录中（如该模型订阅被删除）时，卡片显示「不可用——运行时将回退到 session agent 模型」警告并附一键**清除**（显式 unset 写入——绝不静默改写已存配置）；运行时回退即 v0.8.0 的 `callRoleAgent`（AGENT_START `no subagent provider registered` 覆盖 provider 被删；模型级「model not found / unknown model」报错已并入 v0.8.3 的可用性模式表）。
-- **roles 表**：按角色覆盖 sub agent 模型（`default`/`verify`/`triage` 固定槽位 + 任意命名任务角色）：
+- **roles 表**：按角色覆盖 sub agent 模型（`default`/`verify`/`triage` 固定槽位 + 任意命名任务角色）。v0.8.4 起属高级配置，直接编辑 profile 配置 yaml 维护，不再上设置卡片——见下方「roles 高级配置」小节：
 
 ```yaml
 - id: dsh-cybernetics
@@ -126,10 +126,29 @@ Web 编辑器「插件」页的本插件卡片上直接配置——v0.8.1 起卡
 - **全目标模式**（`allGoalsMode`，volatile）：开关，保存即时生效，提示段即时重挂；
 - **task/verify/triage agent 模型**（`taskAgentModel` / `verifyAgentModel` / `triageAgentModel`，volatile）：下拉加持的文本框——从实时系统模型列表选择（显示 `providerName · provider/model`）或手工输入「provider/model」/裸模型名，回车或移开焦点即保存，留空继承 session agent（triage = 收敛决策角色，仅 full 轮启用）。配置值不在实时模型列表中时显示不可用警告（运行时回退到 session agent 模型）并附一键清除；
 - **递归深度 / 并行上限**（`roundsPerSubgoal` 整数 ≥1 / `maxConcurrentRounds` 整数 ≥0，volatile）：数字框，回车或失焦保存，留空恢复默认（`unset` 写入）；
-- **roles**（volatile，dict）：JSON 对象域（`role → {provider, model}`），写入前校验形状，点「应用」保存；
+- **roles 高级配置**（`roles`，非 volatile）：profile 配置 yaml 直接维护——见下方小节；
 - **硬门相关**（`hardGate`/`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`，非 volatile）：不进入卡片，请在 profile 配置文档中维护（保存触发插件重载）。
 
-> **GUI 验证步骤**：(1) 重启宿主并强刷浏览器——`lib/client.js` 改动只在宿主启动时随客户端模块图加载（不重启卡片仍是旧字段集，例如只有「全目标模式」），`link:` 安装的 `src/` schema 同样只在启动时 import；(2) 打开 Web 编辑器「插件」页 → 本插件卡片/详情页，确认七个 volatile 字段（全目标模式 / task 模型 / verify 模型 / triage 模型 / 递归深度 / 并行上限 / roles）齐全；(3) 改动任一字段（回车/失焦；roles 点「应用」），确认控件不回弹且 profile `cordis.patch.yml` 出现/更新 `{id: dsh-cybernetics, name: '@mars.liu/dsh-cybernetics', config: …}` 用户 patch 行；(4) 会话里跑一轮 goal 验证新值生效（如 roundsPerSubgoal 改为 2 后同一子目标第 2 轮即暂停）。
+### roles 高级配置（profile yaml，agent 指导）
+
+`roles` 字段把子 agent 角色映射到 `{provider, model}` 覆盖（`default`/`verify`/`triage` 固定槽位 + 任意命名任务角色，如 `frontend`）。**何时需要它？** 卡片上的三个扁平字段已覆盖固定三角色；只有要给**命名任务角色**（轮启动时经 `role` 参数传入的角色，如 `writer`/`frontend`）分模型、或需要面板没有覆盖的 provider+model 组合时才需要直接配 `roles`。
+
+v0.8.4 起该字段**不在 GUI 编辑**——在设置卡片里手工编辑 JSON 对象对用户不友善。请直接编辑 profile 配置 yaml（profile 的 `cordis.patch.yml` 用户 patch 行，或 profile 自身配置文档）：
+
+```yaml
+# profile 的 cordis.patch.yml——用户 patch 行：
+- id: dsh-cybernetics
+  name: '@mars.liu/dsh-cybernetics'
+  config:
+    roles:
+      default:  { provider: zai-coding-cn, model: glm-5.3 }
+      verify:   { provider: zai-coding-cn, model: glm-5.3 }
+      frontend: { provider: zai-coding-cn, model: glm-5-turbo }
+```
+
+保存后**需宿主重载**（重启宿主）才生效——roles 已不是 volatile 字段，没有面板实时写入路径。session agent 可以指导你完成：让它帮你改 yaml 行，然后重启宿主。运行时行为不变——扁平面板字段合并覆盖 `roles.default`/`roles.verify`/`roles.triage`，命名角色原样透传，每个角色保留 v0.8 可用性回退。
+
+> **GUI 验证步骤**：(1) 重启宿主并强刷浏览器——`lib/client.js` 改动只在宿主启动时随客户端模块图加载（不重启卡片仍是旧字段集，例如只有「全目标模式」），`link:` 安装的 `src/` schema 同样只在启动时 import；(2) 打开 Web 编辑器「插件」页 → 本插件卡片/详情页，确认六个卡片字段（全目标模式 / task 模型 / verify 模型 / triage 模型 / 递归深度 / 并行上限）齐全、且无 roles JSON 文本域；(3) 改动任一字段（回车/失焦），确认控件不回弹且 profile `cordis.patch.yml` 出现/更新 `{id: dsh-cybernetics, name: '@mars.liu/dsh-cybernetics', config: …}` 用户 patch 行；(4) 会话里跑一轮 goal 验证新值生效（如 roundsPerSubgoal 改为 2 后同一子目标第 2 轮即暂停）。
 
 > **已知宿主缺陷（均已定位）**：① *卡片字段不全* 曾有两层叠加原因：v0.8.1 之前卡片只渲染 `allGoalsMode`（宿主没有通用字段渲染器——本版本已修复，重启宿主 + 刷新浏览器后生效）；早于 v0.7.7 启动的宿主其服务 schema 本身只有 `allGoalsMode` 是 volatile（运行时陈旧——`link:` 安装的 schema 在宿主启动时缓存，重启即愈，见 [docs/CHANGELOG.md](docs/CHANGELOG.md) v0.7.10 第 1 条）。② 保存被拒并报 "dsh: profile reload requires the root Include entry" = 宿主 dsh-app-boot 双模块实例——全局 CLI（npm 树）与 profile 侧 dsh-config-editor（pnpm 树）各持一份模块拷贝，`recompose` 的模块级 WeakMap 守卫（`bootstrapIncludes`）永远 miss，**任何**插件的面板保存都在落盘前被拒；插件仓库内无法修复，需把两侧收敛到同一份模块实例（如把 profile 的 `node_modules/@deepseek-ai/dsh-app-boot` 软链到 CLI 引导用的那份拷贝）或等上游修复（CHANGELOG v0.7.10 第 2 条）。workaround：手工在 profile `cordis.patch.yml` 维护用户 patch 行（如 `- id: dsh-cybernetics` + `config: { roundsPerSubgoal: 3, allGoalsMode: true }`）后重启宿主。v0.7.6 起卡片本身不再吞错：仍被拒时会显示宿主拒绝原文并回弹控件。
 
@@ -167,7 +186,7 @@ session agent 在会话内通过 `cybernetics` 工具（`toolName` 可配置）�
 ## 已知限制
 
 1. **settings 写入的宿主缺陷**：如「插件页配置」一节所述，该运行时上卡片保存可能被宿主在落盘前拒绝（上游 [#12045](https://github.com/deepseek-ai/dsh/discussions/12045)）；workaround：重启宿主 + 强刷浏览器，或手工 patch 行 + 重启。
-2. **volatile 与非 volatile 字段的保存语义差异**：volatile 字段（`allGoalsMode`、`taskAgentModel`、`verifyAgentModel`、`triageAgentModel`、`roles`、`roundsPerSubgoal`、`maxConcurrentRounds`）保存即时生效、不 remount；非 volatile 字段（`hardGate`、`gateMode`、`gatedTools`、`gateAllowlist*`、`toolName`、`implicitTrigger`）保存触发插件行 remount，需宿主重载完成。且宿主设置表单只服务也只接受 volatile 路径——运行中宿主的 schema 过旧时，volatile 写也会被拒（重启即愈）。
+2. **volatile 与非 volatile 字段的保存语义差异**：volatile 字段（`allGoalsMode`、`taskAgentModel`、`verifyAgentModel`、`triageAgentModel`、`roundsPerSubgoal`、`maxConcurrentRounds`）保存即时生效、不 remount；非 volatile 字段（v0.8.4 起的 `roles`、`hardGate`、`gateMode`、`gatedTools`、`gateAllowlist*`、`toolName`、`implicitTrigger`）保存触发插件行 remount，需宿主重载完成。且宿主设置表单只服务也只接受 volatile 路径——运行中宿主的 schema 过旧时，volatile 写也会被拒（重启即愈）。
 3. **`link:` 安装注意事项**：客户端 bundle 的注册 id 必须等于 package.json 的 `name`（`@mars.liu/dsh-cybernetics`）；loader 行 id 可用短名 `dsh-cybernetics`。插件需挂在本 profile 的**顶层** loader entries（客户端扫描只枚举顶层行）；`src/` 改动需宿主重载、`lib/` 改动需重启宿主 + 刷新浏览器。
 4. 其他协议边界（硬门在装配层不在执行层、dsh-goal 焦点槽不随 superseded 迁移等）见 [docs/protocol.md](docs/protocol.md) 各「已知边界」小节。
 
