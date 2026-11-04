@@ -4,6 +4,37 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.8.7（2026-11-04）：模型下拉 focus-parking（lib/client.js，仅客户端）
+
+**问题**：原生 datalist 按输入框当前文本过滤选项——已配置模型的字段聚焦后下拉只剩当前那一个模型，用户看不到完整目录，容易误以为没有别的选择。改进方向不是自绘下拉，而是顺应原生 datalist 的过滤语义。
+
+- **聚焦占位（focus parking）**：model 字段（task/verify/session/triage 共四个）聚焦或点击时，把已有文本收进 `placeholder`（value 收进占位符、输入框清空），datalist 因此展开全部系统模型；焦点离开（blur/Enter/Escape）且未编辑时恢复占位文本并**不写任何东西**——只是看看列表永远不会把已配置模型置空。
+- **编辑语义保持**：占位状态下输入或选中选项即视为真实编辑，走 v0.8.1 的常规提交路径（blank = unset，回车提交）；`hadDraft` 区分占位文本是未提交草稿（保留草稿）还是快照值（恢复即清草稿）。Escape 关闭列表后值已恢复但字段仍持有焦点，此时 `onClick` 也挂 parkCurrent，保证再点一次仍能展开全列表（不再触发 onFocus）。
+- **提示文案**（双语 `settings.modelFieldHint` / `settings.triageModelHint`）同步改写：点开输入框即可看到全部可选模型，已有值先收进占位符、离开且未改动不会保存。
+- **生效手段**：`lib/client.js` 改动，重启宿主 + 刷新浏览器后生效。`lib/` 是源码同目录（构建产物即源），无需额外构建。
+
+## v0.8.9（2026-11-04）：relay 卡片回退真因修复 + relay-log 落盘
+
+- **根因修复**（src/index.ts）：问题卡片回退改用 `ctx.get('userQuestions')` 解析宿主服务（免 inject 的反射式读取，与 dsh-plan-mode 同法）。旧构建用普通属性访问 `ctx.userQuestions`——cordis 对未 inject 服务的属性访问直接抛 "cannot get property without inject"（cordis/lib/index.js:88-96），try/catch 吞掉后立即返回终态 `unavailable`，这就是 v0.8.8 真机「原生面板 unavailable 后卡片从未出现、12ms 内终结」的直接原因。
+- **relay-log 落盘**：每次 relay 决策在 host logger 行之外追加一条 JSON 到 `<workspace>/.cybernetics/relay-log.jsonl`（`{ts, root, path, outcome, elapsedMs}`，fire-and-forget 不影响审批链路），验收无需宿主 stdout / 浏览器 console 即可读取 path/outcome。
+- **测试**：test/relay-host-probe.mjs 新增场景 5——cordis 忠实 stub（属性访问抛错、仅 ctx.get 可达）下卡片回退依然可达用户 + relay-log.jsonl 落盘断言；test/v03-offline.mjs 全部通过。
+- **文档**：README 双语排障指引更新（relay-log 读取方法与「零记录 = 请求没到 relay」判据）。
+
+## v0.8.6（2026-11-04）：hardGate 门禁语义默认安全 + guidance 与模式一致（P1）
+
+**问题（cyb-3e1ab616 诊断核实）**：`gateMode` 在 schema 里 `.default('denylist')`，而 `DEFAULT_GATED_TOOLS` 只有 `['bash','edit','write']`——任何只写 `hardGate: true` 的部署都得到一道半门：`bsk_*`、`taskboard_create`、`schedule_create`、`farm_start`、`uno_*`、`ppt_create`、`config_restore` 等写工具全部存活；另一会话因此退化成 810 次 `bsk_session` start/stop 死循环。同时 `HARD_GATE_GUIDANCE` 在 denylist 模式下仍宣称“所有改世界的工具结构性不可用”，属假陈述。
+
+- **`src/index.ts` schema**：`gateMode` 去掉 `.default('denylist')`，改为无默认的可选字段（schemastery 对未设置值保留 `undefined`，离线实测 `validate({})` 结果为 `{hardGate:true}`，不含 gateMode）。**用户沉默不再被默认值抹掉**，apply() 才做推导。
+- **`src/index.ts` apply()**：新增 `resolveGateMode(config, hardGate)`——显式 `'denylist'`/`'allowlist'` 原样尊重；未设置时 `hardGate ? 'allowlist' : 'denylist'`。`hardGate=false` 时不装任何门禁监听，行为与旧版完全一致。装配过滤与 `tools/pre-execute` 分发拒绝共用同一个 `allowlistMode`。
+- **`HARD_GATE_GUIDANCE` 按模式生成**：拆成 `HARD_GATE_GUIDANCE_ALLOWLIST`（保留“所有改世界的工具 STRUCTURALLY unavailable”的强表述）与 `HARD_GATE_GUIDANCE_DENYLIST`（如实说明“只摘 gatedTools，bsk_*/taskboard_*/schedule_*/farm_*/uno_*/ppt_*/config_restore 等仍可调用，这是 PARTIAL 而非结构性门”，并明确禁止“换一个写工具绕过编排流程”）。`registerGuidanceSection()` 在生成时按解析后的模式拼接；hardGate/gateMode 非 volatile，重载后重新生成即可（沿用 volatile 重建模式，不受影响）。
+- **文档**：README / README.zh-CN「硬门」小节重写——默认语义（hardGate 伴生 allowlist）、`gateMode` 无默认值、显式 denylist 的残留风险与仍可用工具清单（bsk_*/taskboard_*/schedule_*/farm_*/uno_*/ppt_*/config_restore/subagent 等）、以及“denylist 永远不可能完备（集合随插件增长）”。
+- **测试**：离线测试增至 **71 项**——新增 16b 覆盖三种组合：(a) `hardGate:true` 无 `gateMode` → allowlist 生效（长尾写工具在装配期移除且分发期 deny）；(b) `hardGate:true + gateMode:'denylist'` → 仅 bash/edit/write 被摘，farm_start 仍在分发层放行（尊重显式配置、不静默升级）；(c) `hardGate:false` → 无门禁监听、无 HARD GATE guidance。用例同时断言双模式 guidance 文案：allowlist 含 `(allowlist mode)` + `STRUCTURALLY unavailable`；denylist 含 `(denylist mode)` + `gatedTools` + `PARTIAL, not structural`，且**不含** `STRUCTURALLY unavailable` 假陈述；另加 schema 断言 `validate({})` 的 `gateMode` 为 `undefined`、显式 denylist 经校验仍为 denylist。既有 70 项全过。
+- **生效手段**：`src/` 改动，**重启 dsh web（宿主重载）后生效**。profile 端 `/Users/mars/.dsh/profiles/web/node_modules/dsh-cybernetics` 是指向源码目录的软链，无需复制；`cordis.patch.yml` 未改动（其中已显式 `gateMode: allowlist`）。
+
+## v0.8.5（2026-11-04）：hardGate 子代理审批透传（`gateApprovalRelay`，最后一跳修复）
+
+**问题**：宿主在委派边界把子代理审批策略钉死为 `never`（`dsh-subagent/lib/index.js:413` `captureDelegatedPolicyOverrides`；`dsh-user-approval/lib/index.js:175` 在 waterfall 之前直接 `rejected`），task agent 的沙箱越权请求到不了用户。**第一跳**：`agent/created` 时给子代理 session 追加 `approval/policy {policy:'ask'}`（真机证据：本任务子代理 session 日志 seq 2 为 `never`/`source:delegation`，seq 3 为插件追加的 `ask`，相隔 52 ms）。**最后一跳（本轮修复）**：原实现把 `approval/request` answerer 注册在内层、先 `next()` 给原生链一个限时窗口——但宿主 `api-remotes` 在启动时（早于所有用户插件）注册了 `approval/request` 转发器（`dsh-api-remotes/lib/index.js:21-28,147,233`），浏览器审批 answerer（`dsh-client-ui-approval/lib/client.js:284`）claim 子代理请求后等待一张"用户看不见的子会话面板"且永不 `next()`；cordis waterfall 由外向内执行（`cordis/lib/index.js:317-325`），内层 relay 因此**永远轮不到执行**，子代理只能挂死。改为 `{ prepend: true }` 最外层接管：沿 `parentSession` 链解析顶层活祖先，用宿主自己的 `ApprovalService.request` 在**用户正在看的会话**上重新发起请求（原生"允许一次/拒绝"面板 + 该 session 的 `approval/asked`/`approval/decided` 审计对，不转发子代理 callId），顶层回合已关闭时回退同一 agent 的 `ask_user_question` 卡片，无活顶层 agent 再回落原生链。旧的 `gateApprovalRelayTimeoutMs` 竞态窗口字段删除（relay 不再与原生链赛跑，等待语义与普通审批一致，由调用方的 signal/超时取消）。**验证**：离线测试 70 重写为最外层注册 + child→mid→root 攀爬 + 原生面板/问题/原生链三层回退 + 排序回归与负向对照；新增 `test/relay-host-probe.mjs` 用真机 cordis + 真机 `ApprovalService` + 真实插件 `apply()` 端到端跑通（子代理请求只落到顶层会话面板、隐藏子会话面板 0 次 claim；顶层拒绝/回合关闭回退均验证）。**生效手段**：`src/` 改动，宿主重载后生效（运行中的宿主仍加载旧构建，需重载/重启才能实测 GUI 弹窗）。
+
 ## v0.8.4（2026-11-04）：配置卡片移除 roles JSON 编辑项（roles 改经 profile yaml 高级配置）
 
 **决策理由（记录在案）**：v0.8.1 起 roles 以 JSON 文本域 +「应用」按钮的形式上卡片，用户实测反馈：在 GUI 卡片里手工编辑一个 JSON 对象（`role → {provider, model}`）对用户不友善——JSON 语法错误校验、转义、role 名拼写全暴露给用户。roles 能力本身保留在 schema/运行时（命名角色进阶场景仍可用），但 GUI 不再暴露；确需配置时由 agent 指导用户直接编辑 profile 配置 yaml（用户 patch 行），README/README.zh-CN 各新增「roles 高级配置」小节记录字段位置示例与重载要求。

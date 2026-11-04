@@ -357,6 +357,109 @@ let goalId
   console.log('✓ 16 gateAllowlistExtra: team verbs join the default allowlist')
 }
 
+// 16b. v0.8.6 default-safe gate semantics + mode-accurate guidance:
+//      hardGate:true WITHOUT gateMode must resolve to allowlist (structural);
+//      an explicit gateMode:'denylist' is still honored verbatim (partial);
+//      hardGate:false installs no gate; guidance must state the real mode and
+//      never repeat the pre-v0.8.6 false "all change tools are unavailable"
+//      claim while denylist leaves bsk_*/taskboard_*/... callable.
+{
+  const rootAgent = { id: 'agent-root' }
+  const mkCtx = (listeners, sections) => ({
+    tools: { register: () => () => {} },
+    systemPrompt: { section: (s) => { sections.push(s); return () => {} }, getSectionOrder: () => 0 },
+    goals: { get: () => null },
+    workingDirectory: { get: () => root },
+    agentPresets: { serviceFor: () => undefined },
+    agents: { roots: () => [rootAgent] },
+    on: (event, fn) => { listeners.push({ event, fn }); return () => {} },
+  })
+  const longTailWrites = [
+    'bash', 'edit', 'write',
+    'farm_unregister', 'farm_start', 'taskboard_create', 'taskboard_update',
+    'schedule_create', 'bsk_session', 'uno_edit', 'ppt_create', 'config_restore', 'subagent',
+  ]
+  const safeTools = ['read', 'cybernetics', 'create_goal', 'taskboard_list', 'browser_snapshot']
+  const allNames = [...longTailWrites, ...safeTools]
+
+  // (a) hardGate:true, gateMode absent → allowlist wins (default-safe)
+  {
+    const listeners = []
+    const sections = []
+    apply(mkCtx(listeners, sections), { hardGate: true })
+    const gate = listeners.find((l) => l.event === 'system-prompt/assemble')
+    assert.ok(gate, 'default-safe: gate listener registered for hardGate:true alone')
+    const assembly = { tools: allNames.map((name) => ({ name })) }
+    await gate.fn(assembly, { scope: rootAgent }, () => assembly)
+    assert.deepEqual(assembly.tools.map((t) => t.name).sort(), safeTools.slice().sort(),
+      'hardGate:true + no gateMode → allowlist survival set (bsk_*/taskboard_*/schedule_*/farm_*/uno_*/ppt_*/config_restore removed)')
+    const exec = listeners.find((l) => l.event === 'tools/pre-execute')
+    const denied = await exec.fn({ agent: rootAgent, name: 'farm_start' }, async () => ({ kind: 'allow' }))
+    assert.equal(denied.kind, 'deny', 'default-safe: long-tail write denied at dispatch, not just hidden')
+    // The live symptom was a 121-tool top-level assembly: under the old
+    // denylist default 118 of them survived. The default allowlist collapses
+    // such an assembly to the survival set.
+    const bulk = {
+      tools: [
+        ...Array.from({ length: 119 }, (_, i) => ({ name: `bsk_tool_${i}` })),
+        { name: 'read' }, { name: 'cybernetics' },
+      ],
+    }
+    await gate.fn(bulk, { scope: rootAgent }, () => bulk)
+    assert.deepEqual(bulk.tools.map((t) => t.name).sort(), ['cybernetics', 'read'],
+      '121-tool assembly collapses to the allowlist survival set (2 kept, 119 long-tail removed)')
+    const text = sections.at(-1).text
+    assert.match(text, /HARD GATE ACTIVE \(allowlist mode\)/, 'guidance names allowlist mode')
+    assert.match(text, /STRUCTURALLY\s+unavailable/, 'allowlist guidance keeps the strong structural claim')
+  }
+
+  // (b) hardGate:true + explicit gateMode:'denylist' → honored (only gatedTools)
+  {
+    const listeners = []
+    const sections = []
+    apply(mkCtx(listeners, sections), { hardGate: true, gateMode: 'denylist' })
+    const gate = listeners.find((l) => l.event === 'system-prompt/assemble')
+    const assembly = { tools: allNames.map((name) => ({ name })) }
+    await gate.fn(assembly, { scope: rootAgent }, () => assembly)
+    assert.deepEqual(assembly.tools.map((t) => t.name).sort(),
+      allNames.filter((n) => !['bash', 'edit', 'write'].includes(n)).sort(),
+      'explicit denylist: only bash/edit/write removed; long-tail writes survive (residual risk, no silent upgrade)')
+    const exec = listeners.find((l) => l.event === 'tools/pre-execute')
+    const allowed = await exec.fn({ agent: rootAgent, name: 'farm_start' }, async () => ({ kind: 'allow' }))
+    assert.equal(allowed.kind, 'allow', 'explicit denylist: ungated long-tail write still dispatched')
+    const text = sections.at(-1).text
+    assert.match(text, /HARD GATE ACTIVE \(denylist mode\)/, 'guidance names denylist mode')
+    assert.match(text, /gatedTools/, 'denylist guidance says exactly what is removed')
+    assert.match(text, /PARTIAL, not structural/, 'denylist guidance admits the partial stance')
+    assert.ok(!/STRUCTURALLY\s+unavailable/.test(text),
+      'denylist guidance must NOT repeat the false "all change tools structurally unavailable" claim')
+    assert.match(text, /bypasses the goal loop/, 'denylist guidance still forbids routing around the loop')
+  }
+
+  // (c) hardGate:false → no gate installed, no hard-gate guidance
+  {
+    const listeners = []
+    const sections = []
+    apply(mkCtx(listeners, sections), {})
+    assert.equal(listeners.filter((l) => l.event === 'system-prompt/assemble').length, 0,
+      'hardGate:false installs no assemble gate (behavior unchanged)')
+    assert.equal(listeners.filter((l) => l.event === 'tools/pre-execute').length, 0,
+      'hardGate:false installs no execution gate')
+    assert.ok(!sections[0].text.includes('HARD GATE ACTIVE'),
+      'hardGate:false injects no hard-gate guidance')
+  }
+
+  // (d) schema leaves gateMode unset (silence preserved for apply() to resolve)
+  {
+    const silent = Config['~standard'].validate({}).value
+    assert.equal(silent.gateMode, undefined, 'schema has no gateMode default (an absent user value stays absent)')
+    assert.equal(silent.hardGate, true, 'hardGate still defaults on')
+    assert.equal(Config['~standard'].validate({ gateMode: 'denylist' }).value.gateMode, 'denylist',
+      'explicit denylist survives schema resolution (user intent preserved)')
+  }
+  console.log('✓ 16b v0.8.6 default-safe gate: hardGate alone → allowlist; explicit denylist honored verbatim; hardGate off → no gate; guidance states the real mode (no false structural claim in denylist)')
+}
+
 // 17. v0.6 projection unit: registered under `cyberneticsGoals`, folds its own
 //     whole-value events, keeps state identity for every unrelated event
 {
@@ -3541,4 +3644,281 @@ async function loadSettingsCard(formForApply) {
   console.log('✓ 69 roles advanced configuration: non-volatile schema (plain-object resolution), readConfigField dual semantics (plain object + legacy live ref), named roles survive the flat-field merge, README yaml path documented')
 }
 
-console.log('\nALL 69 CHECKS PASSED')
+// 70. v0.8.5 gateApprovalRelay: delegated-child approval relay to the
+//     TOP-LEVEL session agent's NATIVE approval panel (last-hop fix).
+//     The host pins every delegated child's approval policy to 'never'
+//     (dsh-subagent captureDelegatedPolicyOverrides → ApprovalService
+//     short-circuit 'rejected' before any answerer), so a task agent's sandbox
+//     escalation can never reach the user. Relay wiring locked here:
+//     (a) agent/created — a delegated child (session.header.origin
+//         'subagent') gets one plain `approval/policy {policy:'ask'}`
+//         appended to its session (later events win over the
+//         delegation-seeded pin); top-level agents and lineage-only forks are
+//         untouched; an append throw never fails creation.
+//     (b) approval/request — registered OUTERMOST (`prepend: true`). The host's
+//         api-remotes registers an approval/request forwarder at boot and the
+//         browser's per-session approval answerer claims a child request
+//         without ever delegating, so a listener registered later is INNER and
+//         never runs (the pre-fix last-hop defect, reproduced by the negative
+//         control below). The relay re-issues the child request ON THE
+//         TOP-LEVEL LIVE ANCESTOR through ctx.get('approval').request — the
+//         native Allow once / Reject panel of the watched conversation — with
+//         the child identity in displayReason and NO child callId.
+//     (c) fallback order: native approval panel → user-questions on the same
+//         agent (top-level turn closed) → native chain (no live top-level
+//         agent). Allow → 'allowed-once'; anything else → 'rejected'; ask
+//         delivery failure → explicit 'rejected'; aborted child run →
+//         'cancelled'.
+//     (d) root-agent requests pass straight through (next called).
+//     (e) gateApprovalRelay:false registers neither listener.
+//     (f) schema/docs: gateApprovalRelay defaults true, is non-volatile, the
+//         obsolete bounded-window field is gone, and both READMEs document the
+//         native-panel relay as config-file maintained.
+{
+  // Faithful-enough cordis waterfall: listeners run OUTERMOST-first in
+  // registration order; `prepend` unshifts; a listener that never calls next()
+  // vetoes every listener behind it (cordis/lib/index.js:317-325).
+  const waterfallBus = () => {
+    const hooks = new Map()
+    return {
+      on(event, fn, options) {
+        const opts = typeof options === 'object' && options !== null ? options : { prepend: options === true }
+        const list = hooks.get(event) ?? []
+        if (opts.prepend) list.unshift({ fn })
+        else list.push({ fn })
+        hooks.set(event, list)
+        return () => {
+          const index = list.findIndex((hook) => hook.fn === fn)
+          if (index >= 0) list.splice(index, 1)
+        }
+      },
+      run(event, request, terminal) {
+        const list = [...(hooks.get(event) ?? [])]
+        const next = (() => {
+          const step = () => {
+            const head = list.shift()
+            return head === undefined ? terminal(request) : head.fn(request, step)
+          }
+          return step
+        })()
+        return next()
+      },
+    }
+  }
+
+  const rootAgent = { id: 'session-root', session: { header: { id: 'session-root' } } }
+  const midAgent = {
+    id: 'session-mid',
+    session: { header: { id: 'session-mid', origin: 'subagent', parentSession: 'session-root', delegationDepth: 1 } },
+  }
+  const childSessionAppends = []
+  const childAgent = {
+    id: 'session-child',
+    session: {
+      header: { id: 'session-child', origin: 'subagent', parentSession: 'session-mid', delegationDepth: 2 },
+      append: (type, body) => { childSessionAppends.push({ type, body }) },
+    },
+  }
+  // A fork keeps parentSession for lineage but is an independent root: it must
+  // NOT be treated as a delegated child.
+  const forkAgent = { id: 'session-fork', session: { header: { id: 'session-fork', parentSession: 'session-root', delegationDepth: 0 } } }
+
+  const listeners = []
+  let approvalRequests = []
+  let approvalImpl = async () => 'allowed-once'
+  let askedQuestions = null
+  const baseCtx = () => ({
+    tools: { register: () => () => {} },
+    systemPrompt: { section() {}, getSectionOrder: () => 0 },
+    goals: { get: () => null },
+    workingDirectory: { get: () => root },
+    agentPresets: { serviceFor: () => undefined },
+    agents: {
+      get: (id) => {
+        if (id === 'session-root') return rootAgent
+        if (id === 'session-mid') return midAgent
+        return undefined
+      },
+      roots: () => [rootAgent],
+    },
+    get: (name) => name === 'approval'
+      ? { request: async (request) => { approvalRequests.push(request); return approvalImpl(request) } }
+      : undefined,
+    userQuestions: {
+      ask: async (request) => {
+        askedQuestions = request
+        return { answers: [{ id: request.questions[0].id, selected: ['允许一次（Allow once）'] }] }
+      },
+    },
+    on: (event, fn, options) => { listeners.push({ event, fn, options }); return () => {} },
+  })
+  const ctx70 = baseCtx()
+  apply(ctx70, { hardGate: true })
+
+  const created = listeners.find((l) => l.event === 'agent/created')
+  const relayEntry = listeners.find((l) => l.event === 'approval/request')
+  assert.ok(created && relayEntry, 'relay listeners registered under hardGate')
+  assert.deepEqual(relayEntry.options, { prepend: true },
+    'relay registered OUTERMOST — the last-hop ordering fix (api-remotes forwards earlier)')
+  const relay = relayEntry.fn
+
+  // (a) child creation flips the pinned policy; top-level + fork untouched.
+  created.fn({ agent: childAgent })
+  created.fn({ agent: rootAgent })
+  created.fn({ agent: forkAgent })
+  assert.deepEqual(childSessionAppends, [{ type: 'approval/policy', body: { policy: 'ask' } }],
+    'delegated child policy unpinned to ask, root/fork untouched')
+  created.fn({ agent: { id: 'x', session: { header: { origin: 'subagent', parentSession: 'session-root' }, append: () => { throw new Error('boom') } } } })
+
+  // (b1) the relay asks the TOP-LEVEL ancestor (child → mid → root) through the
+  //      host's native approval service; the native chain is NOT consulted.
+  let nextCalls = 0
+  const firstSignal = new AbortController().signal
+  const outNative = await relay(
+    { agent: childAgent, toolName: 'write', reason: 'write ~/.dsh/profiles/web/cordis.patch.yml', signal: firstSignal },
+    async () => { nextCalls++; return 'unavailable' },
+  )
+  assert.equal(outNative, 'allowed-once')
+  assert.equal(nextCalls, 0, 'native chain bypassed: the request goes to the watched conversation panel, not the hidden child panel')
+  assert.equal(approvalRequests.length, 1)
+  assert.equal(approvalRequests[0].agent, rootAgent, 'relay climbs to the top-level live ancestor')
+  assert.equal(approvalRequests[0].toolName, 'write')
+  assert.match(approvalRequests[0].reason, /session-child/, 'audit reason names the sub-agent')
+  assert.match(approvalRequests[0].reason, /cordis\.patch\.yml/)
+  assert.match(approvalRequests[0].displayReason.zh, /子代理/)
+  assert.match(approvalRequests[0].displayReason.zh, /write/)
+  assert.match(approvalRequests[0].displayReason.en, /Sub-agent/)
+  assert.equal(approvalRequests[0].callId, undefined, 'child ToolCallId never leaks into the parent transcript')
+  assert.equal(approvalRequests[0].signal, firstSignal, 'child cancellation lifetime is forwarded')
+
+  // (b2) the user rejects in the parent panel → explicit 'rejected'.
+  approvalImpl = async () => 'rejected'
+  const outReject = await relay({ agent: childAgent, toolName: 'bash' }, async () => { nextCalls++; return 'unavailable' })
+  assert.equal(outReject, 'rejected')
+  assert.equal(nextCalls, 0)
+
+  // (b3) top-level turn closed (approval.request throws) → user-questions on
+  //      the same agent; Allow → allowed-once, Reject → rejected.
+  approvalImpl = async () => { throw new Error('approval.request() outside an open turn') }
+  approvalRequests = []
+  const outQuestion = await relay({ agent: childAgent, toolName: 'write', reason: 'outside workspace' }, async () => 'unavailable')
+  assert.equal(outQuestion, 'allowed-once')
+  assert.equal(askedQuestions?.agent, rootAgent, 'question fallback targets the same top-level agent')
+  assert.match(askedQuestions?.questions?.[0]?.question, /write/)
+  assert.match(askedQuestions?.questions?.[0]?.detail, /outside workspace/)
+
+  ctx70.userQuestions.ask = async (request) => ({ answers: [{ id: request.questions[0].id, selected: ['拒绝（Reject）'] }] })
+  approvalImpl = async () => { throw new Error('no open turn') }
+  const outQuestionReject = await relay({ agent: childAgent, toolName: 'bash' }, async () => 'unavailable')
+  assert.equal(outQuestionReject, 'rejected')
+
+  // (b3c) v0.8.8 DESIGN-GAP FIX: the native panel answering 'unavailable'
+  //      (no client claimed the frame — the exact live failure: asked →
+  //      decided unavailable in 9 ms) is NOT terminal; the relay still falls
+  //      through to the user-questions card so the user gets a VISIBLE prompt.
+  approvalImpl = async () => 'unavailable'
+  ctx70.userQuestions.ask = async (request) => {
+    askedQuestions = request
+    return { answers: [{ id: request.questions[0].id, selected: ['允许一次（Allow once）'] }] }
+  }
+  const outUnavailable = await relay({ agent: childAgent, toolName: 'write', reason: 'outside workspace' }, async () => { nextCalls++; return 'unavailable' })
+  assert.equal(outUnavailable, 'allowed-once',
+    'native unavailable falls through to the visible question card instead of failing the child in 9ms')
+  assert.equal(nextCalls, 0, 'the native chain is still bypassed on the unavailable fall-through')
+  assert.equal(askedQuestions?.agent, rootAgent, 'the question card targets the top-level agent')
+
+  // (b3d) both channels unavailable → terminal 'unavailable' (fail-closed,
+  //      explicit, never a hang and never a silent success).
+  const savedAsk = ctx70.userQuestions.ask
+  ctx70.userQuestions = undefined
+  const outBothGone = await relay({ agent: childAgent, toolName: 'bash' }, async () => { nextCalls++; return 'unavailable' })
+  assert.equal(outBothGone, 'unavailable', 'no approval channel and no question channel → explicit terminal unavailable')
+  assert.equal(nextCalls, 0, 'terminal unavailable is answered by the relay, not passed to the native chain')
+  ctx70.userQuestions = { ask: savedAsk }
+
+  // (b4) question delivery fails → explicit 'rejected' (never silent success).
+  ctx70.userQuestions.ask = async () => { throw new Error('no answerer') }
+  const outError = await relay({ agent: childAgent, toolName: 'bash' }, async () => 'unavailable')
+  assert.equal(outError, 'rejected')
+
+  // (b5) child run already aborted → 'cancelled', no approval ask, no question.
+  approvalImpl = async () => 'allowed-once'
+  askedQuestions = null
+  approvalRequests = []
+  const outAbort = await relay({ agent: childAgent, toolName: 'bash', signal: { aborted: true } }, async () => 'unavailable')
+  assert.equal(outAbort, 'cancelled')
+  assert.equal(approvalRequests.length, 0)
+  assert.equal(askedQuestions, null)
+
+  // (b6) no live top-level agent (parent chain dead) → native chain, verbatim.
+  const orphan = { id: 'session-orphan', session: { header: { id: 'session-orphan', origin: 'subagent', parentSession: 'session-gone', delegationDepth: 1 } } }
+  let orphanNext = 0
+  const outOrphan = await relay({ agent: orphan, toolName: 'bash' }, async () => { orphanNext++; return 'unavailable' })
+  assert.equal(outOrphan, 'unavailable')
+  assert.equal(orphanNext, 1, 'no live top-level agent falls through to the native chain')
+
+  // (d) root-agent approval requests pass straight through.
+  let rootNext = 0
+  const outRoot = await relay({ agent: rootAgent, toolName: 'bash' }, async () => { rootNext++; return 'allowed-once' })
+  assert.equal(outRoot, 'allowed-once')
+  assert.equal(rootNext, 1)
+
+  // (b7) LAST-HOP REGRESSION, full chain: an api-remotes-shaped forwarder
+  //      registered BEFORE the plugin claims the request for the invisible
+  //      child panel and never delegates. The plugin's prepended relay still
+  //      answers through the top-level approval service.
+  const bus = waterfallBus()
+  let claimedByHiddenPanel = 0
+  bus.on('approval/request', () => { claimedByHiddenPanel++; return new Promise(() => {}) })
+  const busApprovals = []
+  const busCtx = { ...baseCtx(), on: bus.on, get: (name) => name === 'approval'
+    ? { request: async (request) => { busApprovals.push(request); return 'allowed-once' } }
+    : undefined }
+  apply(busCtx, { hardGate: true })
+  const raced = await Promise.race([
+    bus.run('approval/request', { agent: childAgent, toolName: 'write', reason: 'outside workspace' }, async () => 'unavailable'),
+    new Promise((resolve) => setTimeout(() => resolve('HUNG'), 100)),
+  ])
+  assert.equal(raced, 'allowed-once', 'prepended relay answers even though the earlier forwarder claimed the request')
+  assert.equal(claimedByHiddenPanel, 0, 'hidden child panel never claims: the relay answers before the forwarder')
+  assert.equal(busApprovals.length, 1)
+  assert.equal(busApprovals[0].agent, rootAgent)
+
+  // (b8) negative control: the SAME relay wired WITHOUT prepend sits behind the
+  //      hanging forwarder and never runs — the exact pre-fix last-hop defect.
+  const negative = waterfallBus()
+  negative.on('approval/request', () => new Promise(() => {}))
+  negative.on('approval/request', async () => 'allowed-once')
+  const hung = await Promise.race([
+    negative.run('approval/request', { agent: childAgent, toolName: 'write' }, async () => 'unavailable'),
+    new Promise((resolve) => setTimeout(() => resolve('HUNG'), 40)),
+  ])
+  assert.equal(hung, 'HUNG', 'an inner relay is unreachable behind the boot-time forwarder (reproduced)')
+
+  // (e) opt-out registers neither listener.
+  const listenersOff = []
+  const ctxOff = { ...baseCtx(), agents: { get: () => undefined, roots: () => [] }, on: (event, fn, options) => { listenersOff.push({ event, options }); return () => {} } }
+  apply(ctxOff, { hardGate: true, gateApprovalRelay: false })
+  assert.equal(listenersOff.filter((l) => l.event === 'agent/created' || l.event === 'approval/request').length, 0)
+
+  // (f) schema defaults + docs (both languages).
+  const parsed = Config({ toolName: 'cybernetics' })
+  assert.equal(parsed.gateApprovalRelay, true, 'gateApprovalRelay defaults true')
+  assert.equal('gateApprovalRelayTimeoutMs' in Config({ toolName: 'cybernetics' }), false,
+    'the obsolete bounded-window field is gone (relay is not a race)')
+  const indexSrc70 = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.match(indexSrc70, /gateApprovalRelay: z\.boolean\(\)\.default\(true\)/, 'schema field present, default true, non-volatile (no .volatile())')
+  assert.match(indexSrc70, /\{ prepend: true \}/, 'relay listener registered with prepend:true in source')
+  assert.doesNotMatch(indexSrc70, /gateApprovalRelayTimeoutMs/, 'no stale bounded-window field in source')
+  for (const file of ['../README.md', '../README.zh-CN.md']) {
+    const md = await readFile(new URL(file, import.meta.url), 'utf8')
+    assert.match(md, /gateApprovalRelay/, `${file} documents gateApprovalRelay`)
+    assert.match(md, /prepend|outermost|最外层|原生审批面板|native approval panel/i, `${file} documents the outermost/relay-first channel`)
+    assert.match(md, /unavailable/, `${file} documents the unavailable fall-through semantics`)
+    assert.match(md, /排障|troubleshoot|Troubleshoot|debug log|调试日志/i, `${file} documents relay troubleshooting / observability`)
+    assert.doesNotMatch(md, /gateApprovalRelayTimeoutMs/, `${file} has no stale relay-window documentation`)
+  }
+  console.log('✓ 70 gateApprovalRelay: child policy unpin at creation, OUTERMOST relay to the top-level session agent\'s native approval panel (child->mid->root climb, no child callId, question fallback, native-unavailable → visible question card, dual-unavailable → terminal unavailable, explicit cancel/reject semantics, ordering regression + negative control), root pass-through, opt-out, schema+README')
+}
+
+console.log('\nALL 71 CHECKS PASSED')

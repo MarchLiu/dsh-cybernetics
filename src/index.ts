@@ -22,7 +22,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile, appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import z from '@deepseek-ai/schemastery'
@@ -96,6 +96,30 @@ export interface Config extends ControllerConfig {
   gateAllowlist?: string[]
   /** Extra tool names unioned onto the allowlist (default or gateAllowlist). */
   gateAllowlistExtra?: string[]
+  /**
+   * Approval relay (v0.8.5, default true, hardGate companion): delegated
+   * children (workflow subagents, teammates) inherit the host's pinned
+   * `never` approval policy, so a sandbox escalation a task agent needs
+   * (e.g. writing outside the session workspace) fails deterministically
+   * before any answerer sees it. When on, the plugin flips each delegated
+   * child's effective policy to `ask` at creation (one durable
+   * `approval/policy` session event — later events win over the
+   * delegation-seeded pin) and registers an OUTERMOST `approval/request`
+   * answerer that re-issues a child's request ON THE TOP-LEVEL SESSION AGENT
+   * through the host's own approval service — i.e. the native Allow once /
+   * Reject panel of the conversation the user is watching. Outermost is not
+   * an optimization: the host's api-remotes registers its `approval/request`
+   * browser forwarder at boot, before every user plugin; once the browser's
+   * approval answerer claims a child request, that per-session panel never
+   * calls `next()`, so an inner relay listener would never run at all (the
+   * last-hop defect this field fixes). When the top-level turn is closed (a
+   * continuable child outliving it) the relay falls back to the
+   * user-questions (ask_user_question) channel on the same agent, then to the
+   * native chain. Denials stay explicit: relay failures answer `rejected`,
+   * an aborted child run answers `cancelled`, and a child with no live
+   * top-level agent falls through to the native chain.
+   */
+  gateApprovalRelay?: boolean
   /**
    * All-goals mode (v0.7, default false): EVERY user request — including
    * trivial read-only questions and lightweight analysis — must go through a
@@ -182,16 +206,26 @@ export const Config = z.object({
    * Volatile: enforced at every launch, live on the next tool call.
    */
   maxConcurrentRounds: z.number().default(0).volatile().description('全局并行轮数上限（缺省 0 = 不限）：在跑轮数达到上限时拒绝启动新一轮，防止并行风暴。保存后即时生效，无需重载。'),
-  /** Hard orchestration gate (default false). */
-  hardGate: z.boolean().default(false).description('硬编排门：装配期从顶层 session agent 摘除执行工具，所有改动必须经 cybernetics goal + task agent。修改会触发插件重载。'),
+  /** Hard orchestration gate (default true). */
+  hardGate: z.boolean().default(true).description('硬编排门（默认激活）：装配期从顶层 session agent 摘除执行工具，所有改动必须经 cybernetics goal + task agent。修改会触发插件重载。'),
   /** Tool names hidden in denylist mode (default DEFAULT_GATED_TOOLS). */
   gatedTools: z.array(z.string()).description('denylist 模式下隐藏的工具名（缺省内置 DEFAULT_GATED_TOOLS）。'),
-  /** Gate semantics. */
-  gateMode: z.union(['denylist', 'allowlist'] as const).default('denylist').description('门语义：denylist 隐藏 gatedTools；allowlist 只保留 gateAllowlist（+gateAllowlistExtra）与 cybernetics 工具本身。'),
+  /**
+   * Gate semantics. v0.8.6: NO schema-level default — an absent value means
+   * "derive from hardGate" in apply() (`hardGate ? 'allowlist' : 'denylist'`).
+   * The old `default('denylist')` erased the user's silence and silently made
+   * every hardGate deployment a partial gate (only bash/edit/write), which is
+   * how the bsk_ / taskboard_ / schedule_ / farm_ / uno_ / ppt_ writes stayed
+   * alive. Explicit configurations are still honored verbatim, denylist
+   * included.
+   */
+  gateMode: z.union(['denylist', 'allowlist'] as const).description('门语义（缺省随 hardGate 推导）：hardGate 开启且未显式配置时按 allowlist 生效；hardGate 关闭时按 denylist。allowlist 只保留 gateAllowlist（+gateAllowlistExtra）与 cybernetics 工具本身；denylist 只隐藏 gatedTools（默认 bash/edit/write），其余写工具（bsk_*/taskboard_*/schedule_*/farm_*/uno_*/ppt_*/config_restore 等）仍然可用——属残留风险，仅在明确接受该风险时才显式配置。'),
   /** Allowlist-mode survival set (default DEFAULT_GATE_ALLOWLIST). */
   gateAllowlist: z.array(z.string()).description('allowlist 模式生存工具集（缺省内置 DEFAULT_GATE_ALLOWLIST）。'),
   /** Extra tool names unioned onto the allowlist. */
   gateAllowlistExtra: z.array(z.string()).description('并集追加进 allowlist 的额外工具名。'),
+  /** Approval relay for delegated children (default true). */
+  gateApprovalRelay: z.boolean().default(true).description('子代理审批透传（默认开启，hardGate 伴随项）：把委派子代理的权限升级请求以"最外层 answerer"接管，改用顶层 session agent 的原生审批面板（Allow once / Reject）弹给用户裁决——请求落在用户正在看的会话里，而不是子会话那张看不见的面板；顶层回合已关闭时回退到 user-questions（ask_user_question）通道，再回退原生应答链。转发失败按显式拒绝、子代理跑飞按 cancelled 处理。属配置文件维护字段（GUI 面板不展示），修改需插件重载。'),
   /**
    * All-goals mode (v0.7, default false): every user request must go through
    * a cybernetics goal first. Volatile: the settings-panel toggle commits
@@ -514,19 +548,53 @@ const DEFAULT_GATE_ALLOWLIST = [
   'browser_screenshot', 'browser_navigate', 'browser_scroll',
 ]
 
-const HARD_GATE_GUIDANCE = `
-HARD GATE ACTIVE: your tool list is restricted to reading, searching, conversation, presentation and
-goal/orchestration verbs — every tool that CHANGES the world (edit/write/bash, service lifecycle,
-board/knowledge/schedule writes, spawning other workers, ...) is STRUCTURALLY unavailable to you.
-Answering a read-only question directly is fine and needs no goal; but the moment the user asks for a
-change — however small — that is your signal to delegate: create a cybernetics goal (action 'start'
-with title+brief) and let a task agent execute it. Never tell the user a change is "too small for the
-loop": the loop is the only way changes get done. If you look for a tool to perform a change and do
-not find it, that is the gate working as intended — delegate instead.`
+/**
+ * Hard-gate guidance is mode-specific (v0.8.6). In allowlist mode the strong
+ * claim is true: every change-class tool is absent from the assembly and
+ * denied at dispatch. In denylist mode it was FALSE — only `gatedTools` is
+ * removed while bsk_ / taskboard_ / schedule_ / farm_ / uno_ / ppt_ /
+ * config_restore remain callable — so the section names the partial stance
+ * instead of pretending the loop is structurally enforced.
+ */
+const HARD_GATE_GUIDANCE_ALLOWLIST = `
+HARD GATE ACTIVE (allowlist mode): your tool list is restricted to reading, searching, conversation,
+presentation and goal/orchestration verbs — every tool that CHANGES the world (edit/write/bash,
+service lifecycle, board/knowledge/schedule writes, spawning other workers, ...) is STRUCTURALLY
+unavailable to you. Answering a read-only question directly is fine and needs no goal; but the
+moment the user asks for a change — however small — that is your signal to delegate: create a
+cybernetics goal (action 'start' with title+brief) and let a task agent execute it. Never tell the
+user a change is "too small for the loop": the loop is the only way changes get done. If you look
+for a tool to perform a change and do not find it, that is the gate working as intended — delegate
+instead.`
+
+const HARD_GATE_GUIDANCE_DENYLIST = `
+HARD GATE ACTIVE (denylist mode): only the tools listed in gatedTools (default bash, edit, write)
+are removed from your tool list. This mode is PARTIAL, not structural: other change-class tools are
+still present and callable — bsk_* (browser automation), taskboard_* (board writes), schedule_*
+(cron reminders), farm_* (service lifecycle), uno_* / ppt_* (document generators), config_restore,
+subagent/team spawning, and the rest of the mutation long tail. Their availability is NOT
+permission to do task work yourself — calling one directly bypasses the goal loop this deployment
+requires. The moment the user asks for a change, however small, create a cybernetics goal (action
+'start' with title+brief) and let a task agent execute it. Do not route around a missing tool with
+another write tool, and do not describe the gate as total: it hides gatedTools only.`
+
+/** Effective gate semantics: explicit config wins; otherwise follow hardGate. */
+function resolveGateMode(config: Partial<Config>, hardGate: boolean): 'denylist' | 'allowlist' {
+  if (config.gateMode === 'denylist' || config.gateMode === 'allowlist') return config.gateMode
+  return hardGate ? 'allowlist' : 'denylist'
+}
 
 export function apply(ctx: any, config: Partial<Config> = {}) {
   const toolName = config.toolName ?? 'cybernetics'
   const hardGate = config.hardGate === true
+  // v0.8.6 default-safe gate semantics: a user who turns hardGate on but says
+  // nothing about gateMode gets the structural allowlist, not the leaky
+  // denylist. hardGate=false resolves to denylist but no gate is installed,
+  // so its behavior is unchanged.
+  const gateMode = resolveGateMode(config, hardGate)
+  const hardGateGuidance = hardGate
+    ? (gateMode === 'allowlist' ? HARD_GATE_GUIDANCE_ALLOWLIST : HARD_GATE_GUIDANCE_DENYLIST)
+    : ''
   // allGoalsMode is a volatile field: under the loader's schema resolution it
   // arrives as a live reference whose value the settings panel commits in
   // place (no remount), so read it at use time instead of capturing it once.
@@ -559,7 +627,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
     disposeSection = ctx.systemPrompt.section({
       name: `tool:${toolName}`,
       order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-      text: IMPLICIT_GUIDANCE + (allGoalsMode() ? ALL_GOALS_GUIDANCE : '') + (hardGate ? HARD_GATE_GUIDANCE : ''),
+      text: IMPLICIT_GUIDANCE + (allGoalsMode() ? ALL_GOALS_GUIDANCE : '') + hardGateGuidance,
     })
   }
   registerGuidanceSection()
@@ -571,7 +639,9 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
     // execution tools from TOP-LEVEL agents' assemblies. Workflow subagents
     // (task/verify/triage) and team teammates are never in agents.roots(),
     // so their assemblies pass through untouched with full tool access.
-    const allowlistMode = config.gateMode === 'allowlist'
+    // hardGate/gateMode are non-volatile: the resolved mode is fixed for this
+    // plugin instance and re-derived on reload (gateMode was resolved above).
+    const allowlistMode = gateMode === 'allowlist'
     // NOTE: schema-resolved config turns an unset z.array field into [] (not
     // undefined), so fall back on length, not on ?? — otherwise the gate
     // would silently keep/gate nothing.
@@ -630,6 +700,265 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       })
     })
     disposers.push(() => preDisposer?.())
+
+    // v0.8.5 approval relay (gateApprovalRelay, default true): delegated
+    // children (workflow subagents, teammates) inherit the host's PINNED
+    // `never` approval policy (dsh-subagent/lib/index.js:413
+    // captureDelegatedPolicyOverrides pins 'never' for every delegation;
+    // dsh-user-approval/lib/index.js:175 decide() then short-circuits the ask
+    // to 'rejected' BEFORE any answerer runs), so a task agent's sandbox
+    // escalation (e.g. writing outside the session workspace) can never reach
+    // the user. Relay = two listeners:
+    //
+    // (1) agent/created — flip the child's effective policy to 'ask' by
+    //     appending one plain `approval/policy {policy:'ask'}` event to the
+    //     child session (exactly what the host's setApprovalPolicy appends;
+    //     later child switches win over the delegation-seeded pin). Live
+    //     evidence: a real delegated session log carries the pin
+    //     {policy:'never', source:'delegation'} at seq 2 and the plugin's
+    //     {policy:'ask'} at seq 3 (52 ms later).
+    // (2) approval/request — OUTERMOST answerer (prepend:true) for delegated
+    //     children only. It does NOT give the native chain the first turn:
+    //     the host's api-remotes registers an approval/request waterfall
+    //     listener at boot (dsh-api-remotes/lib/index.js:21-28,147
+    //     API_REMOTE_FORWARDED_EVENTS → forwardWaterfall at :233) and
+    //     forwards every request to the connected browser, where
+    //     dsh-client-ui-approval/lib/client.js:284 answerApproval claims it
+    //     and awaits a per-session panel that is INVISIBLE whenever the user
+    //     is watching the parent conversation. A listener registered after
+    //     api-remotes is INNER and is never reached (cordis waterfall runs
+    //     outermost-first — cordis/lib/index.js:317-325), so the previous
+    //     bounded-window `next()` race could not fire at all: the child hung
+    //     on a panel nobody could see. prepend makes the relay the FIRST
+    //     listener; it re-issues the request ON THE TOP-LEVEL LIVE ANCESTOR
+    //     AGENT through the host's own ApprovalService
+    //     (ctx.get('approval').request) — the native Allow once / Reject
+    //     panel of the conversation the user is actually watching, audited as
+    //     approval/asked + approval/decided on that session. The child's
+    //     callId is deliberately NOT forwarded (a child ToolCallId must not
+    //     correlate with a tool call in the parent transcript). When the
+    //     top-level turn is closed (ApprovalService.request requires an open
+    //     turn: dsh-user-approval/lib/index.js:130) the relay falls back to
+    //     the user-questions channel on the same agent (an ask_user_question
+    //     card in the same composer). A native 'unavailable' (no answering
+    //     client) ALSO falls through to the question card — v0.8.8 fix: the
+    //     live failure was asked → decided unavailable in 9 ms with no visible
+    //     prompt. Denial semantics stay explicit: relay errors answer
+    //     'rejected', an aborted child run answers 'cancelled', a question
+    //     channel that is also unavailable answers terminal 'unavailable',
+    //     and a child with no live top-level agent falls through to next()
+    //     (the host's fail-closed native semantics) — never a silent success.
+    const gateApprovalRelay = config.gateApprovalRelay !== false
+    if (gateApprovalRelay) {
+      // Delegated children carry `origin: 'subagent'` (dsh-subagent sets it on
+      // the child header; the live session log of this very task agent shows
+      // it). Forks keep a parentSession for lineage but are independent roots,
+      // so they are excluded here: `delegationDepth > 0` is the fallback when
+      // a host build omits `origin`.
+      const isDelegatedChild = (agent: any): boolean => {
+        const header = agent?.session?.header
+        if (header === undefined || header === null) return false
+        if (header.origin === 'subagent') return true
+        return header.parentSession !== undefined && typeof header.delegationDepth === 'number' && header.delegationDepth > 0
+      }
+      const agentById = (id: string): any => {
+        try {
+          const direct = ctx.agents?.get?.(id)
+          if (direct !== undefined && direct !== null) return direct
+        } catch { /* registry lookup is best-effort */ }
+        try {
+          return (ctx.agents?.roots?.() ?? []).find((r: any) =>
+            r?.id === id || r?.session?.header?.id === id)
+        } catch { return undefined }
+      }
+      // Walk the durable parentSession chain up to the live TOP-LEVEL agent:
+      // the conversation the user watches. Undefined when a link is dead (a
+      // continuable child that outlived its parent) — the relay then leaves
+      // the request to the native chain.
+      const topLevelAgentOf = (agent: any): any => {
+        let cursor = agent
+        const visited = new Set<string>()
+        while (true) {
+          const parentId = cursor?.session?.header?.parentSession
+          if (parentId === undefined) return cursor
+          if (visited.has(parentId)) return undefined
+          visited.add(parentId)
+          const parent = agentById(parentId)
+          if (parent === undefined) return undefined
+          cursor = parent
+        }
+      }
+      const approvalServiceOf = (agent: any): any => {
+        try {
+          const fromCtx = typeof ctx.get === 'function' ? ctx.get('approval') : undefined
+          if (fromCtx !== undefined) return fromCtx
+        } catch { /* service not provided in this deployment */ }
+        try { return agent?.ctx?.get?.('approval') } catch { return undefined }
+      }
+
+      const createdDisposer = ctx.on('agent/created', (payload: any) => {
+        const agent = payload?.agent
+        if (!isDelegatedChild(agent)) return
+        try {
+          agent.session.append('approval/policy', { policy: 'ask' })
+        } catch {
+          // agent/created is a serial event: a throw fails child creation.
+          // A relay must never break delegation — leave the pinned policy.
+        }
+      })
+      disposers.push(() => createdDisposer?.())
+
+      const RELAY_QUESTION_ID = 'cybernetics-approval-relay'
+      const RELAY_ALLOW = '允许一次（Allow once）'
+      const RELAY_REJECT = '拒绝（Reject）'
+      // 'unavailable' is deliberately NOT terminal here: it means "the native
+      // panel had no answering client" (dsh-user-approval/lib/index.js:176),
+      // which is exactly the v0.8.7 live failure (asked → decided unavailable
+      // in 9 ms). The relay then still falls through to the question card so
+      // the user gets a VISIBLE prompt; only when the question channel is also
+      // unavailable does the request end as a terminal 'unavailable'.
+      const APPROVAL_OUTCOMES = new Set(['allowed-once', 'rejected', 'cancelled'])
+
+      // Observability (v0.8.8, persisted v0.8.9): every relay decision logs
+      // the path taken, outcome, latency and the resolved top-level target —
+      // to the host logger AND to `<workspace>/.cybernetics/relay-log.jsonl`.
+      // The file is the ground truth a later acceptance run can read without
+      // host stdout or browser console access (the v0.8.8 live failure was
+      // indistinguishable between "stale build" and "both channels down").
+      const relayLog = (agent: any, path: string, outcome: string, startedAt: number): void => {
+        const rootId = agent?.session?.header?.id ?? agent?.id ?? 'unknown'
+        const line = `cybernetics approval-relay: path=${path} outcome=${outcome} ` +
+          `root=${rootId} elapsed=${Date.now() - startedAt}ms`
+        try {
+          const logger = (ctx as { logger?: { debug?: (m: string) => void; info?: (m: string) => void } }).logger
+          if (typeof logger?.debug === 'function') logger.debug(line)
+          else if (typeof logger?.info === 'function') logger.info(line)
+          else console.debug(line)
+        } catch { console.debug(line) }
+        // Fire-and-forget disk append; a relay must never fail because its own
+        // audit trail could not be written.
+        try {
+          const wd = (ctx as { workingDirectory?: { get?: (s: unknown) => unknown } }).workingDirectory
+          const ws = typeof wd?.get === 'function' ? wd.get(agent?.session) : undefined
+          if (typeof ws !== 'string' || ws.length === 0) return
+          const entry = JSON.stringify({
+            ts: new Date().toISOString(),
+            root: rootId,
+            path,
+            outcome,
+            elapsedMs: Date.now() - startedAt,
+          }) + '\n'
+          void mkdir(join(ws, '.cybernetics'), { recursive: true })
+            .then(() => appendFile(join(ws, '.cybernetics', 'relay-log.jsonl'), entry, 'utf8'))
+            .catch(() => { /* observability only */ })
+        } catch { /* observability only */ }
+      }
+
+      // Ask the top-level agent through the host's native approval channel,
+      // falling back to the user-questions channel, then to a terminal
+      // 'unavailable'. Returns a closed approval outcome.
+      const relayToSessionAgent = async (req: any, root: any): Promise<string> => {
+        const childId = req.agent?.session?.header?.id ?? req.agent?.id ?? 'unknown'
+        const rootId = root?.session?.header?.id ?? root?.id ?? 'unknown'
+        const startedAt = Date.now()
+        const reason = typeof req.reason === 'string' && req.reason.length > 0 ? req.reason : undefined
+        const approval = approvalServiceOf(root)
+        if (approval !== undefined && typeof approval.request === 'function') {
+          try {
+            const outcome = await approval.request({
+              agent: root,
+              toolName: req.toolName,
+              reason: `[sub-agent ${childId}] ${reason ?? `tool "${req.toolName}" requires approval`}`,
+              displayReason: {
+                en: `Sub-agent ${childId} requests privileged execution of ${req.toolName}${reason === undefined ? '' : `: ${reason}`}`,
+                zh: `子代理 ${childId} 请求越权执行工具 ${req.toolName}${reason === undefined ? '' : `：${reason}`}`,
+              },
+              ...(req.signal !== undefined ? { signal: req.signal } : {}),
+            })
+            if (APPROVAL_OUTCOMES.has(outcome)) {
+              relayLog(root, 'native-panel', outcome, startedAt)
+              return outcome
+            }
+            // 'unavailable' (or any unknown value): the native panel found no
+            // answering client — keep falling through to the question card.
+          } catch {
+            // No open turn on the session agent (continuable child outliving
+            // it) or the audit pair failed: the question channel does not
+            // require an open turn, so try it before giving up.
+          }
+        }
+        // v0.8.9 ROOT-CAUSE FIX: plain property access `ctx.userQuestions` on
+        // this plugin's context throws cordis' "cannot get property without
+        // inject" (the plugin's `inject` list does not declare the service),
+        // so the previous `try { ctx.userQuestions }` always fell into the
+        // catch and the question-card fallback answered terminal 'unavailable'
+        // within milliseconds — the user never saw a card. Resolution now
+        // mirrors dsh-plan-mode/lib/index.js:257 (`ctx.get("userQuestions")`,
+        // the inject-free reflective read that walks the composition store),
+        // with the property access kept as a secondary attempt for host builds
+        // where the service is injected under a different graph shape.
+        let uq: any
+        try {
+          const viaGet = typeof (ctx as { get?: (n: string) => unknown }).get === 'function'
+            ? (ctx as { get: (n: string) => unknown }).get('userQuestions')
+            : undefined
+          if (viaGet !== undefined && typeof (viaGet as { ask?: unknown }).ask === 'function') uq = viaGet
+        } catch { uq = undefined }
+        if (uq === undefined) {
+          try { uq = ctx.userQuestions } catch { uq = undefined }
+          if (uq !== undefined && typeof uq.ask !== 'function') uq = undefined
+        }
+        if (uq === undefined || typeof uq.ask !== 'function') {
+          relayLog(root, 'question-card', 'unavailable', startedAt)
+          return 'unavailable'
+        }
+        if (req.signal?.aborted) {
+          relayLog(root, 'question-card', 'cancelled', startedAt)
+          return 'cancelled'
+        }
+        try {
+          const answer = await uq.ask({
+            questions: [{
+              id: RELAY_QUESTION_ID,
+              question: `${reason ?? `tool ${req.toolName}`}（子代理 ${childId} 请求越权执行工具 ${req.toolName}）`,
+              detail: reason,
+              header: '子代理审批透传',
+              options: [{ label: RELAY_ALLOW }, { label: RELAY_REJECT }],
+              multiSelect: false,
+            }],
+            agent: root,
+            ...(req.signal !== undefined ? { signal: req.signal } : {}),
+          })
+          const selected = (answer?.answers ?? []).find((a: any) => a?.id === RELAY_QUESTION_ID)?.selected ?? []
+          const outcome = selected.includes(RELAY_ALLOW) ? 'allowed-once' : 'rejected'
+          relayLog(root, 'question-card', outcome, startedAt)
+          return outcome
+        } catch {
+          // Question delivery failed (client gone, answerer refused, run
+          // aborted): answer 'cancelled' when the child's own signal fired,
+          // otherwise an explicit rejection — the child stops and explains.
+          const outcome = req.signal?.aborted ? 'cancelled' : 'rejected'
+          relayLog(root, 'question-card', outcome, startedAt)
+          return outcome
+        }
+      }
+
+      const relayDisposer = ctx.on('approval/request', async (req: any, next: () => Promise<string>) => {
+        if (!isDelegatedChild(req?.agent)) return next()
+        if (req?.signal?.aborted) return 'cancelled'
+        const root = topLevelAgentOf(req.agent)
+        // No live ancestor, or a malformed child whose chain loops back to
+        // itself: never re-ask on the requesting agent (that would re-enter
+        // this same waterfall forever).
+        if (root === undefined || root === req.agent) {
+          relayLog(req.agent, 'next-passthrough', 'next', Date.now())
+          return next()
+        }
+        const outcome = await relayToSessionAgent(req, root)
+        return outcome === undefined ? next() : outcome
+      }, { prepend: true })
+      disposers.push(() => relayDisposer?.())
+    }
   }
 
   const disposer = (ctx.tools as { register: (d: unknown) => () => void }).register({

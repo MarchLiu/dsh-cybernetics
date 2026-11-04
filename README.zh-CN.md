@@ -42,9 +42,28 @@ flowchart TB
 
 开启后注入「ALL-GOALS MODE ACTIVE」路由协议：**任何用户请求一律先建 goal 再执行**，session agent 禁止用读工具就地完成任务——哪怕单文件查询或一次计算也走回路。简单只读请求 → `quick` 单轮；复杂分析/写任务 → `full` 多轮渐进（`start` 异步启动 + 逐轮 `collect` 收敛）。关闭模式时提示段与 revise 行为与 v0.6 完全一致。
 
-### 硬门（`hardGate`，默认 false）
+### 硬门（`hardGate`，默认 true——安装即激活）
 
-装配期从顶层 session agent 的工具清单中**物理移除**执行工具（默认 bash/edit/write，可用 `gatedTools` 覆盖）——模型看不见这些工具，自然无法调用，编排从劝告变成结构。`gateMode: 'allowlist'` 反转语义：顶层 agent 只保留读 + 对话 + 展示 + goal/编排动词（内置 DEFAULT_GATE_ALLOWLIST，可 `gateAllowlist`/`gateAllowlistExtra` 覆盖），针对变更类工具的长尾（farm_*/taskboard_*/schedule_*……）。task/verify/triage 子 agent 从不在门禁范围内，保留全部工具。
+**生效语义（v0.8.6，默认安全）**：`hardGate` 开启且未配置 `gateMode` 时，门按 **`allowlist`** 运行——顶层 session agent 只保留读 + 对话 + 展示 + goal/编排动词（内置 `DEFAULT_GATE_ALLOWLIST`，可经 `gateAllowlist`/`gateAllowlistExtra` 扩展），所有变更类工具在装配期被**移除**，并在**调用分发层被拒绝**。之所以改为这个默认：旧的 `denylist` 默认是个陷阱——它只隐藏 `gatedTools` 的三个名字（bash/edit/write），`bsk_*`、`taskboard_*`、`schedule_*`、`farm_*`、`uno_*`、`ppt_*`、`config_restore` 以及整个变更工具长尾全都仍可调用，名为硬门、实为半门。`hardGate: false` 与以前完全一致（不装门）；显式配置的 `gateMode` 一律原样尊重；schema 不再给 `gateMode` 设默认值，因此「未设置」与「显式 denylist」可以被区分。
+
+**显式 `gateMode: 'denylist'`（残留风险，需主动选择）**：只移除 `gatedTools` 中的工具名（默认 bash/edit/write）。顶层 agent 至少仍可使用：`bsk_*`（浏览器自动化，含 `bsk_session` 启停）、`taskboard_*` 写操作（create/update/move/comment/checklist/delete）、`schedule_*` 写操作、`farm_*` 服务生命周期（start/restart/stop/register/unregister）、`uno_*` 与 `ppt_*` 生成器、`config_restore`、`subagent`/team 派生、`knowledge_save`、`job_kill`——凡未被列入 `gatedTools` 的都在，且这个集合随每个新装插件增长，denylist 永远不可能完备。只有在你清醒接受该风险时才显式选择它（例如确实要 session agent 管理服务），并把需要的变更工具逐项补进 `gatedTools`。该模式下注入的 HARD GATE 提示会如实说明「只摘 `gatedTools`」的半门立场，不再假称所有改世界的工具都结构性不可用。
+
+task/verify/triage 子 agent 从不在门禁范围内，保留全部工具。
+
+### 子代理审批透传（`gateApprovalRelay`，默认 true）
+
+宿主在委派边界把每个子代理（workflow 子代理、teammate）的审批策略**钉死为 `never`**——每次审批请求在任何 answerer 看到之前就被确定性拒绝，因此 task agent 需要沙箱越权（典型：写会话工作区之外的路径，如 `~/.dsh/profiles/web/cordis.patch.yml`）时用户根本没机会被询问。`gateApprovalRelay` 开启时（默认，hardGate 伴随项），插件做两件事：
+
+1. **创建时解除子代理策略钉死**——监听 `agent/created`，对委派子代理在其 session 上追加一条持久 `approval/policy {policy:'ask'}` 事件（宿主的折叠规则保证后写事件覆盖委派种下的钉死值）。没有这一步，审批服务会在任何 answerer 运行之前就把请求确定性拒绝成 `rejected`。
+2. **在顶层 session agent 上重新发起请求**——插件把 `approval/request` answerer 注册为**最外层**（`prepend: true`），这正是最后一跳的修复点：宿主的 `api-remotes` 在启动时（早于所有用户插件）注册了 `approval/request` 转发器，浏览器审批 answerer 会 claim 子代理请求并等待一张"用户根本看不见"的子会话面板、永不调用 `next()`——因此注册在其后的转发器永远轮不到执行。抢在最外层运行后，插件沿持久 `parentSession` 链找到子代理的**顶层活祖先**，直接调用宿主的 `ApprovalService.request`：请求以原生**允许一次 / 拒绝**面板出现在用户正在看的那个会话里，并在该 session 的 `approval/asked` + `approval/decided` 审计对中留痕。子代理的 tool call id 不向上转发；面板标题（本地化 `displayReason`）会写明是哪个子代理发的请求。
+
+**回退链与 `unavailable` 语义（v0.8.8）**：若顶层回合已关闭（continuable 子代理比父回合活得久），或原生面板应答 `unavailable`（没有应答端 claim 该请求——例如 frame 根本没被浏览器认领），relay 会继续回退到同一顶层 agent 上**可见的** `ask_user_question` 卡片（「子代理审批透传」）——原生 `unavailable` **不是**终态。仅当问题卡片通道也不可用时才以终态 `unavailable` 结束；完全没有活的顶层 agent 则回落原生应答链。拒绝语义始终显式：转发失败答 `rejected`、子代理已中止答 `cancelled`，子代理模型总能经自己的审批审计对拿到真实结果，绝不会静默成功。
+
+**可观测性 / 排障（v0.8.9）**：relay 每次决策记录两处——宿主 logger 一行 `cybernetics approval-relay: path=… outcome=… root=… elapsed=…ms`（无 logger 时 `console.debug` 兜底），以及 `<workspace>/.cybernetics/relay-log.jsonl` 追加一条 JSON（`{ts, root, path, outcome, elapsedMs}`）。该文件是验收时的**落盘事实**，无需宿主 stdout 或浏览器 console 即可直接读取。`path` 取值：`native-panel`（顶层原生允许一次/拒绝面板）、`question-card`（可见的回退卡片）、`next-passthrough`（无活顶层 agent → 原生链）。若子代理快速失败且审计为 `decided unavailable` 而 `relay-log.jsonl` **一条记录都没有**，说明请求根本没到 relay（先确认宿主确实重载了插件构建）；若出现 `path=native-panel outcome=unavailable` 后跟 `path=question-card` 两条，说明 frame 离开了宿主但浏览器没有认领——此时用户仍能看到问题卡片。另注：问题卡片回退通过 `ctx.get` 解析宿主的 `userQuestions` 服务（免 inject 的反射式读取，与 `dsh-plan-mode` 同法）；旧构建用普通属性访问解析，而 cordis 对未 inject 的服务属性访问会直接抛错——v0.8.8 真机失败（「卡片从未出现、12ms 内终态 unavailable」）正是这个原因。
+
+设 `gateApprovalRelay: false` 可回到严格确定性拒绝的立场（CI/无人值守部署）。该字段是 hardGate 伴随项，属**非 volatile / 配置文件维护**字段：请直接在 profile 配置文档中维护，保存触发插件重载。
+
+宿主侧证据（文件:行号）、被否决的方案与复现方式记录在 [docs/approval-relay-investigation.md](docs/approval-relay-investigation.md)；`test/relay-host-probe.mjs` 用真机 cordis waterfall + 真机 `ApprovalService` + 本插件 `apply()` 做回归探针。
 
 ### append-only goals 与 revise 决策树
 
@@ -127,7 +146,7 @@ Web 编辑器「插件」页的本插件卡片上直接配置——v0.8.1 起卡
 - **task/verify/triage agent 模型**（`taskAgentModel` / `verifyAgentModel` / `triageAgentModel`，volatile）：下拉加持的文本框——从实时系统模型列表选择（显示 `providerName · provider/model`）或手工输入「provider/model」/裸模型名，回车或移开焦点即保存，留空继承 session agent（triage = 收敛决策角色，仅 full 轮启用）。配置值不在实时模型列表中时显示不可用警告（运行时回退到 session agent 模型）并附一键清除；
 - **递归深度 / 并行上限**（`roundsPerSubgoal` 整数 ≥1 / `maxConcurrentRounds` 整数 ≥0，volatile）：数字框，回车或失焦保存，留空恢复默认（`unset` 写入）；
 - **roles 高级配置**（`roles`，非 volatile）：profile 配置 yaml 直接维护——见下方小节；
-- **硬门相关**（`hardGate`/`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`，非 volatile）：不进入卡片，请在 profile 配置文档中维护（保存触发插件重载）。
+- **硬门相关**（`hardGate`/`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`/`gateApprovalRelay`，非 volatile）：不进入卡片，请在 profile 配置文档中维护（保存触发插件重载）。`gateMode` 无默认值：未设置 + `hardGate: true` 按 `allowlist` 运行；显式 `denylist` 会被尊重，并带有上文记录的残留风险。
 
 ### roles 高级配置（profile yaml，agent 指导）
 
@@ -186,7 +205,7 @@ session agent 在会话内通过 `cybernetics` 工具（`toolName` 可配置）�
 ## 已知限制
 
 1. **settings 写入的宿主缺陷**：如「插件页配置」一节所述，该运行时上卡片保存可能被宿主在落盘前拒绝（上游 [#12045](https://github.com/deepseek-ai/dsh/discussions/12045)）；workaround：重启宿主 + 强刷浏览器，或手工 patch 行 + 重启。
-2. **volatile 与非 volatile 字段的保存语义差异**：volatile 字段（`allGoalsMode`、`taskAgentModel`、`verifyAgentModel`、`triageAgentModel`、`roundsPerSubgoal`、`maxConcurrentRounds`）保存即时生效、不 remount；非 volatile 字段（v0.8.4 起的 `roles`、`hardGate`、`gateMode`、`gatedTools`、`gateAllowlist*`、`toolName`、`implicitTrigger`）保存触发插件行 remount，需宿主重载完成。且宿主设置表单只服务也只接受 volatile 路径——运行中宿主的 schema 过旧时，volatile 写也会被拒（重启即愈）。
+2. **volatile 与非 volatile 字段的保存语义差异**：volatile 字段（`allGoalsMode`、`taskAgentModel`、`verifyAgentModel`、`triageAgentModel`、`roundsPerSubgoal`、`maxConcurrentRounds`）保存即时生效、不 remount；非 volatile 字段（v0.8.4 起的 `roles`、`hardGate`、`gateMode`、`gatedTools`、`gateAllowlist*`、`gateApprovalRelay`、`toolName`、`implicitTrigger`）保存触发插件行 remount，需宿主重载完成。且宿主设置表单只服务也只接受 volatile 路径——运行中宿主的 schema 过旧时，volatile 写也会被拒（重启即愈）。
 3. **`link:` 安装注意事项**：客户端 bundle 的注册 id 必须等于 package.json 的 `name`（`@mars.liu/dsh-cybernetics`）；loader 行 id 可用短名 `dsh-cybernetics`。插件需挂在本 profile 的**顶层** loader entries（客户端扫描只枚举顶层行）；`src/` 改动需宿主重载、`lib/` 改动需重启宿主 + 刷新浏览器。
 4. 其他协议边界（硬门在装配层不在执行层、dsh-goal 焦点槽不随 superseded 迁移等）见 [docs/protocol.md](docs/protocol.md) 各「已知边界」小节。
 
