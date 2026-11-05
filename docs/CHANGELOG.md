@@ -4,6 +4,16 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.12.0（2026-11-05）：控制徽标「内环运行中」脉冲动画（ModePill × cyberneticsGoals）
+
+**需求**：用户此前靠 better sidebar 任务管理页或顶栏「N 个子智能体」pill 监控内环任务；希望控制徽标本身即可传达「内环还有任务在跑」——控制开且会话存在 running goal 时，绿点呼吸脉冲 + tooltip 追加运行细节。
+
+- **lib/client.js（ModePill）**：复用 `modeIndicatorInject` 已有的 `ctx.sessions.binding(sessionId)` 路径补取 `cyberneticsGoals` 投影 face（与 v0.10.0 起 `cyberneticsMode` face 同一 binding 形态，header.utilities 槽位实测可用，无需新 inject）；新增纯函数 `countRunningGoals(board)`（统计 `status === 'running'` 的 goal 数 + running 目标中的最高 `round`，任意坏形态退化为 0 不抛错），经 `module.exports` 导出供离线单测。
+- **视觉**：控制开 + running count > 0 → 绿点 `dsh-cybernetics-pill-dot-running` 类（`@keyframes` 1.6s 呼吸，`document.head` 单次注入、id 防重）；`@media (prefers-reduced-motion: reduce)` 时 `animation: none` 退回静态点。控制关 / 无 running goal / face 未加载 → 无动画，行为与 v0.11.2 完全一致。
+- **tooltip**：追加 `mode.tip.running`（zh「{count} 个目标运行中 · 第 {round} 轮」/ en「{count} goal(s) running · round {round}」）；点击切换 on/off 的现有行为不变。
+- **test/v12-mode-pill-running.mjs 新增**：countRunningGoals 真实/坏形态矩阵、双语 `mode.tip.running` key 与 zh/en `mode.*` key 集 parity、脉冲 CSS 单次注入 + reduced-motion 回退 + pulsing 门控条件、factory 导出与 inject 列表不变性。
+- **生效手段**：`lib/client.js` 改动——重启宿主并刷新浏览器。
+
 ## v0.11.2（2026-11-05）：术语统一修正轮——补漏命令 description 与文档残留
 
 **需求**：v0.11.1 验证轮发现的硬性缺口——`/cybernetics` 命令 description 残留英文 `orchestration`（命令面板用户可见），违反「英文 UI 不再用 orchestration 指代本模式」；另有文档注释残留「编排」。
