@@ -9,6 +9,7 @@
 **需求**：v0.11.1 验证轮发现的硬性缺口——`/cybernetics` 命令 description 残留英文 `orchestration`（命令面板用户可见），违反「英文 UI 不再用 orchestration 指代本模式」；另有文档注释残留「编排」。
 
 - **src/index.ts**：`/cybernetics` 命令 description「Toggle cybernetics orchestration …」→「Toggle cybernetics control loop …」（其余 `orchestration` 出现为代码注释与内部提示词，非用户可见 UI，按 v0.11.1 决策保留）。
+- **src/index.ts（缺口 B，用户真机目检发现）**：命令注册的 input 提示 `[on|off]` → `[on|off|status]`，与 v0.9.0 起实际可用的 status 子命令解析对齐；description 补「no argument shows status」，status 回执用法行同步补「无参数或 status = 显示状态」。
 - **docs/protocol.md**：残留 8 处「编排/编排者」→「控制/控制者」（纯文档措辞，不动标识符）。
 - **cordis.patch.yml**：两处英文注释 `read/orchestration`、`orchestration verbs` → control 措辞（纯注释）。
 - **版本**：0.11.1 → 0.11.2。

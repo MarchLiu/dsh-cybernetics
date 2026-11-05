@@ -1157,8 +1157,8 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
   ctx.inject?.(['commands'], (commandCtx: any) => {
     const commandDisposer = commandCtx.commands.register({
       name: 'cybernetics',
-      description: 'Toggle cybernetics control loop (ALL-GOALS routing + hard gate) for THIS session',
-      input: { hint: '[on|off]' },
+      description: 'Toggle cybernetics control loop (ALL-GOALS routing + hard gate) for THIS session; no argument shows status',
+      input: { hint: '[on|off|status]' },
       handler: (invocation: any) => {
         const agent = invocation?.agent
         const session = agent?.session
@@ -1192,7 +1192,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
             `- 全局 allGoalsMode：${globalOn ? 'on' : 'off'}\n` +
             `- 硬门禁 hardGate：${hardGate() ? (resolveGateMode(config, true) === 'allowlist' ? 'on（allowlist）' : 'on（denylist）') : 'off'}\n` +
             `- 新输入策略 inputPolicy：${readConfigField(config.inputPolicy, 'insert')}\n` +
-            `用法：/cybernetics on | /cybernetics off`,
+            `用法：/cybernetics on | /cybernetics off | 无参数或 status = 显示状态`,
         }
       },
     })
