@@ -125,13 +125,9 @@ stage/dsh-cybernetics/test/v14-effort-row.mjs # apply.sh 安装的测试
   live install 符号链接目标）上的——因此**不要在今天重跑 apply.sh**：它会把这
   三个过期快照覆盖到 live install 造成回退；ptc 接缝的重装用
   `apply-ptc.mjs check|apply|verify`。
-- 复现补丁副本：`patch.mjs` / `patch-client.mjs` 以 stage 文件为输入、期望打补丁
-  前的原文（锚点断言，命中数不符即中止且零写入）。如需重新生成，先把对应 5 个
-  目标原件从 profile checkout 拷回 stage，再运行补丁脚本。
-
 ## 风险
 
 - dsh-workflow-ptc 与 dsh-cybernetics 均为 node_modules 内已装包，`pnpm install`
   / 插件升级会覆盖补丁（apply.sh 的 .bak 保留原样，可重放）。
-- guest 源补丁位于嵌入字符串内，宿主升级换版本后需按新版本重打（替换模式集中在
-  patch.mjs，可核对后复用）。
+- guest 源补丁位于嵌入字符串内，宿主升级换版本后需按新版本重打（现行替换模式集中在
+  patches.mjs，可核对后复用）。
