@@ -175,4 +175,81 @@ const notice = { id: 'n-1', role: 'user', source: { kind: 'cybernetics', goalId:
   console.log('✓ 4 /cybernetics status: noticePolicy surfaced')
 }
 
+// --- 5. direct delivery in notifyRoundSettled honors the same policy ----------
+// The relay is the safety net; the PRIMARY path is notifyRoundSettled itself:
+// a running session agent gets the notice steered into next-step at settle
+// time (it never even enters the next-turn queue — the GUI queue dock never
+// shows a manual-push bubble), an idle agent gets the native followup wake,
+// and noticePolicy 'queue' restores followup everywhere.
+{
+  const { mkdtemp } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+
+  const MET_ROUND = (round) => ({
+    round,
+    report: { summary: 's', done: true, artifacts: [], evidence: 'e', nextStepThoughts: [] },
+    verdict: { met: true, criteria: [], gaps: [], goalItselfQuestionable: false },
+    triage: { auto: [], defer: [], reject: [], human: [] },
+  })
+
+  async function runSettle({ status, noticePolicy } = {}) {
+    const root = await mkdtemp(join(tmpdir(), 'cyb-v13-direct-'))
+    const engine = {
+      runs: [],
+      start() {
+        let settle
+        const result = new Promise((resolve) => { settle = resolve })
+        this.runs.push({ result, settle: (v) => settle(v) })
+        return { result }
+      },
+    }
+    const steered = []
+    const followups = []
+    const parent = {
+      session: { id: 's13-direct' },
+      status,
+      steer: (m) => steered.push(m),
+      followup: (m) => followups.push(m),
+    }
+    const tools = []
+    apply({
+      tools: { register: (d) => { tools.push(d); return () => {} } },
+      systemPrompt: { section: () => () => {}, getSectionOrder: () => 0 },
+      goals: { get: () => null, create: () => ({ id: 'goal-focused' }) },
+      workingDirectory: { get: () => root },
+      agentPresets: { serviceFor: (_a, n) => (n === 'workflowEngine' ? engine : undefined) },
+      agents: { roots: () => [] },
+      sessionProjections: { register: () => () => {} },
+    }, { noticePolicy })
+    const tool = tools[0]
+    await tool.execute({ action: 'start', title: '直送任务', brief: 'b' }, { agent: parent, signal: undefined })
+    engine.runs[0].settle({ stopReason: 'completed', value: MET_ROUND(1) })
+    await new Promise((r) => setImmediate(r))
+    return { steered, followups }
+  }
+
+  // (a) default insert + running agent: steered at settle time, no queue entry
+  {
+    const { steered, followups } = await runSettle({ status: 'running' })
+    assert.equal(steered.length, 1, 'settle on running agent: notice steered (auto-insert)')
+    assert.equal(followups.length, 0, 'running agent: no next-turn queue entry (no manual push)')
+    assert.equal(steered[0].source.kind, 'cybernetics')
+    assert.match(steered[0].content[0].text, /collect/)
+  }
+  // (b) idle agent: native followup wake preserved
+  {
+    const { steered, followups } = await runSettle({ status: 'idle' })
+    assert.equal(followups.length, 1, 'idle agent: native followup wake preserved')
+    assert.equal(steered.length, 0, 'idle agent: nothing steered')
+  }
+  // (c) noticePolicy 'queue': running agent still gets the native followup
+  {
+    const { steered, followups } = await runSettle({ status: 'running', noticePolicy: 'queue' })
+    assert.equal(followups.length, 1, "noticePolicy 'queue' + running: native next-turn delivery")
+    assert.equal(steered.length, 0, "noticePolicy 'queue' + running: nothing steered")
+  }
+  console.log('✓ 5 direct delivery: running→steer (no queue entry), idle→followup wake, queue→followup')
+}
+
 console.log('\nALL v0.13.0 NOTICE-AUTO-INSERT CHECKS PASSED')

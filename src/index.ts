@@ -1568,8 +1568,8 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
 
       /**
        * Start one goal's round in the background (action 'start' and `revise`
-       * share this): install the handle, then queue the completion notice. The
-       * goal's status is already 'running' when this is called.
+       * share this): install the handle, then deliver the completion notice.
+       * The goal's status is already 'running' when this is called.
        */
       const launchBackground = async (target: LoopState): Promise<{ round: number }> => {
         const blocked = concurrentCapError()
