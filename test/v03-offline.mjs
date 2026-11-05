@@ -202,13 +202,17 @@ let goalId
 }
 
 // 10. guidance section encodes the orchestrator protocol
+// v0.9.0: section.text is a FUNCTION of the requesting session; a session
+// with no projection state inherits the global config (allGoalsMode default
+// false here) and still receives the implicit guidance verbatim.
 {
-  assert.match(section.text, /never execute task work/i)
-  assert.match(section.text, /TRIVIAL READ-ONLY QUESTION/)
-  assert.match(section.text, /LIGHTWEIGHT ANALYSIS/)
-  assert.match(section.text, /COMPLEX ANALYSIS/)
-  assert.match(section.text, /CORRECTION/)
-  assert.match(section.text, /cancel/)
+  const guidance = section.text({ agent: { session: { id: 'sess-test' } } })
+  assert.match(guidance, /never execute task work/i)
+  assert.match(guidance, /TRIVIAL READ-ONLY QUESTION/)
+  assert.match(guidance, /LIGHTWEIGHT ANALYSIS/)
+  assert.match(guidance, /COMPLEX ANALYSIS/)
+  assert.match(guidance, /CORRECTION/)
+  assert.match(guidance, /cancel/)
   console.log('✓ 10 guidance: orchestrator protocol injected')
 }
 
@@ -383,6 +387,9 @@ let goalId
   const allNames = [...longTailWrites, ...safeTools]
 
   // (a) hardGate:true, gateMode absent → allowlist wins (default-safe)
+  // v0.9.0: section.text is a function of the requesting session; resolve it
+  // against a bare session (no projection state = global config decides).
+  const sectionText = (s) => (typeof s.text === 'function' ? s.text({ agent: { session: { id: 'gate-test' } } }) : s.text)
   {
     const listeners = []
     const sections = []
@@ -408,7 +415,7 @@ let goalId
     await gate.fn(bulk, { scope: rootAgent }, () => bulk)
     assert.deepEqual(bulk.tools.map((t) => t.name).sort(), ['cybernetics', 'read'],
       '121-tool assembly collapses to the allowlist survival set (2 kept, 119 long-tail removed)')
-    const text = sections.at(-1).text
+    const text = sectionText(sections.at(-1))
     assert.match(text, /HARD GATE ACTIVE \(allowlist mode\)/, 'guidance names allowlist mode')
     assert.match(text, /STRUCTURALLY\s+unavailable/, 'allowlist guidance keeps the strong structural claim')
   }
@@ -427,7 +434,7 @@ let goalId
     const exec = listeners.find((l) => l.event === 'tools/pre-execute')
     const allowed = await exec.fn({ agent: rootAgent, name: 'farm_start' }, async () => ({ kind: 'allow' }))
     assert.equal(allowed.kind, 'allow', 'explicit denylist: ungated long-tail write still dispatched')
-    const text = sections.at(-1).text
+    const text = sectionText(sections.at(-1))
     assert.match(text, /HARD GATE ACTIVE \(denylist mode\)/, 'guidance names denylist mode')
     assert.match(text, /gatedTools/, 'denylist guidance says exactly what is removed')
     assert.match(text, /PARTIAL, not structural/, 'denylist guidance admits the partial stance')
@@ -445,7 +452,7 @@ let goalId
       'hardGate:false installs no assemble gate (behavior unchanged)')
     assert.equal(listeners.filter((l) => l.event === 'tools/pre-execute').length, 0,
       'hardGate:false installs no execution gate')
-    assert.ok(!sections[0].text.includes('HARD GATE ACTIVE'),
+    assert.ok(!sectionText(sections[0]).includes('HARD GATE ACTIVE'),
       'hardGate:false injects no hard-gate guidance')
   }
 
@@ -453,7 +460,7 @@ let goalId
   {
     const silent = Config['~standard'].validate({}).value
     assert.equal(silent.gateMode, undefined, 'schema has no gateMode default (an absent user value stays absent)')
-    assert.equal(silent.hardGate, true, 'hardGate still defaults on')
+    assert.equal(silent.hardGate.get?.(), true, 'hardGate still defaults on (volatile: live reference)')
     assert.equal(Config['~standard'].validate({ gateMode: 'denylist' }).value.gateMode, 'denylist',
       'explicit denylist survives schema resolution (user intent preserved)')
   }
@@ -476,8 +483,10 @@ let goalId
     },
   }
   apply(ctx7, { implicitTrigger: false })
-  assert.equal(registered.length, 1, 'projection unit registered exactly once')
-  const unit = registered[0]
+  // v0.9.0: two projections register — cyberneticsGoals + cyberneticsMode.
+  assert.equal(registered.length, 2, 'projection units registered (goals + mode)')
+  const unit = registered.find((d) => d.key === 'cyberneticsGoals')
+  assert.ok(unit, 'goals projection registered')
   assert.equal(unit.key, 'cyberneticsGoals', 'projection key drives client faceOf()')
   assert.deepEqual(unit.init(), { goals: [] }, 'empty session starts with an empty board')
   assert.equal(Number.isInteger(unit.stateVersion), true, 'stateVersion declared for the persisted cache')
@@ -1945,7 +1954,7 @@ console.log(JSON.stringify({
   ctxOff.systemPrompt.section = (s) => { sectionOff = s }
   apply(ctxOff, {})
   assert.ok(sectionOff, 'implicit trigger section still injected')
-  assert.ok(!/ALL-GOALS MODE ACTIVE/.test(sectionOff.text), 'mode off: no all-goals routing section (behavior unchanged)')
+  assert.ok(!/ALL-GOALS MODE ACTIVE/.test(sectionOff.text({ agent: { session: { id: 'allgoals-test' } } })), 'mode off: no all-goals routing section (behavior unchanged)')
 
   const toolsOn = []
   const ctxOn = { ...ctxOff, tools: { register: (d) => { toolsOn.push(d); return () => {} } } }
@@ -1953,7 +1962,7 @@ console.log(JSON.stringify({
   ctxOn.systemPrompt.section = (s) => { sectionOn = s }
   apply(ctxOn, { allGoalsMode: true })
   assert.ok(sectionOn, 'section injected in all-goals mode')
-  const t = sectionOn.text
+  const t = sectionOn.text({ agent: { session: { id: 'allgoals-test' } } })
   assert.match(t, /ALL-GOALS MODE ACTIVE/, 'rule 1: the mode header is present')
   assert.match(t, /EVERYTHING ENTERS A GOAL/, 'rule 1: every request enters a goal, no in-place analysis')
   assert.match(t, /SIMPLE READ-ONLY REQUEST → depth 'quick'/, 'rule 2: quick single-round routing')
@@ -2091,12 +2100,12 @@ console.log(JSON.stringify({
 {
   assert.equal(typeof Config, 'function', 'Config schema is exported (callable schemastery schema)')
   assert.equal(Config.dict.allGoalsMode.meta?.volatile, true, 'allGoalsMode is volatile (live panel toggle, no remount)')
-  assert.notEqual(Config.dict.hardGate.meta?.volatile, true, 'hardGate is NOT volatile (structural edit remounts)')
+  assert.equal(Config.dict.hardGate.meta?.volatile, true, 'hardGate is volatile (v0.8.10: settings-card toggle, gate listeners hot-installed/disposed)')
   // Loader-path validation of the shipped patch config (cordis.patch.yml values).
   const patch = { hardGate: true, gateMode: 'allowlist', gateAllowlistExtra: ['spawn_teammate', 'send_message', 'interrupt_agent'], roles: { default: { provider: 'p', model: 'm' } } }
   const v = Config['~standard'].validate(patch).value
   assert.equal(v.issues, undefined)
-  assert.equal(v.hardGate, true, 'non-volatile boolean resolves to a plain value')
+  assert.equal(v.hardGate.get?.(), true, 'volatile hardGate resolves to a live reference (patch value true)')
   assert.equal(v.allGoalsMode.get?.(), false, 'volatile boolean resolves to a live reference (default off)')
   assert.equal(Config.dict.roles.meta?.volatile, undefined, 'roles is NOT volatile since v0.8.4 (gone from the panel; configured via profile yaml)')
   assert.equal(Config.dict.roundsPerSubgoal.meta?.volatile, true, 'roundsPerSubgoal is volatile (panel-editable)')
@@ -2115,12 +2124,12 @@ console.log(JSON.stringify({
     on: () => () => {},
   }
   apply(ctx, v)
-  assert.ok(sections[0].text.includes('HARD GATE ACTIVE'), 'loader-path hardGate:true renders hard-gate guidance')
+  assert.ok(typeof sections[0].text === 'function' && sections[0].text({ agent: { session: { id: 'loader-test' } } }).includes('HARD GATE ACTIVE'), 'loader-path hardGate:true renders hard-gate guidance')
   // Plain-config path (no schema resolution — offline harness style) unchanged.
   const plain = []
   apply({ tools: { register: () => () => {} }, systemPrompt: { section: (s) => { plain.push(s); return () => {} }, getSectionOrder: () => 0 } }, { allGoalsMode: true })
-  assert.ok(plain[0].text.length > 300, 'plain-config allGoalsMode:true still injects guidance')
-  console.log('✓ 51 settings-panel Config schema: volatile allGoalsMode ref, hardGate plain, loader-path gate defaults intact')
+  assert.ok(plain[0].text({ agent: { session: { id: 'loader-test' } } }).length > 300, 'plain-config allGoalsMode:true still injects guidance')
+  console.log('✓ 51 settings-panel Config schema: volatile allGoalsMode + hardGate refs, loader-path gate defaults intact')
 }
 
 // 52. v0.7.2 plugins-page settings card: plugins.row.config / plugins.bundle.config
@@ -2582,7 +2591,9 @@ console.log(JSON.stringify({
     'volatile form serves the flat agent-model fields')
   assert.equal(isVolatilePath(Config, ['allGoalsMode']), true, 'the toggle op path passes the write() volatile gate')
   assert.equal(isVolatilePath(Config, ['taskAgentModel']), true, 'taskAgentModel op path passes the write() volatile gate')
-  assert.equal(isVolatilePath(Config, ['hardGate']), false, 'hardGate is refused by the same gate (negative control)')
+  assert.equal(isVolatilePath(Config, ['hardGate']), true, 'hardGate passes the write() volatile gate (v0.8.10: settings-card toggle)')
+  assert.equal(isVolatilePath(Config, ['gateMode']), false, 'gateMode stays non-volatile (refused by the write gate, negative control)')
+  assert.equal(isVolatilePath(Config, ['gateApprovalRelay']), false, 'gateApprovalRelay stays non-volatile (config-document field)')
   // The bundle insert row's raw config (cordis.patch.yml) as the loader holds it.
   const rawEntryConfig = {
     hardGate: true, gateMode: 'allowlist', gateAllowlistExtra: ['spawn_teammate', 'send_message', 'interrupt_agent'],
@@ -2608,9 +2619,11 @@ console.log(JSON.stringify({
   assert.equal(Object.hasOwn(patchRow, 'insert'), false, 'the landed row carries NO insert key (user patch row, not a bundle insert row)')
   assert.equal(patchRow.id, 'dsh-cybernetics', 'row id matches the loader entry id')
   assert.equal(patchRow.name, '@mars.liu/dsh-cybernetics', 'row name matches the loader entry name')
-  // Negative control end-to-end: a hardGate op must die at the write() gate
-  // before any document mutation (the v0.7.4/0.7.5 refusal signature).
-  assert.throws(() => { if (!isVolatilePath(Config, ['hardGate'])) throw new Error('Config field "hardGate" is not volatile') },
+  // Negative control end-to-end: a non-volatile gate-field op must die at the
+  // write() gate before any document mutation (the v0.7.4/0.7.5 refusal
+  // signature). v0.8.10: hardGate itself is volatile (writable from the card);
+  // gateMode remains the refused path.
+  assert.throws(() => { if (!isVolatilePath(Config, ['gateMode'])) throw new Error('Config field "gateMode" is not volatile') },
     /not volatile/, 'a non-volatile op is refused pre-write, file untouched')
   console.log('✓ 56 write landing: toggle write survives every host pre-write gate and lands as the user patch row {id, name, config} (no insert)')
 }
@@ -2675,8 +2688,8 @@ console.log(JSON.stringify({
   }
   const form57 = volatileForm57(Config)
   assert.deepEqual(Object.keys(form57.dict ?? {}).sort(),
-    ['allGoalsMode', 'maxConcurrentRounds', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
-    'the served settings form exposes exactly the six volatile fields (roles no longer served since v0.8.4)')
+    ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
+    'the served settings form exposes exactly the eight volatile fields (v0.9.0 adds inputPolicy; roles still not served since v0.8.4)')
   assert.equal(isVolatilePath57(Config, ['roles']), false,
     'a roles write path is NOT volatile (v0.8.4): the panel neither serves nor writes it')
   // STALE-RUNTIME CONTROL: the pre-0.7.7 runtime face (only allGoalsMode
@@ -2712,13 +2725,13 @@ console.log(JSON.stringify({
     const hostForm = hostSchema.volatileForm(Config)
     assert.notEqual(hostForm, undefined, 'host volatileForm serves a form for the current schema')
     assert.deepEqual(Object.keys(hostForm.dict ?? {}).sort(),
-      ['allGoalsMode', 'maxConcurrentRounds', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
-      'the REAL host volatileForm serves exactly the six volatile fields (roles is off the panel since v0.8.4)')
+      ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
+      'the REAL host volatileForm serves exactly the eight volatile fields (v0.9.0 adds inputPolicy; roles is off the panel since v0.8.4)')
     assert.equal(Object.hasOwn(hostForm.dict ?? {}, 'roles'), false, 'the host form does not serve roles any more')
-    for (const path of [['roundsPerSubgoal'], ['maxConcurrentRounds'], ['taskAgentModel'], ['verifyAgentModel'], ['triageAgentModel'], ['allGoalsMode']]) {
+    for (const path of [['roundsPerSubgoal'], ['maxConcurrentRounds'], ['taskAgentModel'], ['verifyAgentModel'], ['triageAgentModel'], ['allGoalsMode'], ['hardGate'], ['inputPolicy']]) {
       assert.equal(hostSchema.isVolatilePath(Config, path), true, `host write gate accepts ${path.join('.')}`)
     }
-    for (const path of [['roles', 'default', 'model'], ['hardGate'], ['gateMode'], ['toolName'], ['implicitTrigger']]) {
+    for (const path of [['roles', 'default', 'model'], ['gateMode'], ['gateApprovalRelay'], ['toolName'], ['implicitTrigger']]) {
       assert.equal(hostSchema.isVolatilePath(Config, path), false, `host write gate keeps non-volatile ${path.join('.')} unwritable`)
       if (path.length === 1) assert.equal(Object.hasOwn(hostForm.dict ?? {}, path[0]), false, `host form does not serve non-volatile ${path[0]}`)
     }
@@ -3921,6 +3934,117 @@ async function loadSettingsCard(formForApply) {
   console.log('✓ 70 gateApprovalRelay: child policy unpin at creation, OUTERMOST relay to the top-level session agent\'s native approval panel (child->mid->root climb, no child callId, question fallback, native-unavailable → visible question card, dual-unavailable → terminal unavailable, explicit cancel/reject semantics, ordering regression + negative control), root pass-through, opt-out, schema+README')
 }
 
+// 71. v0.8.10 hot-toggle hardGate: the volatile settings-card toggle installs /
+//     disposes the gate wiring live via loader/volatile-update (no remount):
+//     (a) false→true: assemble strips bash, pre-execute denies, guidance gains
+//         the HARD GATE segment;
+//     (b) true→false: tools restored (listener disposed), pre-execute passes,
+//         guidance drops the segment;
+//     (c) repeated toggles are idempotent — never more than one listener set;
+//     (d) gateMode/gatedTools/gateAllowlist stay non-volatile (schema).
+{
+  const rootAgent = { id: 'agent-root' }
+  const registered = []
+  const sections = []
+  // Live-reference face of a volatile field (what schema resolution gives
+  // apply() when the settings card commits a toggle without a remount).
+  const config = { hardGate: { get: () => gateValue } }
+  let gateValue = false
+  const ctx = {
+    tools: { register: () => () => {} },
+    systemPrompt: { section: (s) => { sections.push(s); return () => {} }, getSectionOrder: () => 0 },
+    goals: { get: () => null },
+    workingDirectory: { get: () => root },
+    agentPresets: { serviceFor: () => undefined },
+    agents: { roots: () => [rootAgent] },
+    on: (event, fn) => { registered.push({ event, fn }); return () => {} },
+  }
+  apply(ctx, config)
+  const volatileUpdate = registered.find((l) => l.event === 'loader/volatile-update')
+  assert.ok(volatileUpdate, 'apply() listens on loader/volatile-update')
+  const gateListeners = (event) => registered.filter((l) => l.event === event && l.alive !== false)
+  const fire = (assembly, next = () => assembly) => {
+    const gate = gateListeners('system-prompt/assemble').at(-1)
+    if (gate === undefined) return assembly
+    return gate.fn(assembly, { scope: rootAgent }, next)
+  }
+  const preExecute = async (name) => {
+    const exec = gateListeners('tools/pre-execute').at(-1)
+    if (exec === undefined) return { kind: 'allow' }
+    return exec.fn({ agent: rootAgent, name }, async () => ({ kind: 'allow' }))
+  }
+  // v0.9.0: section.text is a function of the requesting session.
+  const latestSectionText = () => {
+    const t = sections.at(-1)?.text
+    return typeof t === 'function' ? t({ agent: { session: { id: 'hotgate-test' } } }) : (t ?? '')
+  }
+  const countAlive = (event) => registered.filter((l) => l.event === event && l.alive !== false).length
+  const disposeOf = (l) => { l.disposer?.(); l.alive = false }
+  // Track disposers: rewrap ctx.on to capture each listener's disposer.
+  // (Redo the apply with a capturing ctx for dispose assertions.)
+  const registered2 = []
+  const ctx2 = {
+    ...ctx,
+    on: (event, fn) => { const entry = { event, fn, alive: true }; const d = () => { entry.alive = false }; entry.disposer = d; registered2.push(entry); return d },
+  }
+  apply(ctx2, config)
+  const vu = registered2.find((l) => l.event === 'loader/volatile-update')
+  const alive2 = (event) => registered2.filter((l) => l.event === event && l.alive !== false)
+  const fire2 = (assembly) => {
+    const gates = alive2('system-prompt/assemble')
+    if (gates.length === 0) return assembly
+    return gates.at(-1).fn(assembly, { scope: rootAgent }, () => assembly)
+  }
+  const pre2 = async (name) => {
+    const execs = alive2('tools/pre-execute')
+    if (execs.length === 0) return { kind: 'allow' }
+    return execs.at(-1).fn({ agent: rootAgent, name }, async () => ({ kind: 'allow' }))
+  }
+
+  // (a) initial hardGate=false → no gate; volatile toggle to true (panel save).
+  assert.equal(alive2('system-prompt/assemble').length, 0, 'initial hardGate=false installs no gate')
+  gateValue = true
+  vu.fn()
+  assert.equal(alive2('system-prompt/assemble').length, 1, 'false→true hot toggle installs exactly one assemble gate')
+  assert.equal(alive2('tools/pre-execute').length, 1, 'false→true hot toggle installs exactly one pre-execute gate')
+  const stripped = fire2({ tools: [{ name: 'bash' }, { name: 'edit' }, { name: 'read' }, { name: 'cybernetics' }] })
+  assert.deepEqual(stripped.tools.map((t) => t.name), ['read', 'cybernetics'], 'hot-enabled gate strips bash/edit from the root assembly')
+  const denied = await pre2('bash')
+  assert.equal(denied.kind, 'deny', 'hot-enabled gate denies bash at tools/pre-execute')
+  assert.match(latestSectionText(), /HARD GATE ACTIVE/, 'guidance gains the HARD GATE segment on hot enable')
+
+  // (b) true→false: tools restored, listeners disposed.
+  gateValue = false
+  vu.fn()
+  assert.equal(alive2('system-prompt/assemble').length, 0, 'true→false hot toggle disposes the assemble gate')
+  assert.equal(alive2('tools/pre-execute').length, 0, 'true→false hot toggle disposes the pre-execute gate')
+  const restored = fire2({ tools: [{ name: 'bash' }, { name: 'read' }] })
+  assert.deepEqual(restored.tools.map((t) => t.name), ['bash', 'read'], 'gate off: assembly keeps bash (tool restored)')
+  const allowed = await pre2('bash')
+  assert.equal(allowed.kind, 'allow', 'gate off: pre-execute passes bash through')
+  assert.doesNotMatch(latestSectionText(), /HARD GATE ACTIVE/, 'guidance drops the HARD GATE segment on hot disable')
+
+  // (c) repeated toggles are idempotent — one listener set at most, and the
+  //     disposed previous listener is never invoked again.
+  for (const value of [true, true, false, false, true, false, true]) {
+    gateValue = value
+    vu.fn()
+  }
+  assert.equal(alive2('system-prompt/assemble').length, 1, 'repeated toggles leave exactly one live assemble gate (idempotent, no double registration)')
+  assert.equal(alive2('tools/pre-execute').length, 1, 'repeated toggles leave exactly one live pre-execute gate')
+  const afterToggles = await pre2('bash')
+  assert.equal(afterToggles.kind, 'deny', 'the surviving gate after repeated toggles still denies (final state hardGate=true)')
+
+  // (d) the fine-grained gate fields stay non-volatile.
+  assert.equal(Config.dict.gateMode.meta?.volatile, undefined, 'gateMode stays non-volatile')
+  assert.equal(Config.dict.gatedTools.meta?.volatile, undefined, 'gatedTools stays non-volatile')
+  assert.equal(Config.dict.gateAllowlist.meta?.volatile, undefined, 'gateAllowlist stays non-volatile')
+  assert.equal(Config.dict.gateApprovalRelay.meta?.volatile, undefined, 'gateApprovalRelay stays non-volatile')
+  assert.equal(Config.dict.hardGate.meta?.volatile, true, 'hardGate is the volatile toggle')
+
+  console.log('✓ 71 hot-toggle hardGate: false→true installs gate (bash stripped, pre-execute denies, HARD GATE guidance), true→false restores tools + disposes listeners, repeated toggles idempotent, gate fields stay non-volatile')
+}
+
 // 72. brief omission regression (fix A): a goal WITHOUT a work order must not
 //     hand the workflow binder an own property whose value is undefined —
 //     structuredClone keeps it and the host-side json() (snapshotJsonValue)
@@ -4042,4 +4166,4 @@ async function loadSettingsCard(formForApply) {
   console.log('✓ 74 revise warning: briefless lineage → workOrder.present=false + warning + clean args')
 }
 
-console.log('\nALL 74 CHECKS PASSED')
+console.log('\nALL 75 CHECKS PASSED')

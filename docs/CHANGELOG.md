@@ -4,6 +4,34 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.9.0（2026-11-05）：按会话 /cybernetics 开关 + 新输入外环插入
+
+**需求**：(A) 同一会话粒度地开关 cybernetics 编排（ALL-GOALS 路由 + 硬门禁），未设置的会话遵循全局 volatile 配置；(B) 会话有活跃 goal 轮时，新用户输入不再排队到轮后，而是作为外环控制直接插入当前回合——且与 DSH 原生输入路由互不干扰。
+
+- **按会话 override（`src/sessionMode.ts` 新模块）**：会话日志事件 `cybernetics/mode { enabled: true|false|null }` + 同 key 注册投影 `cyberneticsMode`（dsh-plan-mode 同款模式，resume/fork 重放可恢复；`null` = 清除 override 回落全局）。`effectiveEnabled(ctx, session, allGoalsMode)` 统一解析：override 优先，无 override 用全局 `allGoalsMode`。任何读取失败（无注册表/键未重放/坏状态）都解析为「无 override」——fail-safe。
+- **/cybernetics 命令（`src/index.ts`）**：`ctx.inject(['commands'])` 子作用域注册（/plan 同款，handler 直执行不进模型）。`on`/`off` 写一条 durable 模式事件；无参数/status 输出会话 override、全局 allGoalsMode、hardGate、inputPolicy 与生效态。
+- **guidance 函数化**：`systemPrompt.section` 的 `text` 从字符串改为 `(context) => string`（dsh-plan-mode 同款）。override off 会话输出空串；override on 无视全局注入含 ALL-GOALS 的完整编排 guidance；无 override 沿用旧行为（ALL-GOALS 段随全局 `allGoalsMode`）。
+- **硬门禁尊重 override**：装配 waterfall 与 `tools/pre-execute` 两层都先查 `modeOverrideOf === false`——显式 off 的会话工具原样保留、调用不拒绝。注意 hardGate 与 allGoalsMode 互相独立：无 override 时门禁仍按 `hardGate` 配置生效（null override 不改变门禁）。
+- **新输入外环插入（inputPolicy，默认 'insert'，volatile）**：DSH 原生调研结论——输入排队/插入由浏览器端用户设置 `ui-conversation.busyEnter`（缺省 'queue'）决定，客户端按其选择 mode 提交，服务端 `dsh-api-session-controller` `prompt()` 依 mode 调 `agent.steer`（next-step）或 `agent.followup`（next-turn），prompt 路径无服务端扩展点；可用扩展点是 agent loop 发出的 `agent/inbox/inserted` 事件（dsh-goal-round-driver 同款 seam），且 api-session-controller 自己的 updateQueue 'steer' 动作示范了合规搬迁 API：`inbox.remove(id)` + `agent.steer(message)`。本插件监听该事件：仅当会话 cybernetics 生效（override 或全局 allGoalsMode）、`inputPolicy==='insert'`、agent running、消息是排队 next-turn 的用户输入时才搬迁为 next-step；其余（override off / 全局关 / policy queue / 空闲 / 非 user source / 委派子 agent）一律不动，原生行为零修改。搬迁失败静默回落原生位置。
+- **配置矩阵（预期行为）**：{cybernetics on, off, 未 override} × {轮运行中, 空闲}：
+  - on + 运行中 → 新输入插队 next-step（外环控制，session agent 立即可见）；
+  - on + 空闲 → 正常 followup 立即唤醒（无排队，无需干预）；
+  - off + 任意 → 完全走 DSH 原生 busyEnter（缺省排队 next-turn），插件零介入；
+  - 未 override + 全局 on + 运行中 → 同 on；未 override + 全局 off → 原生行为。
+- **测试**：`test/v09-session-mode.mjs` 新增（投影折叠 / guidance 会话化 / 门禁两层放行 / 命令 on|off|status / input relay 全矩阵守卫）；`test/v03-offline.mjs` 适配 guidance 函数化与双投影、volatile 字段七→八，全部 75 项通过。
+- **生效手段**：`src/` 改动——重启宿主一次加载新代码；之后 /cybernetics 与 inputPolicy 即时生效。
+
+## v0.8.10（2026-11-05）：hardGate 上设置卡片，volatile 热切换
+
+**需求**：用户要在插件页配置卡片上直接开关硬编排门（像 `allGoalsMode` 一样保存即时生效，无需重启）。此前 `hardGate` 是非 volatile 字段，宿主设置表单只服务 volatile 路径，GUI 完全写不了它。
+
+- **schema（`src/index.ts`）**：`hardGate` 加 `.volatile()`（保留 `default(true)`），description 更新为「设置卡片可开关，保存后即时生效（热装卸门禁监听），无需重启宿主」。`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`/`gateApprovalRelay` 保持非 volatile 不动。
+- **apply() 门禁接线可装卸**：装配 waterfall 摘工具 + `tools/pre-execute` 分发拒绝 + `gateApprovalRelay` 透传（hardGate 伴随项）提取为 `installGate()`（内部 `gateDisposers`，每次调用先卸旧装再按需安装，幂等）。`hardGate` 改为按使用时读取的函数（`readConfigField` 解 volatile live reference；普通配置缺省仍为不装门，与旧语义一致，schema 默认 true 经 live ref 到达运行时）。监听 `loader/volatile-update`：翻转时先 `registerGuidanceSection()`（HARD GATE 提示段随开关重推导）再 `installGate()`——与 `registerGuidanceSection` 同一重建模式。热关→开按当刻 `resolveGateMode()` 解析结果接线（显式 gateMode 优先，否则结构性 allowlist）。插件卸载 disposer 链不变。
+- **client 卡片（`lib/client.js`）**：`SETTINGS_FIELDS` 首位新增 `{ field: 'hardGate', kind: 'boolean' }`；`fieldRow` 新增 boolean 分支（`booleanRow`，与头部 allGoalsMode 开关同款 switch 控件，走同一 `writeField` 写路径）。双语 locale 补 `settings.hardGate` / `settings.hardGateHint`：开启后顶层 agent 写工具被摘除、所有变更经 goal 循环；即时生效，无需重启。
+- **测试（`test/v03-offline.mjs`，增至 72 项）**：新增用例 71——(a) 初始 `hardGate=false` 经 live ref 热切 true：装配中 bash 被摘、pre-execute 拒绝、guidance 含 HARD GATE；(b) true→false：bash 恢复、assemble/pre-execute 监听已 dispose、guidance 摘除段；(c) 反复切换幂等（始终恰好一组活监听，末态 hardGate=true 仍拒绝）；(d) schema 断言 hardGate volatile、其余门字段非 volatile。同步更新既有断言：用例 51/56/57 中 hardGate 从「非 volatile 负向对照」改为 volatile 正向（负向对照换 `gateMode`），volatileForm 服务字段六→七。既有全部用例通过。
+- **文档**：README / README.zh-CN「硬门」小节与「插件页配置」「已知限制」更新——hardGate 从「配置文件维护/重启生效」改为「GUI 卡片开关、volatile 即时生效」；注明首次部署需重启宿主一次加载新代码，此后开关热生效。
+- **生效手段**：`src/index.ts` 改动——重启宿主一次加载新代码，此后开关热生效；`lib/client.js` 改动——重启宿主 + 刷新浏览器（本仓库 `lib/` 即源码）。
+
 ## v0.8.7（2026-11-04）：模型下拉 focus-parking（lib/client.js，仅客户端）
 
 **问题**：原生 datalist 按输入框当前文本过滤选项——已配置模型的字段聚焦后下拉只剩当前那一个模型，用户看不到完整目录，容易误以为没有别的选择。改进方向不是自绘下拉，而是顺应原生 datalist 的过滤语义。

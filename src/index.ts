@@ -34,6 +34,9 @@ import type {
 } from './controller.ts'
 import { startTeamRound, teamExecutorAvailable, teamExecutorUnavailableError } from './executor.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setPublishDebugRoot } from './projection.ts'
+import {
+  MODE_EVENT_TYPE, cyberneticsModeProjection, effectiveEnabled, modeOverrideOf,
+} from './sessionMode.ts'
 
 export const name = 'dsh-cybernetics'
 
@@ -128,6 +131,15 @@ export interface Config extends ControllerConfig {
    */
   allGoalsMode?: boolean
   /**
+   * New-input delivery policy for sessions where cybernetics is effective-on
+   * (v0.9.0, default 'insert'): while a round keeps the session agent busy,
+   * a queued next-turn user input is relocated to next-step (steer) so the
+   * session agent sees it as immediate outer-loop control. Sessions where
+   * cybernetics is off are NEVER touched and follow the DSH-native
+   * `ui-conversation.busyEnter` behavior ('queue' by default).
+   */
+  inputPolicy?: 'insert' | 'queue'
+  /**
    * Max concurrent rounds across ALL sessions (default 0 = unlimited): a new
    * round (blocking, 'start' or 'revise') is refused while this many rounds
    * are in flight, protecting the host from parallel-agent storms.
@@ -148,9 +160,11 @@ export interface Config extends ControllerConfig {
 // effect on the next goal round. roles stays in the schema but is NOT
 // volatile (v0.8.4): the panel serves only volatile fields, so it no longer
 // shows in the GUI — advanced users (agent-guided) configure it directly in
-// the profile config yaml; a host reload applies it. hardGate and the gate fields stay non-volatile: the panel
-// cannot write them (they change structural wiring — tool stripping listener —
-// so they belong in the profile config document instead).
+// the profile config yaml; a host reload applies it. v0.8.10: hardGate itself
+// is volatile and toggleable from the settings card (the gate wiring is
+// installed/disposed live on loader/volatile-update); the fine-grained gate
+// fields (gateMode/gatedTools/gateAllowlist/gateAllowlistExtra) and
+// gateApprovalRelay stay non-volatile config-document fields.
 export const Config = z.object({
   /** Model-facing tool name. */
   toolName: z.string().default('cybernetics').description('模型侧工具名（缺省 cybernetics）。'),
@@ -206,8 +220,14 @@ export const Config = z.object({
    * Volatile: enforced at every launch, live on the next tool call.
    */
   maxConcurrentRounds: z.number().default(0).volatile().description('全局并行轮数上限（缺省 0 = 不限）：在跑轮数达到上限时拒绝启动新一轮，防止并行风暴。保存后即时生效，无需重载。'),
-  /** Hard orchestration gate (default true). */
-  hardGate: z.boolean().default(true).description('硬编排门（默认激活）：装配期从顶层 session agent 摘除执行工具，所有改动必须经 cybernetics goal + task agent。修改会触发插件重载。'),
+  /**
+   * Hard orchestration gate (default true). Volatile (v0.8.10): the settings
+   * card exposes a live toggle; on loader/volatile-update apply() disposes or
+   * (re)installs the gate wiring (assemble waterfall + tools/pre-execute deny
+   * + approval relay) without a plugin remount, mirroring the
+   * registerGuidanceSection re-derive pattern.
+   */
+  hardGate: z.boolean().default(true).volatile().description('硬编排门（默认开启）：装配期从顶层 session agent 摘除执行工具，所有改动必须经 cybernetics goal + task agent。设置卡片可开关，保存后即时生效（热装卸门禁监听），无需重启宿主。'),
   /** Tool names hidden in denylist mode (default DEFAULT_GATED_TOOLS). */
   gatedTools: z.array(z.string()).description('denylist 模式下隐藏的工具名（缺省内置 DEFAULT_GATED_TOOLS）。'),
   /**
@@ -233,6 +253,12 @@ export const Config = z.object({
    */
   allGoalsMode: z.boolean().default(false).volatile()
     .description('全目标模式（v0.7，缺省关）：所有用户请求（含只读问题）都必须先经 cybernetics goal。开关在面板上保存后即时生效，无需重载。'),
+  /**
+   * New-input delivery policy (v0.9.0, default 'insert'). Volatile: read live
+   * at every inbox insertion, so a panel edit governs the very next input.
+   */
+  inputPolicy: z.union(['insert', 'queue'] as const).default('insert').volatile()
+    .description('新输入策略（v0.9.0，缺省 insert）：本会话 cybernetics 生效期间，goal 轮运行中到达的新用户输入不再排队到轮后（next-turn），而是作为外环控制直接插入当前回合（next-step/steer）；queue 恢复排队。cybernetics 关闭的会话完全不受此项影响，走 DSH 原生 busyEnter 行为。保存后即时生效。'),
 })
 
 /** One resolved config field: a live reference (volatile), or a plain value. */
@@ -586,19 +612,30 @@ function resolveGateMode(config: Partial<Config>, hardGate: boolean): 'denylist'
 
 export function apply(ctx: any, config: Partial<Config> = {}) {
   const toolName = config.toolName ?? 'cybernetics'
-  const hardGate = config.hardGate === true
+  // v0.8.10: hardGate is a volatile field, so it may arrive as a live
+  // reference whose value the settings card commits in place — read it at use
+  // time instead of capturing it once (same pattern as allGoalsMode below).
+  // Fallback false keeps the plain-object contract unchanged: a config that
+  // simply omits hardGate installs no gate, exactly as before; the schema's
+  // default(true) reaches the runtime through the live reference the volatile
+  // resolution provides.
+  const hardGate = (): boolean => readConfigField(config.hardGate, false) === true
   // v0.8.6 default-safe gate semantics: a user who turns hardGate on but says
   // nothing about gateMode gets the structural allowlist, not the leaky
   // denylist. hardGate=false resolves to denylist but no gate is installed,
-  // so its behavior is unchanged.
-  const gateMode = resolveGateMode(config, hardGate)
-  const hardGateGuidance = hardGate
-    ? (gateMode === 'allowlist' ? HARD_GATE_GUIDANCE_ALLOWLIST : HARD_GATE_GUIDANCE_DENYLIST)
-    : ''
+  // so its behavior is unchanged. gateMode itself stays non-volatile: its
+  // plain value is re-read on every (re)install, so a hot hardGate flip
+  // re-derives the mode via resolveGateMode at that moment.
   // allGoalsMode is a volatile field: under the loader's schema resolution it
   // arrives as a live reference whose value the settings panel commits in
   // place (no remount), so read it at use time instead of capturing it once.
   const allGoalsMode = () => readConfigField(config.allGoalsMode, false) === true
+  // v0.9.0 per-session enablement: the /cybernetics override wins; without one
+  // the global allGoalsMode volatile decides. Read at every use point — both
+  // the override (session projection) and the global (volatile live ref) can
+  // change while the host runs.
+  const enabledFor = (session: unknown): boolean =>
+    effectiveEnabled(ctx, session, allGoalsMode())
   const disposers: Array<() => void> = []
 
   // v0.6: register the multi-goal session projection, so every goal on the
@@ -613,6 +650,10 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
   if (projections !== undefined && typeof projections.register === 'function') {
     const projectionDisposer = projections.register(cyberneticsGoalsProjection())
     if (typeof projectionDisposer === 'function') disposers.push(projectionDisposer)
+    // v0.9.0: the per-session /cybernetics override projection (same registry,
+    // separate key; replayed eagerly, so modeOverrideOf reads are synchronous).
+    const modeDisposer = projections.register(cyberneticsModeProjection())
+    if (typeof modeDisposer === 'function') disposers.push(modeDisposer)
   }
 
   // The implicit guidance section embeds the volatile allGoalsMode wording,
@@ -624,23 +665,51 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
     if (disposeSection !== undefined) disposeSection()
     disposeSection = undefined
     if (config.implicitTrigger === false) return
+    // v0.8.10: the hard-gate wording is re-derived per call — hardGate is
+    // volatile, so its guidance segment follows the live toggle too.
+    // v0.9.0: the section text is a FUNCTION of the requesting agent's
+    // session (the same form dsh-plan-mode uses for its plan:policy section).
+    // Per-session /cybernetics override:
+    //   off  → no guidance at all for that session (no ALL-GOALS protocol,
+    //          no hard-gate wording) and the gate listeners pass it through;
+    //   on   → full orchestration guidance (ALL-GOALS routing included),
+    //          regardless of the global allGoalsMode;
+    //   none → the global allGoalsMode volatile decides ALL-GOALS inclusion,
+    //          exactly the pre-v0.9.0 behavior for un-overridden sessions.
+    const gateMode = resolveGateMode(config, hardGate())
+    const hardGateGuidance = hardGate()
+      ? (gateMode === 'allowlist' ? HARD_GATE_GUIDANCE_ALLOWLIST : HARD_GATE_GUIDANCE_DENYLIST)
+      : ''
     disposeSection = ctx.systemPrompt.section({
       name: `tool:${toolName}`,
       order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
-      text: IMPLICIT_GUIDANCE + (allGoalsMode() ? ALL_GOALS_GUIDANCE : '') + hardGateGuidance,
+      text: (context: any) => {
+        const session = context?.agent?.session
+        const override = modeOverrideOf(ctx, session)
+        if (override === false) return ''
+        const allGoals = override === true ? true : allGoalsMode()
+        return IMPLICIT_GUIDANCE + (allGoals ? ALL_GOALS_GUIDANCE : '') + hardGateGuidance
+      },
     })
   }
   registerGuidanceSection()
   disposers.push(() => { if (disposeSection !== undefined) disposeSection() })
-  ctx.on?.('loader/volatile-update', () => { registerGuidanceSection() })
 
-  if (hardGate) {
-    // The hard gate: a system-prompt/assemble waterfall listener that strips
-    // execution tools from TOP-LEVEL agents' assemblies. Workflow subagents
-    // (task/verify/triage) and team teammates are never in agents.roots(),
-    // so their assemblies pass through untouched with full tool access.
-    // hardGate/gateMode are non-volatile: the resolved mode is fixed for this
-    // plugin instance and re-derived on reload (gateMode was resolved above).
+  /**
+   * v0.8.10: install (or tear down) the hard-gate wiring in step with the
+   * volatile hardGate toggle. Idempotent: each call first disposes the
+   * previous installation, so repeated toggles never double-register. A
+   * hot false→true re-derives gateMode via resolveGateMode from the CURRENT
+   * resolution (explicit gateMode config wins; otherwise allowlist).
+   */
+  let disposeGate: (() => void) | undefined
+  function installGate(): void {
+    if (disposeGate !== undefined) { disposeGate(); disposeGate = undefined }
+    if (!hardGate()) return
+    const gateDisposers: Array<() => void> = []
+    // The gate is being installed, so hardGate() is true here; resolveGateMode
+    // then honors an explicit gateMode or derives the structural allowlist.
+    const gateMode = resolveGateMode(config, true)
     const allowlistMode = gateMode === 'allowlist'
     // NOTE: schema-resolved config turns an unset z.array field into [] (not
     // undefined), so fall back on length, not on ?? — otherwise the gate
@@ -651,6 +720,10 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       toolName,
     ])
     const gated = new Set(config.gatedTools?.length ? config.gatedTools : DEFAULT_GATED_TOOLS)
+    // The hard gate: a system-prompt/assemble waterfall listener that strips
+    // execution tools from TOP-LEVEL agents' assemblies. Workflow subagents
+    // (task/verify/triage) and team teammates are never in agents.roots(),
+    // so their assemblies pass through untouched with full tool access.
     const listenerDisposer = ctx.on('system-prompt/assemble', (assembly: any, context: any, next: () => unknown) => {
       const scope = context?.scope
       if (!scope) return next()
@@ -666,6 +739,11 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       const parentSession = (scope as any)?.session?.header?.parentSession
       const isSessionRoot = parentSession === undefined
       if (!isRoot && !isSessionRoot) return next()
+      // v0.9.0: an EXPLICIT /cybernetics off override exempts the session —
+      // the gate passes UNFILTERED, tools included verbatim. Without an
+      // override the gate applies exactly as configured (hardGate is
+      // independent of allGoalsMode, so a null override changes nothing).
+      if (modeOverrideOf(ctx, (scope as any)?.session) === false) return next()
       if (Array.isArray(assembly.tools)) {
         assembly.tools = allowlistMode
           ? assembly.tools.filter((t: any) => keep.has(t?.name))
@@ -673,7 +751,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       }
       return next()
     })
-    disposers.push(() => listenerDisposer?.())
+    gateDisposers.push(() => listenerDisposer?.())
 
     // Execution-layer gate (the assembly filter above only hides names; the
     // host resolves any registered tool by name, so an unadvertised call must
@@ -690,6 +768,9 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       const name = exec?.name
       if (typeof name !== 'string') return next()
       if (!isGatedAgent(exec?.agent)) return next()
+      // v0.9.0: the dispatch-layer gate honors the same per-session override
+      // as the assembly filter — an explicit off is never denied here.
+      if (modeOverrideOf(ctx, exec?.agent?.session) === false) return next()
       const blocked = allowlistMode ? !keep.has(name) : gated.has(name)
       if (!blocked) return next()
       return Promise.resolve({
@@ -699,7 +780,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           'Delegate the change: create a cybernetics goal (action "start" with title+brief) and let a task agent execute it.',
       })
     })
-    disposers.push(() => preDisposer?.())
+    gateDisposers.push(() => preDisposer?.())
 
     // v0.8.5 approval relay (gateApprovalRelay, default true): delegated
     // children (workflow subagents, teammates) inherit the host's PINNED
@@ -806,7 +887,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           // A relay must never break delegation — leave the pinned policy.
         }
       })
-      disposers.push(() => createdDisposer?.())
+      gateDisposers.push(() => createdDisposer?.())
 
       const RELAY_QUESTION_ID = 'cybernetics-approval-relay'
       const RELAY_ALLOW = '允许一次（Allow once）'
@@ -957,9 +1038,114 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         const outcome = await relayToSessionAgent(req, root)
         return outcome === undefined ? next() : outcome
       }, { prepend: true })
-      disposers.push(() => relayDisposer?.())
+      gateDisposers.push(() => relayDisposer?.())
     }
+
+    disposeGate = () => { gateDisposers.forEach((d) => d()) }
   }
+  installGate()
+  disposers.push(() => { if (disposeGate !== undefined) disposeGate() })
+  ctx.on?.('loader/volatile-update', () => {
+    registerGuidanceSection()
+    installGate()
+  })
+
+  // --- v0.9.0 input-policy relay (outer-loop control insertion) -------------
+  // DSH native behavior (researched in @deepseek-ai/dsh-api-session-controller
+  // lib/index.js prompt()/updateQueue): the BROWSER decides the delivery mode
+  // from the user setting `ui-conversation.busyEnter` (default 'queue') and
+  // the server calls agent.steer (next-step) or agent.followup (next-turn)
+  // accordingly; prompt() has no server-side extension point, but the loop
+  // emits `agent/inbox/inserted` on every admission (the seam
+  // dsh-goal-round-driver also uses), and api-session-controller's own
+  // updateQueue 'steer' action shows the sanctioned relocation API:
+  // inbox.remove(id) + agent.steer(message). This listener reuses exactly
+  // that pair — it does not touch the decision path, it only relocates an
+  // already-queued next-turn USER input to next-step, and ONLY when the
+  // session's cybernetics enablement is effective-on. Every other session
+  // (override off, or global allGoalsMode false with no override) returns
+  // before any mutation: the native queue behavior is untouched.
+  const inputDisposer = ctx.on?.('agent/inbox/inserted', (payload: any) => {
+    const agent = payload?.agent
+    const message = payload?.message
+    if (agent?.inbox === undefined || message?.id === undefined) return
+    // Delegated children (workflow subagents, team members) are out of scope:
+    // cybernetics governs the top-level session conversation only.
+    if (agent?.session?.header?.parentSession !== undefined) return
+    // Non-cybernetics sessions: zero intervention, native behavior preserved.
+    if (!enabledFor(agent.session)) return
+    // 'queue' restores the native delivery for this deployment.
+    if (readConfigField(config.inputPolicy, 'insert') !== 'insert') return
+    // Only a RUNNING agent actually queues behind the current turn; an idle
+    // agent wakes on the very followup, so relocation is a no-op there.
+    if (agent.status !== 'running') return
+    // Act only on user prompts that landed in the next-turn queue (our own
+    // round notifications and next-step re-insertions of this very relay are
+    // filtered here, which also prevents recursion).
+    if (message?.source?.kind !== 'user') return
+    if (!agent.inbox.nextTurn?.some((m: any) => m?.id === message.id)) return
+    try {
+      if (!agent.inbox.remove(message.id)) return
+      agent.steer(message)
+    } catch (error) {
+      // Relocation is an optimization, never a correctness requirement: on
+      // any race (claimed between the event and removal) the message stays
+      // wherever the native path put it.
+      const logger = (ctx as { logger?: { warn?: (m: string, e: unknown) => void } }).logger
+      try { logger?.warn?.(`cybernetics: failed to steer queued input into session "${agent?.id}": %o`, error) } catch { /* observability only */ }
+    }
+  })
+  if (typeof inputDisposer === 'function') disposers.push(inputDisposer)
+
+  // --- v0.9.0 /cybernetics command (per-session on/off/status) --------------
+  // Same registration shape as dsh-plan-mode's /plan (ctx.inject(['commands'])
+  // child scope; handler executes directly without a model round-trip). The
+  // override is one durable `cybernetics/mode` session event, so resume/fork
+  // replay restores it.
+  ctx.inject?.(['commands'], (commandCtx: any) => {
+    const commandDisposer = commandCtx.commands.register({
+      name: 'cybernetics',
+      description: 'Toggle cybernetics orchestration (ALL-GOALS routing + hard gate) for THIS session',
+      input: { hint: '[on|off]' },
+      handler: (invocation: any) => {
+        const agent = invocation?.agent
+        const session = agent?.session
+        if (session === undefined || typeof session.append !== 'function') {
+          return { kind: 'error' as const, text: 'cybernetics: 会话不可用，无法写入模式事件。' }
+        }
+        const arg = (invocation.rawInput ?? '').trim().toLowerCase()
+        const override = modeOverrideOf(ctx, session)
+        const globalOn = allGoalsMode()
+        if (arg === 'on' || arg === 'off') {
+          try {
+            session.append(MODE_EVENT_TYPE, { enabled: arg === 'on' })
+          } catch (error) {
+            return { kind: 'error' as const, text: `cybernetics: 写入会话模式失败：${String(error)}` }
+          }
+          return {
+            kind: 'success' as const,
+            text: arg === 'on'
+              ? 'cybernetics 编排已对本会话开启（ALL-GOALS 路由 + 硬门禁 + 新输入外环插入）。覆盖全局配置；/cybernetics off 可关闭。'
+              : 'cybernetics 编排已对本会话关闭：不再注入编排 guidance，硬门禁放行，新输入回归 DSH 原生行为。/cybernetics on 可恢复。',
+          }
+        }
+        // No argument (or unknown text) = status report.
+        const effective = override === null ? globalOn : override
+        const overrideText = override === null ? '未设置（遵循全局配置）' : override ? 'on' : 'off'
+        return {
+          kind: 'success' as const,
+          text:
+            `cybernetics 本会话状态：${effective ? '生效' : '关闭'}\n` +
+            `- 会话 override：${overrideText}\n` +
+            `- 全局 allGoalsMode：${globalOn ? 'on' : 'off'}\n` +
+            `- 硬门禁 hardGate：${hardGate() ? (resolveGateMode(config, true) === 'allowlist' ? 'on（allowlist）' : 'on（denylist）') : 'off'}\n` +
+            `- 新输入策略 inputPolicy：${readConfigField(config.inputPolicy, 'insert')}\n` +
+            `用法：/cybernetics on | /cybernetics off`,
+        }
+      },
+    })
+    if (typeof commandDisposer === 'function') disposers.push(() => commandDisposer())
+  })
 
   const disposer = (ctx.tools as { register: (d: unknown) => () => void }).register({
     name: toolName,

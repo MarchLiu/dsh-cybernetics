@@ -42,7 +42,9 @@ flowchart TB
 
 开启后注入「ALL-GOALS MODE ACTIVE」路由协议：**任何用户请求一律先建 goal 再执行**，session agent 禁止用读工具就地完成任务——哪怕单文件查询或一次计算也走回路。简单只读请求 → `quick` 单轮；复杂分析/写任务 → `full` 多轮渐进（`start` 异步启动 + 逐轮 `collect` 收敛）。关闭模式时提示段与 revise 行为与 v0.6 完全一致。
 
-### 硬门（`hardGate`，默认 true——安装即激活）
+### 硬门（`hardGate`，默认 true——安装即激活；v0.8.10 起设置卡片可开关）
+
+**热切换（v0.8.10）**：`hardGate` 已是 **volatile** 字段——插件页设置卡片上有实时开关。保存即把新值提交进运行实例，插件随即卸载或重装门禁监听（装配摘工具 + 分发拒绝 + 审批透传），**即时生效，无需重启、无需插件重载**。从关到开的热启按当前 `gateMode` 解析结果接线（显式配置优先，否则结构性 allowlist）。其余门字段（`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`/`gateApprovalRelay`）仍是非 volatile 配置文档字段，请在 profile 配置文档中维护（保存触发插件重载）。部署注意：本构建首次上线时运行中宿主仍是旧代码——重启宿主一次加载新代码，此后开关即热生效（`lib/client.js` 只需刷新浏览器）。
 
 **生效语义（v0.8.6，默认安全）**：`hardGate` 开启且未配置 `gateMode` 时，门按 **`allowlist`** 运行——顶层 session agent 只保留读 + 对话 + 展示 + goal/编排动词（内置 `DEFAULT_GATE_ALLOWLIST`，可经 `gateAllowlist`/`gateAllowlistExtra` 扩展），所有变更类工具在装配期被**移除**，并在**调用分发层被拒绝**。之所以改为这个默认：旧的 `denylist` 默认是个陷阱——它只隐藏 `gatedTools` 的三个名字（bash/edit/write），`bsk_*`、`taskboard_*`、`schedule_*`、`farm_*`、`uno_*`、`ppt_*`、`config_restore` 以及整个变更工具长尾全都仍可调用，名为硬门、实为半门。`hardGate: false` 与以前完全一致（不装门）；显式配置的 `gateMode` 一律原样尊重；schema 不再给 `gateMode` 设默认值，因此「未设置」与「显式 denylist」可以被区分。
 
@@ -146,7 +148,8 @@ Web 编辑器「插件」页的本插件卡片上直接配置——v0.8.1 起卡
 - **task/verify/triage agent 模型**（`taskAgentModel` / `verifyAgentModel` / `triageAgentModel`，volatile）：下拉加持的文本框——从实时系统模型列表选择（显示 `providerName · provider/model`）或手工输入「provider/model」/裸模型名，回车或移开焦点即保存，留空继承 session agent（triage = 收敛决策角色，仅 full 轮启用）。配置值不在实时模型列表中时显示不可用警告（运行时回退到 session agent 模型）并附一键清除；
 - **递归深度 / 并行上限**（`roundsPerSubgoal` 整数 ≥1 / `maxConcurrentRounds` 整数 ≥0，volatile）：数字框，回车或失焦保存，留空恢复默认（`unset` 写入）；
 - **roles 高级配置**（`roles`，非 volatile）：profile 配置 yaml 直接维护——见下方小节；
-- **硬门相关**（`hardGate`/`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`/`gateApprovalRelay`，非 volatile）：不进入卡片，请在 profile 配置文档中维护（保存触发插件重载）。`gateMode` 无默认值：未设置 + `hardGate: true` 按 `allowlist` 运行；显式 `denylist` 会被尊重，并带有上文记录的残留风险。
+- **硬编排门**（`hardGate`，v0.8.10 起 volatile）：卡片布尔开关——装配期从顶层 agent 摘除写/执行工具，所有变更经 goal 循环完成；保存即时生效（门禁监听热装卸），无需重启；
+- **其余门字段**（`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`/`gateApprovalRelay`，非 volatile）：不进入卡片，请在 profile 配置文档中维护（保存触发插件重载）。`gateMode` 无默认值：未设置 + `hardGate: true` 按 `allowlist` 运行；显式 `denylist` 会被尊重，并带有上文记录的残留风险。
 
 ### roles 高级配置（profile yaml，agent 指导）
 
@@ -205,7 +208,7 @@ session agent 在会话内通过 `cybernetics` 工具（`toolName` 可配置）�
 ## 已知限制
 
 1. **settings 写入的宿主缺陷**：如「插件页配置」一节所述，该运行时上卡片保存可能被宿主在落盘前拒绝（上游 [#12045](https://github.com/deepseek-ai/dsh/discussions/12045)）；workaround：重启宿主 + 强刷浏览器，或手工 patch 行 + 重启。
-2. **volatile 与非 volatile 字段的保存语义差异**：volatile 字段（`allGoalsMode`、`taskAgentModel`、`verifyAgentModel`、`triageAgentModel`、`roundsPerSubgoal`、`maxConcurrentRounds`）保存即时生效、不 remount；非 volatile 字段（v0.8.4 起的 `roles`、`hardGate`、`gateMode`、`gatedTools`、`gateAllowlist*`、`gateApprovalRelay`、`toolName`、`implicitTrigger`）保存触发插件行 remount，需宿主重载完成。且宿主设置表单只服务也只接受 volatile 路径——运行中宿主的 schema 过旧时，volatile 写也会被拒（重启即愈）。
+2. **volatile 与非 volatile 字段的保存语义差异**：volatile 字段（`allGoalsMode`、v0.8.10 起的 `hardGate`、`taskAgentModel`、`verifyAgentModel`、`triageAgentModel`、`roundsPerSubgoal`、`maxConcurrentRounds`）保存即时生效、不 remount；非 volatile 字段（v0.8.4 起的 `roles`、`gateMode`、`gatedTools`、`gateAllowlist*`、`gateApprovalRelay`、`toolName`、`implicitTrigger`）保存触发插件行 remount，需宿主重载完成。且宿主设置表单只服务也只接受 volatile 路径——运行中宿主的 schema 过旧时，volatile 写也会被拒（重启即愈）。
 3. **`link:` 安装注意事项**：客户端 bundle 的注册 id 必须等于 package.json 的 `name`（`@mars.liu/dsh-cybernetics`）；loader 行 id 可用短名 `dsh-cybernetics`。插件需挂在本 profile 的**顶层** loader entries（客户端扫描只枚举顶层行）；`src/` 改动需宿主重载、`lib/` 改动需重启宿主 + 刷新浏览器。
 4. 其他协议边界（硬门在装配层不在执行层、dsh-goal 焦点槽不随 superseded 迁移等）见 [docs/protocol.md](docs/protocol.md) 各「已知边界」小节。
 
