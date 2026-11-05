@@ -4,6 +4,21 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.11.0（2026-11-05）：plan mode ⊃ cybernetics 优先级语义（plan 期间豁免硬门）
+
+**需求**：会话进入 plan 模式时按 plan 语义执行（只读规划 + `exit_plan_mode` 审批），cybernetics 的 ALL-GOALS 路由与硬门禁在该会话**暂停**；批准退出或 `/plan off` 后，下一请求自动恢复 cybernetics 配置语义（实施请求走 goal 循环、写工具重新被门禁约束）。一句话：**plan 决定"能不能动手"，cybernetics 决定"动手走不走循环"**。
+
+**设计决策来源**：`docs/plan-precedence.md`（v0.10.0 定稿设计 + 用户 2026-11-05 裁定「plan 期间关硬门，退出自动恢复」；硬门豁免走按会话、按请求的投影谓词，否决 hook 翻转 volatile 配置的全局方案）。
+
+- **`src/sessionMode.ts` 新增共用谓词**：`PLAN_PROJECTION_KEY = 'plan'` + `planWanted(ctx, session)`——直读本插件已 inject 的同一 `sessionProjections` 注册表里 dsh-plan-mode 的投影（零镜像状态、零 plan-mode 侧配合）。三态判定：`active===true` / `running.wanted===true`（/plan 进行中）/ `wanted===true`（已选待生效）均视为 plan 优先；`wanted===false`（退出待生效）不算。任何失败（plan-mode 未挂载、键未重放、stateOf throw、坏状态）fail-safe 为 false。guidance（一处）与硬门（两层）三处共用，单一事实源，永不失配。
+- **guidance（修 C2/C3）**：`registerGuidanceSection` 的 text 函数在 `override===false` 之后加 `planWanted` 分支——plan 会话整段替换为 `PLAN_PRECEDENCE_GUIDANCE`（禁止建 goal/delegate、只读研究、`exit_plan_mode` 提审；文案为 v0.10.0「本会话硬门豁免」版本），ALL-GOALS 协议与硬门文案（诱导跳过审批的 C3 文案）在 plan 期间完全不出现在 prompt。
+- **硬门两层豁免（v0.10.0 核心）**：`installGate()` 的装配过滤与 `tools/pre-execute` 拒绝都在 `modeOverrideOf` 检查旁加 `planWanted(session) === true → return next()`——plan 激活会话工具全量保留、调用不拒绝，对 allowlist/denylist 两种 gateMode 一致；豁免按会话按请求生效，投影翻转后下一请求自动恢复强制，**零恢复逻辑**（无全局/volatile 状态被翻转，崩溃/被杀无悬挂态）。
+- **C1 兜底**：`DEFAULT_GATE_ALLOWLIST` 头部加 `exit_plan_mode`（只读审批工具，非 plan 会话调用由 plan-mode 侧 throw，无副作用），dispatch 层对两种 gateMode 显式 `next()` 放行——即使 planWanted 检测失效，plan 审批也绝不被双杀。
+- **行为边界**：`/cybernetics off` × plan 保持纯 plan 行为（override off 优先，回归 C4）；denylist 部署下 plan 会话同样 gate 直通（v0.10.0 裁定，文档 §5 矩阵对应行已随本版修正为 v0.10.0 语义）；`hardGate=false` 部署零行为变化。
+- **测试**：新增 `test/plan-precedence.test.ts` 12 组断言（planWanted 三态+fail-safe、guidance 整段替换、allowlist/denylist 两层豁免、pending 三态提前切换、plan 退出自动恢复、C4 回归、C1 兜底双保险、批准→boundary flip 接力、keep planning 豁免保持、hardGate=false 零变化）；`v03-offline`（75 项）/v09/v10 全部不回归；`tsc --noEmit` 与基线 diff 零新增诊断（基线 5 条，TS5097 同类）。
+- **文档**：`docs/plan-precedence.md` 纳入版本控制（顺带修正 :545-595 → :545-575 行号笔误；§5 denylist 非 cyb 会话行更新为 v0.10.0 豁免语义）。
+- **生效手段**：`src/` 改动——重启宿主一次加载新代码。
+
 ## v0.10.0（2026-11-05）：编排模式可视化状态指示（会话头部徽标 + 输入框提示条）
 
 **需求**：让用户一眼区分当前会话是否处于 cybernetics 控制状态（ALL-GOALS 路由 + 硬门禁 + 外环输入插入），并区分「显式 override」与「继承全局」两种生效来源；点击即切换。
