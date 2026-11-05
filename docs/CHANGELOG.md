@@ -8,10 +8,11 @@
 
 **需求**：后台 goal 轮结束产生的内环完成通知（`<cybernetics_round>` followup）此前只在 session agent 空闲时立即唤醒；agent 仍在跑时通知排队在 next-turn，要等当前回合自然结束才被读到，反馈折叠滞后。希望与 v0.9.0 的外环新输入插入对称：内环消息也自动插入（next-step/steer），免手动推送、免等轮后。
 
-- **src/index.ts（input relay 扩展）**：v0.9.0 的 `agent/inbox/inserted` 监听原样保留，过滤条件从「仅 `source.kind === 'user'`」扩展为双策略：user 输入走 `inputPolicy`（v0.9.0 不变），`source.kind === 'cybernetics'` 的轮完成通知走新配置 `noticePolicy`（缺省 `insert`）。两条路径共享同一组非干预守卫（委派子会话不碰、cybernetics 关闭的会话不碰、空闲 agent 不碰——followup 本就立即唤醒、不在 next-turn 的消息不碰——天然防递归）。
+- **src/index.ts（主路径：notifyRoundSettled 直送）**：轮完成通知的投递从无条件 `followup`（next-turn）升级为按策略投递——session agent 仍在跑（`status === 'running'`）且 `noticePolicy='insert'` 时改用 `steer`（next-step），通知在 settle 时刻直接插入当前回合，**根本不进 next-turn 队列**（Web GUI 排队坞不再出现待手动推送的气泡）；空闲 agent 保持原生 `followup`（本就立即唤醒）。steer 与 followup 都带唤醒（`send(_, _, true)`），状态读取竞态（检查后 running→idle）安全；无 `steer` 方法的宿主回退 followup。
+- **src/index.ts（兜底：input relay 扩展）**：v0.9.0 的 `agent/inbox/inserted` 监听原样保留，过滤条件从「仅 `source.kind === 'user'`」扩展为双策略：user 输入走 `inputPolicy`（v0.9.0 不变），`source.kind === 'cybernetics'` 的轮完成通知走新配置 `noticePolicy`（缺省 `insert`）。两条路径共享同一组非干预守卫（委派子会话不碰、cybernetics 关闭的会话不碰、空闲 agent 不碰——followup 本就立即唤醒、不在 next-turn 的消息不碰——天然防递归）。主路径与兜底读同一个旋钮，语义一致：noticePolicy='queue' 时直送恢复 followup、中继不再重定位。
 - **新配置 `noticePolicy: 'insert' | 'queue'`**（缺省 `insert`，volatile，保存即时生效）：`queue` 恢复原生 next-turn 排队。与 `inputPolicy` 是两个独立旋钮。
-- **/cybernetics status**：状态回执新增「轮完成通知策略 noticePolicy」一行。
-- **test/v13-notice-auto-insert.mjs 新增**：缺省插桩（通知从 next-turn 摘除并 steer 进 next-step、对象原样重定位、next-step 重插不递归）、`noticePolicy 'queue'` 恢复排队且与外环 user 输入中继互不影响、四类非干预守卫（空闲/override off/委派子/竞态安全）、status 回执展示 noticePolicy。
+- **/cybernetics status**：状态回执新增「轮完成通知策略 noticePolicy」一行；`cybernetics` 工具 description 与 ALL-GOALS guidance 的 FEEDBACK 段同步改为「auto-inserted（免手动推送）」措辞。
+- **test/v13-notice-auto-insert.mjs 新增**：缺省插桩（通知从 next-turn 摘除并 steer 进 next-step、对象原样重定位、next-step 重插不递归）、`noticePolicy 'queue'` 恢复排队且与外环 user 输入中继互不影响、四类非干预守卫（空闲/override off/委派子/竞态安全）、status 回执展示 noticePolicy、第 5 组直送路径（running→steer 且零队列滞留、idle→followup 唤醒、queue→followup，三条全走真实 tool.execute→settle 链路）。
 - **test/v09-session-mode.mjs、test/v03-offline.mjs 更新**：v0.13 起 cybernetics 通知缺省被中继重定位（v09 原断言「非 user 来源不动」按新语义翻转，补 unknown source kind 反例）；v03 面板 volatile 字段清单 8 → 9（noticePolicy 加入 served form 与宿主 volatileForm/isVolatilePath 真模块交叉核验）。
 - **生效手段**：`src/` 改动——宿主重载生效。
 
