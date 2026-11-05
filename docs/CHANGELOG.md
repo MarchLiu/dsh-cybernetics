@@ -4,6 +4,15 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.11.2（2026-11-05）：术语统一修正轮——补漏命令 description 与文档残留
+
+**需求**：v0.11.1 验证轮发现的硬性缺口——`/cybernetics` 命令 description 残留英文 `orchestration`（命令面板用户可见），违反「英文 UI 不再用 orchestration 指代本模式」；另有文档注释残留「编排」。
+
+- **src/index.ts**：`/cybernetics` 命令 description「Toggle cybernetics orchestration …」→「Toggle cybernetics control loop …」（其余 `orchestration` 出现为代码注释与内部提示词，非用户可见 UI，按 v0.11.1 决策保留）。
+- **docs/protocol.md**：残留 8 处「编排/编排者」→「控制/控制者」（纯文档措辞，不动标识符）。
+- **cordis.patch.yml**：两处英文注释 `read/orchestration`、`orchestration verbs` → control 措辞（纯注释）。
+- **版本**：0.11.1 → 0.11.2。
+
 ## v0.11.1（2026-11-05）：用户可见术语统一——「编排/orchestration」→「控制/control」
 
 **需求**：用户 2026-11-05 提出——control 比 orchestration 更贴切（cybernetics = 控制论），且插件内已有「控制」标签页（`view.control`），同一概念两处叫法需要统一，同时避免与泛用的多 agent「编排」概念混淆。

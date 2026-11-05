@@ -1157,7 +1157,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
   ctx.inject?.(['commands'], (commandCtx: any) => {
     const commandDisposer = commandCtx.commands.register({
       name: 'cybernetics',
-      description: 'Toggle cybernetics orchestration (ALL-GOALS routing + hard gate) for THIS session',
+      description: 'Toggle cybernetics control loop (ALL-GOALS routing + hard gate) for THIS session',
       input: { hint: '[on|off]' },
       handler: (invocation: any) => {
         const agent = invocation?.agent

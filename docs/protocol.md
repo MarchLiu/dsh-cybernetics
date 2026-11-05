@@ -1,6 +1,6 @@
 # Cybernetics 工作协议 v0.7（设计稿）
 
-目标-行动-测量-校准的迭代回路，构建在 DSH 的 `dsh-workflow` 编排与 `dsh-goal` 持久目标之上。
+目标-行动-测量-校准的迭代回路，构建在 DSH 的 `dsh-workflow` 控制回路与 `dsh-goal` 持久目标之上。
 
 ## v0.7 已实现：全量 goal 模式（allGoalsMode）
 
@@ -22,7 +22,7 @@
    唯一路径，改动再小也一样。
 4. **revise 自动决策树**：修订仍是 append-only（新 goal + `parentGoalId`，旧 goal 置
    `superseded`，`'revise'` 是唯一目标变更动词），但 `abortPrevious` 缺省时按旧 task agent
-   状态自动决策（数据来自现有 goal 板 running 状态，不新增编排机制）：
+   状态自动决策（数据来自现有 goal 板 running 状态，不新增控制机制）：
    - (a) 旧轮**在跑**且修订改写目标本身（传入 `objective`，或 `depth` 变化）→ 目标矛盾/
      写域冲突 → **自动中止旧轮**（复用 cancel 路径），等价 `abortPrevious: true`；
    - (b) 旧轮**在跑**但目标不变（仅 brief/title/role 修正），旧工作仍可复用/可并行 →
@@ -191,7 +191,7 @@ wire 上。
 实现：round.js 按 `args.depth` 分支（热生效）；`LoopState.depth` 逐轮可覆盖；
 工具参数 `depth` 枚举 quick/full。
 
-## v0.4 变化：硬门（hard gate）——编排从劝告变成结构
+## v0.4 变化：硬门（hard gate）——控制从劝告变成结构
 
 v0.3 及以前，「session agent 不亲自执行」是系统提示里的劝告，模型可自行判断绕过
 （琐碎任务直接内联完成）。v0.4 增加可选的**硬门**（`hardGate: true`）：
@@ -202,7 +202,7 @@ v0.3 及以前，「session agent 不亲自执行」是系统提示里的劝告�
   工具清单中物理移除——模型根本看不到这些工具，无法调用。
 - 判定顶层 agent 用 `ctx.agents.roots()`（与 dsh-tool-goal 同一 API）；
   workflow 子 agent（task/verify/triage）与 team 成员从不在 roots() 里，
-  它们的装配原样通过，保留全部工具——执行能力只属于被编排的执行者。
+  它们的装配原样通过，保留全部工具——执行能力只属于被控制的执行者。
 - 配套提示段追加 HARD GATE ACTIVE 声明，防止模型把「没有 bash」误读为环境故障。
 - 默认关闭，部署侧通过 `cordis.patch.yml` 的 `config.hardGate: true` 开启。
 - 设计动机（用户 2026-11-02）：思考与行动分离；人类经 goal 跟踪/解释 agent 行为；
@@ -215,17 +215,17 @@ v0.3 及以前，「session agent 不亲自执行」是系统提示里的劝告�
 实机暴露的缺口：denylist 默认只挡 bash/edit/write，session agent 用 `farm_unregister`
 直接删了服务而未建 goal——变更类工具是长尾（farm_*/taskboard_*/knowledge_save/schedule_*/uno_*…），
 逐名封堵永远补不完。`gateMode: 'allowlist'` 反转语义：顶层 agent 只保留
-**读 + 对话 + 展示 + goal/编排动词**（内置 DEFAULT_GATE_ALLOWLIST，可 `gateAllowlist` 覆盖），
+**读 + 对话 + 展示 + goal/控制动词**（内置 DEFAULT_GATE_ALLOWLIST，可 `gateAllowlist` 覆盖），
 cybernetics 工具自身始终豁免。语义随之明确：**只读问答无需 goal 直接答；
 任何「改变世界」的请求——无论多小——都是委派信号**（找不到工具即硬门在起作用）。
 本部署 cordis.patch.yml 已启用 allowlist 模式。
 
-## v0.3 变化：多 goal + 编排者 session agent
+## v0.3 变化：多 goal + 控制者 session agent
 
 - **同一 session 支持多个并发 goal**：插件维护自己的 goal 板（`boards: session -> goalId -> loop`）。
   dsh-goal 仍是每 session 单槽，降级为**焦点 goal**（GUI 页签 + goal-round-driver 自动续跑）；
   新建 registry goal 时若 dsh-goal 空槽则尽力同步进去。
-- **session agent 是编排者，从不亲自执行任务**：它识别用户输入、提取工作委托书（brief）、
+- **session agent 是控制者，从不亲自执行任务**：它识别用户输入、提取工作委托书（brief）、
   启动/收取/取消 task agent 轮、向用户转述反馈。
 - **异步轮**：`action: 'start'` 后台启动一轮并立即返回；轮结束时插件经 `agent.followup()`
   向 session agent 收件箱排队一条完成通知（与 dsh-goal-round-driver 同一机制），
@@ -247,7 +247,7 @@ cybernetics 工具自身始终豁免。语义随之明确：**只读问答无需
 
 | 角色 | 实现 | 职责 |
 |---|---|---|
-| Session Agent | 调用方 | **编排者**：识别输入（新任务/修正/反馈），维护 goal 板，启动/收取/取消轮，向用户转述；从不亲自执行任务 |
+| Session Agent | 调用方 | **控制者**：识别输入（新任务/修正/反馈），维护 goal 板，启动/收取/取消轮，向用户转述；从不亲自执行任务 |
 | Controller | `src/controller.ts` | 轮间状态机：`startRound`/`foldRound`/`runRound`，推进/暂停/终止，维护轮审计日志 |
 | Task Agent | workflow `agent()` | 独立 sub agent（无对话历史），面向工作委托书（brief）实际执行，产出结构化交付报告 |
 | Verify Agent | workflow `agent()` | 把总目标拆成可判定方面逐条验收，产出结构化 verdict |

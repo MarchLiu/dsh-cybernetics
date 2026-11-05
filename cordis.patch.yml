@@ -26,11 +26,11 @@
       # or the browser half is silently skipped (tabs disappear).
       name: '@mars.liu/dsh-cybernetics'
       config:
-        # v0.4 hard gate: restrict top-level session agents to read/orchestration
+        # v0.4 hard gate: restrict top-level session agents to read/control
         # tools at prompt-assembly time — every CHANGE must go through a
         # cybernetics goal + task agent. Task/verify/triage subagents unaffected.
         hardGate: true
-        # allowlist mode: keep ONLY reads + conversation + orchestration verbs
+        # allowlist mode: keep ONLY reads + conversation + control verbs
         # (built-in DEFAULT_GATE_ALLOWLIST); robust against the long tail of
         # mutation tools (farm_*, taskboard_*, knowledge_save, ...).
         gateMode: allowlist
