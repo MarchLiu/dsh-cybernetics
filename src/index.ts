@@ -27,7 +27,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import z from '@deepseek-ai/schemastery'
 import {
-  STATE_DIR, createGoal, decideAbort, foldRound, parseAgentModelSpec, runRound, startRound, supersedeGoal, writeRevisionLog,
+  STATE_DIR, createGoal, decideAbort, foldRound, parseAgentModelSpec, runRound, sanitizeReasoningEffort, startRound, supersedeGoal, writeRevisionLog,
 } from './controller.ts'
 import type {
   ControllerConfig, ControllerDecision, LoopState, ResumableReason, RoundResult, RolesConfig,
@@ -79,6 +79,12 @@ export interface Config extends ControllerConfig {
   verifyAgentModel?: string
   /** Flat triage-agent model override (same format); empty = inherit session agent. */
   triageAgentModel?: string
+  /** v0.15: flat task-agent reasoning-effort id ('' = model default). Volatile. */
+  taskAgentReasoningEffort?: string
+  /** v0.15: flat verify-agent reasoning-effort id ('' = model default). Volatile. */
+  verifyAgentReasoningEffort?: string
+  /** v0.15: flat triage-agent reasoning-effort id ('' = model default). Volatile. */
+  triageAgentReasoningEffort?: string
   /**
    * Hard control gate (default false): hide execution tools from
    * TOP-LEVEL session agents at prompt-assembly time, so the session agent
@@ -219,6 +225,18 @@ export const Config = z.object({
    * verify+triage entirely, so this override only ever fires on full rounds.
    */
   triageAgentModel: z.string().default('').volatile().description('triage agent 模型覆盖（「provider/model」或裸模型名）；留空 = 与 session agent 一致。triage 角色读 task/verify 结果输出本轮收敛决策（met/continue/human-input 等）；quick 轮不启用。保存后下一轮 goal 即生效，无需重载。'),
+  /**
+   * v0.15: flat per-role reasoning-effort ids, one per sub agent. '' = follow
+   * the model default (nothing sent). Volatile like the model fields — the
+   * settings card renders a live dropdown from the paired model's catalog
+   * reasoning.efforts; an unsupported/invalid stored id is sanitized away at
+   * fold time (sanitizeReasoningEffort) and the runtime falls back to the
+   * model default (recorded in the round's fallbacks audit on provider
+   * rejection).
+   */
+  taskAgentReasoningEffort: z.string().default('').volatile().description('task agent 思考强度档位（留空 = 跟随模型默认）。档位列表随该 agent 所选模型动态给出；选择即保存，下一轮 goal 生效。'),
+  verifyAgentReasoningEffort: z.string().default('').volatile().description('verify agent 思考强度档位（留空 = 跟随模型默认）。档位列表随该 agent 所选模型动态给出；选择即保存，下一轮 goal 生效。'),
+  triageAgentReasoningEffort: z.string().default('').volatile().description('triage agent 思考强度档位（留空 = 跟随模型默认）。档位列表随该 agent 所选模型动态给出；选择即保存，下一轮 goal 生效。'),
   /**
    * Max consecutive rounds per subgoal before the loop pauses for the user
    * (controller round-cap, default 3). Volatile: read per round start, so the
@@ -1594,6 +1612,17 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       if (verifySpec) roleOverrides.verify = { ...roleOverrides.verify, ...verifySpec }
       const triageSpec = parseAgentModelSpec(readConfigField(config.triageAgentModel, ''))
       if (triageSpec) roleOverrides.triage = { ...roleOverrides.triage, ...triageSpec }
+      // v0.15: flat reasoning-effort fields fold into the same roles shape.
+      // sanitizeReasoningEffort DROPS an invalid stored id (undefined = send
+      // nothing = the model default applies) instead of forwarding corrupt
+      // values; the settings card mirrors this by displaying the effective
+      // (default) selection with a fallback note.
+      const taskEffort = sanitizeReasoningEffort(readConfigField(config.taskAgentReasoningEffort, ''))
+      if (taskEffort) roleOverrides.default = { ...roleOverrides.default, reasoningEffort: taskEffort }
+      const verifyEffort = sanitizeReasoningEffort(readConfigField(config.verifyAgentReasoningEffort, ''))
+      if (verifyEffort) roleOverrides.verify = { ...roleOverrides.verify, reasoningEffort: verifyEffort }
+      const triageEffort = sanitizeReasoningEffort(readConfigField(config.triageAgentReasoningEffort, ''))
+      if (triageEffort) roleOverrides.triage = { ...roleOverrides.triage, reasoningEffort: triageEffort }
       const controllerConfig: ControllerConfig = {
         roundScriptPath: config.roundScriptPath ?? fileURLToPath(new URL('../workflows/round.js', import.meta.url)),
         // Volatile schema fields surface as live references — unwrap per round

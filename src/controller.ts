@@ -57,6 +57,14 @@ export interface RoundResult {
 export interface RoleSpec {
   provider?: string
   model?: string
+  /**
+   * v0.15: reasoning effort level id (e.g. 'high') passed through the workflow
+   * agent() seam as `reasoningEffort`. Absent = model default (nothing sent).
+   * Validity is model-dependent and cannot be checked here — the round script's
+   * call-level fallback (v0.15 availability pattern) retries on the session
+   * default when a provider rejects the level.
+   */
+  reasoningEffort?: string
 }
 
 /**
@@ -75,6 +83,21 @@ export function parseAgentModelSpec(value?: string): RoleSpec | undefined {
     if (provider && model) return { provider, model }
   }
   return { model: raw }
+}
+
+/**
+ * v0.15: sanitize a stored reasoning-effort id before it reaches the round
+ * script. A non-string / blank / oversized / non-token value is DROPPED
+ * (undefined = send nothing = the model's default effort applies) instead of
+ * being forwarded — a corrupted stored id must degrade to the default, never
+ * poison the request. Token shape: letters/digits/._- up to 64 chars (ids the
+ * model catalogs emit all match; anything looser is treated as corrupt).
+ */
+export function sanitizeReasoningEffort(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const raw = value.trim()
+  if (!raw || raw.length > 64 || !/^[A-Za-z0-9._-]+$/.test(raw)) return undefined
+  return raw
 }
 
 /** Per-role sub-agent configuration: 'default'/'verify'/'triage' plus named task roles. */

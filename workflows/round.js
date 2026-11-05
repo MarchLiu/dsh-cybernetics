@@ -31,8 +31,11 @@ const stepsItem = {
 
 const specFor = (key) => {
   const s = (roles ?? {})[key]
-  return s && (s.provider || s.model)
-    ? { ...(s.provider ? { provider: s.provider } : {}), ...(s.model ? { model: s.model } : {}) }
+  // v0.15: carry the per-role reasoning effort (role -> {reasoningEffort}) alongside
+  // provider/model; an effort WITHOUT provider/model is valid — the agent keeps the
+  // session model and only pins the effort level.
+  return s && (s.provider || s.model || s.reasoningEffort)
+    ? { ...(s.provider ? { provider: s.provider } : {}), ...(s.model ? { model: s.model } : {}), ...(s.reasoningEffort ? { reasoningEffort: s.reasoningEffort } : {}) }
     : {}
 }
 
@@ -65,6 +68,10 @@ const AVAILABILITY_PATTERNS = [
   // v0.8.3：配置的模型在模型设置里删除订阅（provider 仍在但该 model 不可路由）时
   // 的典型报错形态（AGENT_RESULT 内嵌或无 code 的直抛），与既有模式互补。
   /model not found|no such model|unknown model|invalid model|not subscribed|model .*not (?:available|enabled|found)/i,
+  // v0.15：配置的思考强度档位不被当前模型支持（provider 侧校验失败的典型报错形态）。
+  // 命中即按可用性失败回退：以 session 模型 + 默认档位重试一次（callRoleAgent 的回退
+  // 调用不携带 spec，天然不发送 reasoningEffort），并记入 fallbacks 审计。
+  /reasoning.?effort|thinking.?effort|effort .*not supported|unsupported effort|invalid effort|unknown effort/i,
   /rate.?limit|\b429\b|too many requests/i,                                      // 限流
   /quota|insufficient|额度|余额|配额/i,                                           // 限额 / quota 耗尽
   /\b401\b|\b403\b|unauthorized|forbidden|invalid api key|authentication/i,      // 鉴权
@@ -79,7 +86,7 @@ const isAvailabilityFailure = (err) => {
   return AVAILABILITY_PATTERNS.some((re) => re.test(text))
 }
 
-const specLabel = (spec) => [spec.provider, spec.model].filter(Boolean).join('/')
+const specLabel = (spec) => [spec.provider, spec.model, spec.reasoningEffort].filter(Boolean).join('/')
 
 /**
  * 以角色模型覆盖调用 agent()；覆盖模型不可用（可用性错误或 null 无产出）时
@@ -89,7 +96,7 @@ const specLabel = (spec) => [spec.provider, spec.model].filter(Boolean).join('/'
  */
 const callRoleAgent = async (roleKey, prompt, opts) => {
   const spec = specFor(roleKey)
-  const overridden = !!(spec.provider || spec.model)
+  const overridden = !!(spec.provider || spec.model || spec.reasoningEffort)
   try {
     const result = await agent(prompt, { ...opts, ...spec })
     if (result === null && overridden) {

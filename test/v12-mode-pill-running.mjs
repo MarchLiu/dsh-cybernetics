@@ -105,10 +105,14 @@ await import('../lib/client.js')
   assert.equal(factoryResult.name, 'dsh-cybernetics', 'client module exports its name')
   assert.equal(typeof factoryResult.apply, 'function', 'client module exports apply')
   assert.ok(factoryResult.inject.includes('remote.commands'), 'toggle transport still declared')
-  // No new host injects were required (goals face rides the existing sessions
-  // binding, same path the v0.10.0 cyberneticsMode seat already uses).
-  assert.equal(factoryResult.inject.length, 8, 'inject list unchanged from v0.11.2')
-  console.log('✓ 4 client.js: factory evaluates, inject list unchanged (binding reuse)')
+  // v0.14 adds exactly ONE optional inject: `uiWorkspace` (the goal agents
+  // line's click-through seam — the same openSession(target) the subagent
+  // pill passes openChild through). Guarded at runtime: an absent namespace
+  // disables click-through only. Everything else still rides the sessions
+  // binding, same path the v0.10.0 cyberneticsMode seat uses.
+  assert.equal(factoryResult.inject.length, 9, 'inject list = v0.11.2 set + uiWorkspace (v0.14)')
+  assert.ok(factoryResult.inject.includes('uiWorkspace'), 'goal-agent click-through transport declared')
+  console.log('✓ 4 client.js: factory evaluates, inject list = v0.11.2 + uiWorkspace')
 }
 
 console.log('\nALL v0.12.0 MODE-PILL RUNNING CHECKS PASSED')
