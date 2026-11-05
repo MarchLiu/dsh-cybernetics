@@ -1,8 +1,8 @@
 // v0.15 dsh-workflow-ptc seam installer — CONTENT-VERIFIED stage install.
 //
 // The @deepseek-ai/dsh-workflow-ptc package lives under the host profile
-// (outside the session workspace), so it is installed by apply.sh in a shell
-// with write access to the profile. Safety: before any write, the CURRENT
+// (outside the session workspace), so it is installed by this script, which
+// must run with write access to the profile. Safety: before any write, the CURRENT
 // real file must contain the exact unpatched anchors AND the stage copy the
 // exact patched counterparts (both unique). Any mismatch aborts with zero
 // writes. A timestamped .bak is taken before install.

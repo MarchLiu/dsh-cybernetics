@@ -8,7 +8,7 @@
 // The patch table lives in ./patches.mjs. Covers the four workspace files of
 // the dsh-cybernetics checkout (workflows/round.js, src/controller.ts,
 // src/index.ts, lib/client.js). The @deepseek-ai/dsh-workflow-ptc seam is
-// handled separately by apply.sh (outside the workspace; content-verified
+// handled separately by apply-ptc.mjs (outside the workspace; content-verified
 // stage install).
 //
 // Idempotence: an already-applied anchor aborts ONLY in check/dry-run with a
