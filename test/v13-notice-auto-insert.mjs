@@ -10,7 +10,10 @@
 //   - all non-interference guards still hold (idle agent, off override,
 //     delegated child, message not in next-turn → no recursion),
 //   - user-input relocation (v0.9.0) still works when noticePolicy is 'queue',
-//   - /cybernetics status reports the notice policy.
+//   - /cybernetics status reports the notice policy,
+//   - the PRIMARY direct-delivery path (notifyRoundSettled at settle time,
+//     section 5): running → steer (no queue entry at all), idle → followup
+//     wake, noticePolicy 'queue' → followup.
 // Run: node test/v13-notice-auto-insert.mjs
 
 import assert from 'node:assert/strict'

@@ -13,7 +13,7 @@
 - **新配置 `noticePolicy: 'insert' | 'queue'`**（缺省 `insert`，volatile，保存即时生效）：`queue` 恢复原生 next-turn 排队。与 `inputPolicy` 是两个独立旋钮。
 - **/cybernetics status**：状态回执新增「轮完成通知策略 noticePolicy」一行；`cybernetics` 工具 description 与 ALL-GOALS guidance 的 FEEDBACK 段同步改为「auto-inserted（免手动推送）」措辞。
 - **test/v13-notice-auto-insert.mjs 新增**：缺省插桩（通知从 next-turn 摘除并 steer 进 next-step、对象原样重定位、next-step 重插不递归）、`noticePolicy 'queue'` 恢复排队且与外环 user 输入中继互不影响、四类非干预守卫（空闲/override off/委派子/竞态安全）、status 回执展示 noticePolicy、第 5 组直送路径（running→steer 且零队列滞留、idle→followup 唤醒、queue→followup，三条全走真实 tool.execute→settle 链路）。
-- **test/v09-session-mode.mjs、test/v03-offline.mjs 更新**：v0.13 起 cybernetics 通知缺省被中继重定位（v09 原断言「非 user 来源不动」按新语义翻转，补 unknown source kind 反例）；v03 面板 volatile 字段清单 8 → 9（noticePolicy 加入 served form 与宿主 volatileForm/isVolatilePath 真模块交叉核验）。
+- **test/v09-session-mode.mjs、test/v03-offline.mjs 更新**：v0.13 起 cybernetics 通知缺省被中继重定位（v09 原断言「非 user 来源不动」按新语义翻转，补 unknown source kind 反例）；v03 面板 schema 检查补 `noticePolicy` volatile 断言。
 - **生效手段**：`src/` 改动——宿主重载生效。
 
 ## v0.12.0（2026-11-05）：控制徽标「内环运行中」脉冲动画（ModePill × cyberneticsGoals）

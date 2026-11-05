@@ -2110,6 +2110,7 @@ console.log(JSON.stringify({
   assert.equal(Config.dict.roles.meta?.volatile, undefined, 'roles is NOT volatile since v0.8.4 (gone from the panel; configured via profile yaml)')
   assert.equal(Config.dict.roundsPerSubgoal.meta?.volatile, true, 'roundsPerSubgoal is volatile (panel-editable)')
   assert.equal(Config.dict.maxConcurrentRounds.meta?.volatile, true, 'maxConcurrentRounds is volatile (panel-editable)')
+  assert.equal(Config.dict.noticePolicy.meta?.volatile, true, 'noticePolicy is volatile (v0.13.0: panel-editable, live on the very next settled round)')
   assert.deepEqual(v.roles.default, { provider: 'p', model: 'm' }, 'non-volatile roles resolves to a plain object (survives schema resolution)')
   // Schema-resolved arrays arrive as [] when unset — apply() must fall back to
   // the built-in gate sets, otherwise the hard gate would keep/gate nothing.
