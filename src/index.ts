@@ -79,7 +79,7 @@ export interface Config extends ControllerConfig {
   /** Flat triage-agent model override (same format); empty = inherit session agent. */
   triageAgentModel?: string
   /**
-   * Hard orchestration gate (default false): hide execution tools from
+   * Hard control gate (default false): hide execution tools from
    * TOP-LEVEL session agents at prompt-assembly time, so the session agent
    * structurally cannot do task work itself — every task must go through a
    * cybernetics goal + task agent. Task/verify/triage subagents (never in
@@ -221,7 +221,7 @@ export const Config = z.object({
    */
   maxConcurrentRounds: z.number().default(0).volatile().description('全局并行轮数上限（缺省 0 = 不限）：在跑轮数达到上限时拒绝启动新一轮，防止并行风暴。保存后即时生效，无需重载。'),
   /**
-   * Hard orchestration gate (default true). Volatile (v0.8.10): the settings
+   * Hard control gate (default true). Volatile (v0.8.10): the settings
    * card exposes a live toggle; on loader/volatile-update apply() disposes or
    * (re)installs the gate wiring (assemble waterfall + tools/pre-execute deny
    * + approval relay) without a plugin remount, mirroring the
@@ -463,7 +463,7 @@ function requireFields(args: Record<string, unknown>, names: string[]): void {
   }
 }
 
-const IMPLICIT_GUIDANCE = `Goal-driven orchestration (cybernetics). You are the SESSION agent: you never execute task work
+const IMPLICIT_GUIDANCE = `Goal-driven control loop (cybernetics). You are the SESSION agent: you never execute task work
 yourself — you manage goals and the task agents that execute them. Classify each user input:
 - TRIVIAL READ-ONLY QUESTION (a fact your read tools answer directly, no computation) → answer inline, no goal.
 - LIGHTWEIGHT ANALYSIS (a bounded query/lookup needing tool work but no multi-step planning) → create a goal
@@ -561,7 +561,7 @@ const DEFAULT_GATED_TOOLS = ['bash', 'edit', 'write']
 
 /**
  * Allowlist-mode survival set for top-level orchestrator agents: pure reads,
- * conversation, presentation and goal/orchestration verbs. Anything that
+ * conversation, presentation and goal/control verbs. Anything that
  * changes the world — files, services, boards, knowledge, schedules, docs,
  * other agents' work — is absent, so the session agent must delegate it to a
  * cybernetics task agent. The cybernetics tool itself is always re-added.
@@ -615,7 +615,7 @@ const DEFAULT_GATE_ALLOWLIST = [
  */
 const HARD_GATE_GUIDANCE_ALLOWLIST = `
 HARD GATE ACTIVE (allowlist mode): your tool list is restricted to reading, searching, conversation,
-presentation and goal/orchestration verbs — every tool that CHANGES the world (edit/write/bash,
+presentation and goal/control verbs — every tool that CHANGES the world (edit/write/bash,
 service lifecycle, board/knowledge/schedule writes, spawning other workers, ...) is STRUCTURALLY
 unavailable to you. Answering a read-only question directly is fine and needs no goal; but the
 moment the user asks for a change — however small — that is your signal to delegate: create a
@@ -703,7 +703,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
     // Per-session /cybernetics override:
     //   off  → no guidance at all for that session (no ALL-GOALS protocol,
     //          no hard-gate wording) and the gate listeners pass it through;
-    //   on   → full orchestration guidance (ALL-GOALS routing included),
+    //   on   → full control guidance (ALL-GOALS routing included),
     //          regardless of the global allGoalsMode;
     //   none → the global allGoalsMode volatile decides ALL-GOALS inclusion,
     //          exactly the pre-v0.9.0 behavior for un-overridden sessions.
@@ -1202,7 +1202,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
   const disposer = (ctx.tools as { register: (d: unknown) => () => void }).register({
     name: toolName,
     description:
-      'Goal-driven orchestration for the SESSION agent, which never executes task work itself: it manages ' +
+      'Goal-driven control loop for the SESSION agent, which never executes task work itself: it manages ' +
       'goals and the independent task agents that execute them. Actions: round (default, blocking) runs one ' +
       'full round (task agent -> verify agent -> triage agent) and returns the controller decision; start ' +
       'launches the round in the background and returns immediately (a completion notice is queued into this ' +
