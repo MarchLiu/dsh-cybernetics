@@ -1,2 +1,7 @@
 .cybernetics/
 node_modules/
+
+# 诊断/会话产物（用户裁定永久忽略，不纳入版本库）
+.diag/
+.fix-llm-pi-ai-*/
+docs/diag-session-*.md
