@@ -1,0 +1,1687 @@
+{
+ "meta": {
+  "files": 1106,
+  "active": 550,
+  "boards": 26,
+  "rounds": 171,
+  "revisions": 58,
+  "cyb_main": [
+   "session-02552ea6-ad14-4902-a3f0-749276de4f72",
+   "session-422e8d5a-8eb5-4637-b4a9-02a0b12ed967",
+   "session-455f4823-622a-42a9-906c-adce1cfd5b1a",
+   "session-48551c04-d368-4375-afc3-306c25e0891a",
+   "session-4eaa9b58-6734-456f-9114-fc1e68959ba1",
+   "session-5b1b5f9f-1dc9-4a51-bcaf-aedba19d976e",
+   "session-799ec920-2f80-4a33-ac7d-ffdfc608c7c6",
+   "session-7b11fa71-1221-463e-bedb-1ab90e8ad972",
+   "session-7d57e4cd-b8e0-4116-b6a4-33a88ee8e252",
+   "session-7e4a8c3f-215f-4081-8d15-8c16e26f258f",
+   "session-9625c9f9-3628-4a35-a0e0-d7fb0714deb6",
+   "session-9e7abdf0-de9a-4a1b-a200-fbe24f6d34c9",
+   "session-a2e26e90-5652-4426-9fa0-2c1902dcba82",
+   "session-a5bd547c-0e31-43ef-8c28-544b183d6ae6",
+   "session-ac838029-465e-437d-9b58-d6a460e15e3d",
+   "session-c5e252df-eb59-45e1-9c61-55be439f83d1",
+   "session-ca35bba7-f6c5-4d7b-8db2-8761c512ef86",
+   "session-cb574b9d-5d40-4af0-80a5-bc91c1bff9fc",
+   "session-d0ae28fa-0866-48c6-8205-497e7efe0a10",
+   "session-d7299c92-b135-4bb0-8bb8-bef37ef090da",
+   "session-f8f4e5b8-185f-451c-8fbe-37e7aa36d2d4",
+   "session-taskboard-2359da6d-937a-4430-a42e-e30f35e7f794",
+   "session-taskboard-7e3af283-6eac-4d3e-9c9b-55d087c61075",
+   "session-taskboard-98e8548f-14f2-4f0d-a5d8-5324036c669f",
+   "session-taskboard-c72e5a02-833f-4492-b485-942f34b5b8d8",
+   "session-taskboard-d95492eb-17f1-49d2-a218-9ae0bc9f26e1"
+  ]
+ },
+ "groups": {
+  "cyb": {
+   "sessions": 485,
+   "input": 47165398,
+   "output": 4481361,
+   "cache": 1435682882,
+   "total_sum": 1487329641
+  },
+  "normal": {
+   "sessions": 65,
+   "input": 10877794,
+   "output": 485870,
+   "cache": 214132736,
+   "total_sum": 225496400
+  }
+ },
+ "per_main": {
+  "session-c4c60943-ade1-41c4-85bf-492bfdf7c84e": {
+   "sid": "session-c4c60943-ade1-41c4-85bf-492bfdf7c84e",
+   "tok": 0,
+   "n_sub": 0,
+   "dur_min": 7.5533,
+   "n_human": 0
+  },
+  "session-6bfeafa0-cf8e-4473-802e-896b1aee689c": {
+   "sid": "session-6bfeafa0-cf8e-4473-802e-896b1aee689c",
+   "tok": 58271,
+   "n_sub": 0,
+   "dur_min": 17052.9203,
+   "n_human": 3
+  },
+  "session-13a5904f-7f87-44a7-adca-695d9c8afa46": {
+   "sid": "session-13a5904f-7f87-44a7-adca-695d9c8afa46",
+   "tok": 0,
+   "n_sub": 0,
+   "dur_min": 0.00015,
+   "n_human": 0
+  },
+  "session-48551c04-d368-4375-afc3-306c25e0891a": {
+   "sid": "session-48551c04-d368-4375-afc3-306c25e0891a",
+   "tok": 1685878,
+   "n_sub": 13,
+   "dur_min": 382.0099333333333,
+   "n_human": 12
+  },
+  "session-2de07444-7726-427d-a5fe-1bb44919a907": {
+   "sid": "session-2de07444-7726-427d-a5fe-1bb44919a907",
+   "tok": 63475,
+   "n_sub": 0,
+   "dur_min": 6.423766666666666,
+   "n_human": 1
+  },
+  "session-3a8ce30d-2e94-4f21-9ac1-8f8656217d50": {
+   "sid": "session-3a8ce30d-2e94-4f21-9ac1-8f8656217d50",
+   "tok": 218197,
+   "n_sub": 1,
+   "dur_min": 2663.2755,
+   "n_human": 1
+  },
+  "session-45a0870b-e689-4ea4-8431-d651e4eeb369": {
+   "sid": "session-45a0870b-e689-4ea4-8431-d651e4eeb369",
+   "tok": 388947,
+   "n_sub": 0,
+   "dur_min": 1458.7669666666666,
+   "n_human": 6
+  },
+  "session-4eaa9b58-6734-456f-9114-fc1e68959ba1": {
+   "sid": "session-4eaa9b58-6734-456f-9114-fc1e68959ba1",
+   "tok": 1397752,
+   "n_sub": 12,
+   "dur_min": 192.06926666666666,
+   "n_human": 6
+  },
+  "session-5b1b5f9f-1dc9-4a51-bcaf-aedba19d976e": {
+   "sid": "session-5b1b5f9f-1dc9-4a51-bcaf-aedba19d976e",
+   "tok": 326575,
+   "n_sub": 6,
+   "dur_min": 19.491666666666667,
+   "n_human": 2
+  },
+  "session-61cd95d6-5049-49e1-a466-dc948bd67a0b": {
+   "sid": "session-61cd95d6-5049-49e1-a466-dc948bd67a0b",
+   "tok": 45739,
+   "n_sub": 0,
+   "dur_min": 243.20753333333334,
+   "n_human": 1
+  },
+  "session-b90b88ed-d81c-4c4c-9acd-2b15d7b65aed": {
+   "sid": "session-b90b88ed-d81c-4c4c-9acd-2b15d7b65aed",
+   "tok": 210803,
+   "n_sub": 0,
+   "dur_min": 3046.2008166666665,
+   "n_human": 2
+  },
+  "session-c5e252df-eb59-45e1-9c61-55be439f83d1": {
+   "sid": "session-c5e252df-eb59-45e1-9c61-55be439f83d1",
+   "tok": 18608,
+   "n_sub": 0,
+   "dur_min": 822.5996166666666,
+   "n_human": 2
+  },
+  "session-d7299c92-b135-4bb0-8bb8-bef37ef090da": {
+   "sid": "session-d7299c92-b135-4bb0-8bb8-bef37ef090da",
+   "tok": 327073,
+   "n_sub": 6,
+   "dur_min": 57.8683,
+   "n_human": 4
+  },
+  "session-e2be6244-ad09-405a-b995-1abfeb1c8b44": {
+   "sid": "session-e2be6244-ad09-405a-b995-1abfeb1c8b44",
+   "tok": 62706,
+   "n_sub": 0,
+   "dur_min": 8.054133333333333,
+   "n_human": 2
+  },
+  "session-taskboard-047c9dbc-0a42-45db-b24f-b582c6a1b10f": {
+   "sid": "session-taskboard-047c9dbc-0a42-45db-b24f-b582c6a1b10f",
+   "tok": 245484,
+   "n_sub": 0,
+   "dur_min": 120.64165,
+   "n_human": 0
+  },
+  "session-taskboard-13118643-434e-4d22-9e07-6586ec2370fe": {
+   "sid": "session-taskboard-13118643-434e-4d22-9e07-6586ec2370fe",
+   "tok": 66335,
+   "n_sub": 0,
+   "dur_min": 0.9581666666666667,
+   "n_human": 0
+  },
+  "session-taskboard-16baf01a-77b8-455b-b05e-bf20781143b3": {
+   "sid": "session-taskboard-16baf01a-77b8-455b-b05e-bf20781143b3",
+   "tok": 218876,
+   "n_sub": 0,
+   "dur_min": 360.7785,
+   "n_human": 0
+  },
+  "session-taskboard-1d36cbea-64f9-45af-a439-576cae711cb3": {
+   "sid": "session-taskboard-1d36cbea-64f9-45af-a439-576cae711cb3",
+   "tok": 150005,
+   "n_sub": 0,
+   "dur_min": 650.6668666666667,
+   "n_human": 0
+  },
+  "session-taskboard-2359da6d-937a-4430-a42e-e30f35e7f794": {
+   "sid": "session-taskboard-2359da6d-937a-4430-a42e-e30f35e7f794",
+   "tok": 165018,
+   "n_sub": 3,
+   "dur_min": 7.681216666666667,
+   "n_human": 0
+  },
+  "session-taskboard-2d41f064-0224-4bac-9dc1-836cd3ce2620": {
+   "sid": "session-taskboard-2d41f064-0224-4bac-9dc1-836cd3ce2620",
+   "tok": 0,
+   "n_sub": 0,
+   "dur_min": 0.30583333333333335,
+   "n_human": 0
+  },
+  "session-taskboard-2dafdd44-8f21-4a86-88b2-bd00a89db84d": {
+   "sid": "session-taskboard-2dafdd44-8f21-4a86-88b2-bd00a89db84d",
+   "tok": 42274,
+   "n_sub": 0,
+   "dur_min": 3.0252,
+   "n_human": 0
+  },
+  "session-taskboard-37d4ebe4-3bf2-4614-8d7a-cba8527535fb": {
+   "sid": "session-taskboard-37d4ebe4-3bf2-4614-8d7a-cba8527535fb",
+   "tok": 53973,
+   "n_sub": 0,
+   "dur_min": 0.5143166666666666,
+   "n_human": 0
+  },
+  "session-taskboard-4cd4634c-b171-482e-aca2-c78193dda262": {
+   "sid": "session-taskboard-4cd4634c-b171-482e-aca2-c78193dda262",
+   "tok": 93770,
+   "n_sub": 0,
+   "dur_min": 1.9373833333333332,
+   "n_human": 0
+  },
+  "session-taskboard-531105f5-087b-4454-bd11-352c3d28884f": {
+   "sid": "session-taskboard-531105f5-087b-4454-bd11-352c3d28884f",
+   "tok": 94671,
+   "n_sub": 0,
+   "dur_min": 3.178383333333333,
+   "n_human": 0
+  },
+  "session-taskboard-6c56ce7f-8dcd-4e6a-997f-ede373870504": {
+   "sid": "session-taskboard-6c56ce7f-8dcd-4e6a-997f-ede373870504",
+   "tok": 46868,
+   "n_sub": 0,
+   "dur_min": 0.9077833333333334,
+   "n_human": 0
+  },
+  "session-taskboard-6ee813cd-770e-4e8b-924c-9923f0be8fa1": {
+   "sid": "session-taskboard-6ee813cd-770e-4e8b-924c-9923f0be8fa1",
+   "tok": 330520,
+   "n_sub": 0,
+   "dur_min": 181.87908333333334,
+   "n_human": 0
+  },
+  "session-taskboard-7d004f41-cbee-4f5c-914f-0ba755c01014": {
+   "sid": "session-taskboard-7d004f41-cbee-4f5c-914f-0ba755c01014",
+   "tok": 68385,
+   "n_sub": 0,
+   "dur_min": 1.0278166666666666,
+   "n_human": 0
+  },
+  "session-taskboard-7d6b59c0-891a-4c8b-8710-ffbec5b5f257": {
+   "sid": "session-taskboard-7d6b59c0-891a-4c8b-8710-ffbec5b5f257",
+   "tok": 35045,
+   "n_sub": 0,
+   "dur_min": 7.096633333333333,
+   "n_human": 0
+  },
+  "session-taskboard-7e3af283-6eac-4d3e-9c9b-55d087c61075": {
+   "sid": "session-taskboard-7e3af283-6eac-4d3e-9c9b-55d087c61075",
+   "tok": 3421004,
+   "n_sub": 42,
+   "dur_min": 782.8097666666666,
+   "n_human": 0
+  },
+  "session-taskboard-a1c137c9-eeac-4e99-a21a-640928a572d2": {
+   "sid": "session-taskboard-a1c137c9-eeac-4e99-a21a-640928a572d2",
+   "tok": 30441,
+   "n_sub": 0,
+   "dur_min": 1.7896,
+   "n_human": 0
+  },
+  "session-taskboard-aae8d748-e372-4685-b8e7-50b71c7811b9": {
+   "sid": "session-taskboard-aae8d748-e372-4685-b8e7-50b71c7811b9",
+   "tok": 115787,
+   "n_sub": 0,
+   "dur_min": 2.961866666666667,
+   "n_human": 0
+  },
+  "session-taskboard-b61c038c-99ea-44e1-8417-d046d42cf53d": {
+   "sid": "session-taskboard-b61c038c-99ea-44e1-8417-d046d42cf53d",
+   "tok": 1612463,
+   "n_sub": 0,
+   "dur_min": 780.5278166666667,
+   "n_human": 0
+  },
+  "session-taskboard-b6913aee-fb31-4b55-b253-e6a7fbde77ad": {
+   "sid": "session-taskboard-b6913aee-fb31-4b55-b253-e6a7fbde77ad",
+   "tok": 107916,
+   "n_sub": 0,
+   "dur_min": 2.485533333333333,
+   "n_human": 0
+  },
+  "session-taskboard-bfeb57e6-413d-43c0-9526-78eb72c76050": {
+   "sid": "session-taskboard-bfeb57e6-413d-43c0-9526-78eb72c76050",
+   "tok": 38855,
+   "n_sub": 0,
+   "dur_min": 0.7860666666666667,
+   "n_human": 0
+  },
+  "session-taskboard-c4522dd2-3a89-4b47-bb48-e96cfe443914": {
+   "sid": "session-taskboard-c4522dd2-3a89-4b47-bb48-e96cfe443914",
+   "tok": 84694,
+   "n_sub": 0,
+   "dur_min": 1.796,
+   "n_human": 0
+  },
+  "session-taskboard-c72e5a02-833f-4492-b485-942f34b5b8d8": {
+   "sid": "session-taskboard-c72e5a02-833f-4492-b485-942f34b5b8d8",
+   "tok": 227269,
+   "n_sub": 3,
+   "dur_min": 122.24426666666666,
+   "n_human": 0
+  },
+  "session-taskboard-cb02d799-b691-403c-b9e6-0cfa43a0d9c4": {
+   "sid": "session-taskboard-cb02d799-b691-403c-b9e6-0cfa43a0d9c4",
+   "tok": 36587,
+   "n_sub": 0,
+   "dur_min": 0.5145833333333333,
+   "n_human": 0
+  },
+  "session-taskboard-cd9dbf31-492b-43eb-8eca-20af11edc860": {
+   "sid": "session-taskboard-cd9dbf31-492b-43eb-8eca-20af11edc860",
+   "tok": 1212232,
+   "n_sub": 0,
+   "dur_min": 721.6186833333334,
+   "n_human": 0
+  },
+  "session-taskboard-e357edcc-4393-4e2a-bf6a-3d6e26490359": {
+   "sid": "session-taskboard-e357edcc-4393-4e2a-bf6a-3d6e26490359",
+   "tok": 96866,
+   "n_sub": 0,
+   "dur_min": 3.8786833333333335,
+   "n_human": 0
+  },
+  "session-taskboard-ea64e033-0929-4822-932c-82bda17e82a4": {
+   "sid": "session-taskboard-ea64e033-0929-4822-932c-82bda17e82a4",
+   "tok": 53020,
+   "n_sub": 0,
+   "dur_min": 1.0529,
+   "n_human": 0
+  },
+  "session-02552ea6-ad14-4902-a3f0-749276de4f72": {
+   "sid": "session-02552ea6-ad14-4902-a3f0-749276de4f72",
+   "tok": 15833864,
+   "n_sub": 94,
+   "dur_min": 2388.6842,
+   "n_human": 57
+  },
+  "session-16cd792b-0605-4371-ac23-a1c17d79d11b": {
+   "sid": "session-16cd792b-0605-4371-ac23-a1c17d79d11b",
+   "tok": 69600,
+   "n_sub": 0,
+   "dur_min": 69.72473333333333,
+   "n_human": 2
+  },
+  "session-422e8d5a-8eb5-4637-b4a9-02a0b12ed967": {
+   "sid": "session-422e8d5a-8eb5-4637-b4a9-02a0b12ed967",
+   "tok": 4843257,
+   "n_sub": 28,
+   "dur_min": 1017.0708,
+   "n_human": 37
+  },
+  "session-4fda9de4-3072-4810-bc9f-a9d56672b4bb": {
+   "sid": "session-4fda9de4-3072-4810-bc9f-a9d56672b4bb",
+   "tok": 54776,
+   "n_sub": 0,
+   "dur_min": 40.723216666666666,
+   "n_human": 2
+  },
+  "session-741d73c0-ea66-4417-9b66-48c9fefe74c7": {
+   "sid": "session-741d73c0-ea66-4417-9b66-48c9fefe74c7",
+   "tok": 21798,
+   "n_sub": 0,
+   "dur_min": 0.47023333333333334,
+   "n_human": 1
+  },
+  "session-7b11fa71-1221-463e-bedb-1ab90e8ad972": {
+   "sid": "session-7b11fa71-1221-463e-bedb-1ab90e8ad972",
+   "tok": 774032,
+   "n_sub": 7,
+   "dur_min": 74.24223333333333,
+   "n_human": 5
+  },
+  "session-8321f0a5-8189-40dd-8095-519875e01686": {
+   "sid": "session-8321f0a5-8189-40dd-8095-519875e01686",
+   "tok": 70871,
+   "n_sub": 0,
+   "dur_min": 3.0657,
+   "n_human": 1
+  },
+  "session-8584c49c-38a7-402a-8900-24bc646c2937": {
+   "sid": "session-8584c49c-38a7-402a-8900-24bc646c2937",
+   "tok": 1385377,
+   "n_sub": 10,
+   "dur_min": 2561.509683333333,
+   "n_human": 10
+  },
+  "session-871685fa-c77e-493e-bbf7-a4288399d621": {
+   "sid": "session-871685fa-c77e-493e-bbf7-a4288399d621",
+   "tok": 10977,
+   "n_sub": 0,
+   "dur_min": 1249.2194666666667,
+   "n_human": 1
+  },
+  "session-978dce84-db81-4b80-ad9a-84c11bb80f52": {
+   "sid": "session-978dce84-db81-4b80-ad9a-84c11bb80f52",
+   "tok": 46994,
+   "n_sub": 0,
+   "dur_min": 0.45926666666666666,
+   "n_human": 1
+  },
+  "session-a2e26e90-5652-4426-9fa0-2c1902dcba82": {
+   "sid": "session-a2e26e90-5652-4426-9fa0-2c1902dcba82",
+   "tok": 316960,
+   "n_sub": 3,
+   "dur_min": 50.99921666666667,
+   "n_human": 5
+  },
+  "session-a5bd547c-0e31-43ef-8c28-544b183d6ae6": {
+   "sid": "session-a5bd547c-0e31-43ef-8c28-544b183d6ae6",
+   "tok": 234862,
+   "n_sub": 3,
+   "dur_min": 247.90326666666667,
+   "n_human": 2
+  },
+  "session-ac838029-465e-437d-9b58-d6a460e15e3d": {
+   "sid": "session-ac838029-465e-437d-9b58-d6a460e15e3d",
+   "tok": 7611579,
+   "n_sub": 93,
+   "dur_min": 1206.5778666666668,
+   "n_human": 43
+  },
+  "session-d0ae28fa-0866-48c6-8205-497e7efe0a10": {
+   "sid": "session-d0ae28fa-0866-48c6-8205-497e7efe0a10",
+   "tok": 3247788,
+   "n_sub": 27,
+   "dur_min": 1836.6414333333332,
+   "n_human": 15
+  },
+  "session-f1cd15d6-5454-4d17-818f-bef13477472e": {
+   "sid": "session-f1cd15d6-5454-4d17-818f-bef13477472e",
+   "tok": 1362698,
+   "n_sub": 1,
+   "dur_min": 157.10925,
+   "n_human": 15
+  },
+  "session-fbf9cf62-a43b-49a6-8058-f143353f451e": {
+   "sid": "session-fbf9cf62-a43b-49a6-8058-f143353f451e",
+   "tok": 19236,
+   "n_sub": 0,
+   "dur_min": 11.602616666666666,
+   "n_human": 2
+  },
+  "session-ad189cb0-f0b2-4443-864d-bf4bcb9bd32d": {
+   "sid": "session-ad189cb0-f0b2-4443-864d-bf4bcb9bd32d",
+   "tok": 245118,
+   "n_sub": 0,
+   "dur_min": 20113.842016666666,
+   "n_human": 5
+  },
+  "session-taskboard-832f3cf5-1831-4a94-8e57-8a901b316374": {
+   "sid": "session-taskboard-832f3cf5-1831-4a94-8e57-8a901b316374",
+   "tok": 385721,
+   "n_sub": 0,
+   "dur_min": 56112.42703333333,
+   "n_human": 13
+  },
+  "session-taskboard-98e8548f-14f2-4f0d-a5d8-5324036c669f": {
+   "sid": "session-taskboard-98e8548f-14f2-4f0d-a5d8-5324036c669f",
+   "tok": 101888,
+   "n_sub": 1,
+   "dur_min": 56159.99055,
+   "n_human": 1
+  },
+  "session-taskboard-d95492eb-17f1-49d2-a218-9ae0bc9f26e1": {
+   "sid": "session-taskboard-d95492eb-17f1-49d2-a218-9ae0bc9f26e1",
+   "tok": 813115,
+   "n_sub": 15,
+   "dur_min": 58097.078466666666,
+   "n_human": 6
+  },
+  "session-455f4823-622a-42a9-906c-adce1cfd5b1a": {
+   "sid": "session-455f4823-622a-42a9-906c-adce1cfd5b1a",
+   "tok": 1521871,
+   "n_sub": 25,
+   "dur_min": 1023.1191833333334,
+   "n_human": 18
+  },
+  "session-db9bfb87-4e57-468c-9b85-4a30cf9c8220": {
+   "sid": "session-db9bfb87-4e57-468c-9b85-4a30cf9c8220",
+   "tok": 0,
+   "n_sub": 0,
+   "dur_min": 0.00015,
+   "n_human": 0
+  },
+  "session-29033bc0-3cb9-459c-8c5e-36e952b9a54b": {
+   "sid": "session-29033bc0-3cb9-459c-8c5e-36e952b9a54b",
+   "tok": 48013,
+   "n_sub": 0,
+   "dur_min": 5.4544,
+   "n_human": 1
+  },
+  "session-799ec920-2f80-4a33-ac7d-ffdfc608c7c6": {
+   "sid": "session-799ec920-2f80-4a33-ac7d-ffdfc608c7c6",
+   "tok": 73723,
+   "n_sub": 1,
+   "dur_min": 4.052116666666667,
+   "n_human": 1
+  },
+  "session-1a7d3084-de03-4a80-81b6-e93a626776a4": {
+   "sid": "session-1a7d3084-de03-4a80-81b6-e93a626776a4",
+   "tok": 27297,
+   "n_sub": 0,
+   "dur_min": 3877.0889833333335,
+   "n_human": 1
+  },
+  "session-7e4a8c3f-215f-4081-8d15-8c16e26f258f": {
+   "sid": "session-7e4a8c3f-215f-4081-8d15-8c16e26f258f",
+   "tok": 765240,
+   "n_sub": 6,
+   "dur_min": 107.69125,
+   "n_human": 9
+  },
+  "session-bb8b2e85-a725-4df0-bd94-8d098bc6ab4d": {
+   "sid": "session-bb8b2e85-a725-4df0-bd94-8d098bc6ab4d",
+   "tok": 1024703,
+   "n_sub": 0,
+   "dur_min": 5493.022766666667,
+   "n_human": 14
+  },
+  "session-f8f4e5b8-185f-451c-8fbe-37e7aa36d2d4": {
+   "sid": "session-f8f4e5b8-185f-451c-8fbe-37e7aa36d2d4",
+   "tok": 1424132,
+   "n_sub": 16,
+   "dur_min": 466.08046666666667,
+   "n_human": 5
+  },
+  "session-80417ac4-464c-427a-b964-c927066ed5a9": {
+   "sid": "session-80417ac4-464c-427a-b964-c927066ed5a9",
+   "tok": 0,
+   "n_sub": 0,
+   "dur_min": 0.00013333333333333334,
+   "n_human": 0
+  },
+  "session-9e7abdf0-de9a-4a1b-a200-fbe24f6d34c9": {
+   "sid": "session-9e7abdf0-de9a-4a1b-a200-fbe24f6d34c9",
+   "tok": 2753571,
+   "n_sub": 12,
+   "dur_min": 340.6237,
+   "n_human": 25
+  },
+  "session-a2d6d22d-4b60-4340-a87f-8e27413dbfc7": {
+   "sid": "session-a2d6d22d-4b60-4340-a87f-8e27413dbfc7",
+   "tok": 120514,
+   "n_sub": 0,
+   "dur_min": 13127.13365,
+   "n_human": 3
+  },
+  "session-e65e16ae-8671-44a2-9637-bfc20eb281fe": {
+   "sid": "session-e65e16ae-8671-44a2-9637-bfc20eb281fe",
+   "tok": 0,
+   "n_sub": 0,
+   "dur_min": 0.0681,
+   "n_human": 0
+  },
+  "session-bd1701f8-7721-465a-aae5-336765a09903": {
+   "sid": "session-bd1701f8-7721-465a-aae5-336765a09903",
+   "tok": 62483,
+   "n_sub": 0,
+   "dur_min": 5942.910016666667,
+   "n_human": 1
+  },
+  "session-d1406048-0ac8-4164-a929-c7430eba5a1b": {
+   "sid": "session-d1406048-0ac8-4164-a929-c7430eba5a1b",
+   "tok": 230093,
+   "n_sub": 0,
+   "dur_min": 1990.9766666666667,
+   "n_human": 4
+  },
+  "session-7d57e4cd-b8e0-4116-b6a4-33a88ee8e252": {
+   "sid": "session-7d57e4cd-b8e0-4116-b6a4-33a88ee8e252",
+   "tok": 593567,
+   "n_sub": 9,
+   "dur_min": 314.9684,
+   "n_human": 4
+  },
+  "session-9625c9f9-3628-4a35-a0e0-d7fb0714deb6": {
+   "sid": "session-9625c9f9-3628-4a35-a0e0-d7fb0714deb6",
+   "tok": 269538,
+   "n_sub": 3,
+   "dur_min": 28.4316,
+   "n_human": 3
+  },
+  "session-babd227b-901a-4c61-a04a-126f44b37b40": {
+   "sid": "session-babd227b-901a-4c61-a04a-126f44b37b40",
+   "tok": 294190,
+   "n_sub": 0,
+   "dur_min": 5738.55175,
+   "n_human": 3
+  },
+  "session-ca35bba7-f6c5-4d7b-8db2-8761c512ef86": {
+   "sid": "session-ca35bba7-f6c5-4d7b-8db2-8761c512ef86",
+   "tok": 2575727,
+   "n_sub": 29,
+   "dur_min": 352.52675,
+   "n_human": 13
+  },
+  "session-cb574b9d-5d40-4af0-80a5-bc91c1bff9fc": {
+   "sid": "session-cb574b9d-5d40-4af0-80a5-bc91c1bff9fc",
+   "tok": 322868,
+   "n_sub": 2,
+   "dur_min": 67.04125,
+   "n_human": 1
+  }
+ },
+ "dim1_buckets": [
+  {
+   "bucket": "<200K",
+   "cyb": {
+    "n": 4,
+    "tok_mean": 89809.25,
+    "tok_median": 87805.5,
+    "dur_mean": 14248.580875,
+    "dur_median": 415.1404166666666
+   },
+   "norm": {
+    "n": 38,
+    "tok_mean": 52585.31578947369,
+    "tok_median": 50516.5,
+    "dur_mean": 1113.9727228070176,
+    "dur_median": 2.9935333333333336
+   }
+  },
+  {
+   "bucket": "200K–1M",
+   "cyb": {
+    "n": 11,
+    "tok_mean": 451918.0909090909,
+    "tok_median": 326575,
+    "dur_mean": 5380.723628787879,
+    "dur_median": 74.24223333333333
+   },
+   "norm": {
+    "n": 10,
+    "tok_mean": 276794.9,
+    "tok_median": 245301.0,
+    "dur_mean": 9178.733998333333,
+    "dur_median": 2327.1260833333336
+   }
+  },
+  {
+   "bucket": "1M–3M",
+   "cyb": {
+    "n": 6,
+    "tok_mean": 1893155.1666666667,
+    "tok_median": 1603874.5,
+    "dur_mean": 459.4048833333333,
+    "dur_median": 367.26834166666663
+   },
+   "norm": {
+    "n": 5,
+    "tok_mean": 1319494.6,
+    "tok_median": 1362698,
+    "dur_mean": 1942.75764,
+    "dur_median": 780.5278166666667
+   }
+  },
+  {
+   "bucket": "≥3M",
+   "cyb": {
+    "n": 5,
+    "tok_mean": 6991498.4,
+    "tok_median": 4843257,
+    "dur_mean": 1446.3568133333333,
+    "dur_median": 1206.5778666666668
+   },
+   "norm": null
+  }
+ ],
+ "dim2_unattended": {
+  "session-c4c60943-ade1-41c4-85bf-492bfdf7c84e": {
+   "sid": "session-c4c60943-ade1-41c4-85bf-492bfdf7c84e",
+   "span": 7.6,
+   "unattended": 7.6,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-6bfeafa0-cf8e-4473-802e-896b1aee689c": {
+   "sid": "session-6bfeafa0-cf8e-4473-802e-896b1aee689c",
+   "span": 17052.9,
+   "unattended": 17048.0,
+   "idle": 4.9,
+   "ratio": 1.0,
+   "n_human": 3
+  },
+  "session-13a5904f-7f87-44a7-adca-695d9c8afa46": {
+   "sid": "session-13a5904f-7f87-44a7-adca-695d9c8afa46",
+   "span": 0.0,
+   "unattended": 0.0,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-48551c04-d368-4375-afc3-306c25e0891a": {
+   "sid": "session-48551c04-d368-4375-afc3-306c25e0891a",
+   "span": 382.0,
+   "unattended": 82.1,
+   "idle": 300.0,
+   "ratio": 0.215,
+   "n_human": 12
+  },
+  "session-2de07444-7726-427d-a5fe-1bb44919a907": {
+   "sid": "session-2de07444-7726-427d-a5fe-1bb44919a907",
+   "span": 6.4,
+   "unattended": 6.4,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 1
+  },
+  "session-3a8ce30d-2e94-4f21-9ac1-8f8656217d50": {
+   "sid": "session-3a8ce30d-2e94-4f21-9ac1-8f8656217d50",
+   "span": 2663.3,
+   "unattended": 2663.3,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 1
+  },
+  "session-45a0870b-e689-4ea4-8431-d651e4eeb369": {
+   "sid": "session-45a0870b-e689-4ea4-8431-d651e4eeb369",
+   "span": 1458.8,
+   "unattended": 98.1,
+   "idle": 1360.7,
+   "ratio": 0.067,
+   "n_human": 6
+  },
+  "session-4eaa9b58-6734-456f-9114-fc1e68959ba1": {
+   "sid": "session-4eaa9b58-6734-456f-9114-fc1e68959ba1",
+   "span": 192.1,
+   "unattended": 70.5,
+   "idle": 121.6,
+   "ratio": 0.367,
+   "n_human": 6
+  },
+  "session-5b1b5f9f-1dc9-4a51-bcaf-aedba19d976e": {
+   "sid": "session-5b1b5f9f-1dc9-4a51-bcaf-aedba19d976e",
+   "span": 19.5,
+   "unattended": 13.4,
+   "idle": 6.1,
+   "ratio": 0.687,
+   "n_human": 2
+  },
+  "session-61cd95d6-5049-49e1-a466-dc948bd67a0b": {
+   "sid": "session-61cd95d6-5049-49e1-a466-dc948bd67a0b",
+   "span": 243.2,
+   "unattended": 243.2,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 1
+  },
+  "session-b90b88ed-d81c-4c4c-9acd-2b15d7b65aed": {
+   "sid": "session-b90b88ed-d81c-4c4c-9acd-2b15d7b65aed",
+   "span": 3046.2,
+   "unattended": 2426.3,
+   "idle": 619.9,
+   "ratio": 0.796,
+   "n_human": 2
+  },
+  "session-c5e252df-eb59-45e1-9c61-55be439f83d1": {
+   "sid": "session-c5e252df-eb59-45e1-9c61-55be439f83d1",
+   "span": 822.6,
+   "unattended": 820.2,
+   "idle": 2.4,
+   "ratio": 0.997,
+   "n_human": 2
+  },
+  "session-d7299c92-b135-4bb0-8bb8-bef37ef090da": {
+   "sid": "session-d7299c92-b135-4bb0-8bb8-bef37ef090da",
+   "span": 57.9,
+   "unattended": 55.4,
+   "idle": 2.5,
+   "ratio": 0.958,
+   "n_human": 4
+  },
+  "session-e2be6244-ad09-405a-b995-1abfeb1c8b44": {
+   "sid": "session-e2be6244-ad09-405a-b995-1abfeb1c8b44",
+   "span": 8.1,
+   "unattended": 7.5,
+   "idle": 0.6,
+   "ratio": 0.93,
+   "n_human": 2
+  },
+  "session-taskboard-047c9dbc-0a42-45db-b24f-b582c6a1b10f": {
+   "sid": "session-taskboard-047c9dbc-0a42-45db-b24f-b582c6a1b10f",
+   "span": 120.6,
+   "unattended": 120.6,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-13118643-434e-4d22-9e07-6586ec2370fe": {
+   "sid": "session-taskboard-13118643-434e-4d22-9e07-6586ec2370fe",
+   "span": 1.0,
+   "unattended": 1.0,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-16baf01a-77b8-455b-b05e-bf20781143b3": {
+   "sid": "session-taskboard-16baf01a-77b8-455b-b05e-bf20781143b3",
+   "span": 360.8,
+   "unattended": 360.8,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-1d36cbea-64f9-45af-a439-576cae711cb3": {
+   "sid": "session-taskboard-1d36cbea-64f9-45af-a439-576cae711cb3",
+   "span": 650.7,
+   "unattended": 650.7,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-2359da6d-937a-4430-a42e-e30f35e7f794": {
+   "sid": "session-taskboard-2359da6d-937a-4430-a42e-e30f35e7f794",
+   "span": 7.7,
+   "unattended": 7.7,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-2d41f064-0224-4bac-9dc1-836cd3ce2620": {
+   "sid": "session-taskboard-2d41f064-0224-4bac-9dc1-836cd3ce2620",
+   "span": 0.3,
+   "unattended": 0.3,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-2dafdd44-8f21-4a86-88b2-bd00a89db84d": {
+   "sid": "session-taskboard-2dafdd44-8f21-4a86-88b2-bd00a89db84d",
+   "span": 3.0,
+   "unattended": 3.0,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-37d4ebe4-3bf2-4614-8d7a-cba8527535fb": {
+   "sid": "session-taskboard-37d4ebe4-3bf2-4614-8d7a-cba8527535fb",
+   "span": 0.5,
+   "unattended": 0.5,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-4cd4634c-b171-482e-aca2-c78193dda262": {
+   "sid": "session-taskboard-4cd4634c-b171-482e-aca2-c78193dda262",
+   "span": 1.9,
+   "unattended": 1.9,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-531105f5-087b-4454-bd11-352c3d28884f": {
+   "sid": "session-taskboard-531105f5-087b-4454-bd11-352c3d28884f",
+   "span": 3.2,
+   "unattended": 3.2,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-6c56ce7f-8dcd-4e6a-997f-ede373870504": {
+   "sid": "session-taskboard-6c56ce7f-8dcd-4e6a-997f-ede373870504",
+   "span": 0.9,
+   "unattended": 0.9,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-6ee813cd-770e-4e8b-924c-9923f0be8fa1": {
+   "sid": "session-taskboard-6ee813cd-770e-4e8b-924c-9923f0be8fa1",
+   "span": 181.9,
+   "unattended": 181.9,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-7d004f41-cbee-4f5c-914f-0ba755c01014": {
+   "sid": "session-taskboard-7d004f41-cbee-4f5c-914f-0ba755c01014",
+   "span": 1.0,
+   "unattended": 1.0,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-7d6b59c0-891a-4c8b-8710-ffbec5b5f257": {
+   "sid": "session-taskboard-7d6b59c0-891a-4c8b-8710-ffbec5b5f257",
+   "span": 7.1,
+   "unattended": 7.1,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-7e3af283-6eac-4d3e-9c9b-55d087c61075": {
+   "sid": "session-taskboard-7e3af283-6eac-4d3e-9c9b-55d087c61075",
+   "span": 782.8,
+   "unattended": 782.8,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-a1c137c9-eeac-4e99-a21a-640928a572d2": {
+   "sid": "session-taskboard-a1c137c9-eeac-4e99-a21a-640928a572d2",
+   "span": 1.8,
+   "unattended": 1.8,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-aae8d748-e372-4685-b8e7-50b71c7811b9": {
+   "sid": "session-taskboard-aae8d748-e372-4685-b8e7-50b71c7811b9",
+   "span": 3.0,
+   "unattended": 3.0,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-b61c038c-99ea-44e1-8417-d046d42cf53d": {
+   "sid": "session-taskboard-b61c038c-99ea-44e1-8417-d046d42cf53d",
+   "span": 780.5,
+   "unattended": 780.5,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-b6913aee-fb31-4b55-b253-e6a7fbde77ad": {
+   "sid": "session-taskboard-b6913aee-fb31-4b55-b253-e6a7fbde77ad",
+   "span": 2.5,
+   "unattended": 2.5,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-bfeb57e6-413d-43c0-9526-78eb72c76050": {
+   "sid": "session-taskboard-bfeb57e6-413d-43c0-9526-78eb72c76050",
+   "span": 0.8,
+   "unattended": 0.8,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-c4522dd2-3a89-4b47-bb48-e96cfe443914": {
+   "sid": "session-taskboard-c4522dd2-3a89-4b47-bb48-e96cfe443914",
+   "span": 1.8,
+   "unattended": 1.8,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-c72e5a02-833f-4492-b485-942f34b5b8d8": {
+   "sid": "session-taskboard-c72e5a02-833f-4492-b485-942f34b5b8d8",
+   "span": 122.2,
+   "unattended": 122.2,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-cb02d799-b691-403c-b9e6-0cfa43a0d9c4": {
+   "sid": "session-taskboard-cb02d799-b691-403c-b9e6-0cfa43a0d9c4",
+   "span": 0.5,
+   "unattended": 0.5,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-cd9dbf31-492b-43eb-8eca-20af11edc860": {
+   "sid": "session-taskboard-cd9dbf31-492b-43eb-8eca-20af11edc860",
+   "span": 721.6,
+   "unattended": 721.6,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-e357edcc-4393-4e2a-bf6a-3d6e26490359": {
+   "sid": "session-taskboard-e357edcc-4393-4e2a-bf6a-3d6e26490359",
+   "span": 3.9,
+   "unattended": 3.9,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-taskboard-ea64e033-0929-4822-932c-82bda17e82a4": {
+   "sid": "session-taskboard-ea64e033-0929-4822-932c-82bda17e82a4",
+   "span": 1.1,
+   "unattended": 1.1,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-02552ea6-ad14-4902-a3f0-749276de4f72": {
+   "sid": "session-02552ea6-ad14-4902-a3f0-749276de4f72",
+   "span": 2388.7,
+   "unattended": 1929.1,
+   "idle": 459.5,
+   "ratio": 0.808,
+   "n_human": 57
+  },
+  "session-16cd792b-0605-4371-ac23-a1c17d79d11b": {
+   "sid": "session-16cd792b-0605-4371-ac23-a1c17d79d11b",
+   "span": 69.7,
+   "unattended": 69.6,
+   "idle": 0.1,
+   "ratio": 0.998,
+   "n_human": 2
+  },
+  "session-422e8d5a-8eb5-4637-b4a9-02a0b12ed967": {
+   "sid": "session-422e8d5a-8eb5-4637-b4a9-02a0b12ed967",
+   "span": 1017.1,
+   "unattended": 870.0,
+   "idle": 147.1,
+   "ratio": 0.855,
+   "n_human": 37
+  },
+  "session-4fda9de4-3072-4810-bc9f-a9d56672b4bb": {
+   "sid": "session-4fda9de4-3072-4810-bc9f-a9d56672b4bb",
+   "span": 40.7,
+   "unattended": 38.9,
+   "idle": 1.8,
+   "ratio": 0.956,
+   "n_human": 2
+  },
+  "session-741d73c0-ea66-4417-9b66-48c9fefe74c7": {
+   "sid": "session-741d73c0-ea66-4417-9b66-48c9fefe74c7",
+   "span": 0.5,
+   "unattended": 0.5,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 1
+  },
+  "session-7b11fa71-1221-463e-bedb-1ab90e8ad972": {
+   "sid": "session-7b11fa71-1221-463e-bedb-1ab90e8ad972",
+   "span": 74.2,
+   "unattended": 35.6,
+   "idle": 38.6,
+   "ratio": 0.48,
+   "n_human": 5
+  },
+  "session-8321f0a5-8189-40dd-8095-519875e01686": {
+   "sid": "session-8321f0a5-8189-40dd-8095-519875e01686",
+   "span": 3.1,
+   "unattended": 3.1,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 1
+  },
+  "session-8584c49c-38a7-402a-8900-24bc646c2937": {
+   "sid": "session-8584c49c-38a7-402a-8900-24bc646c2937",
+   "span": 2561.5,
+   "unattended": 2541.6,
+   "idle": 19.9,
+   "ratio": 0.992,
+   "n_human": 10
+  },
+  "session-871685fa-c77e-493e-bbf7-a4288399d621": {
+   "sid": "session-871685fa-c77e-493e-bbf7-a4288399d621",
+   "span": 1249.2,
+   "unattended": 1249.2,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 1
+  },
+  "session-978dce84-db81-4b80-ad9a-84c11bb80f52": {
+   "sid": "session-978dce84-db81-4b80-ad9a-84c11bb80f52",
+   "span": 0.5,
+   "unattended": 0.5,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 1
+  },
+  "session-a2e26e90-5652-4426-9fa0-2c1902dcba82": {
+   "sid": "session-a2e26e90-5652-4426-9fa0-2c1902dcba82",
+   "span": 51.0,
+   "unattended": 38.1,
+   "idle": 12.9,
+   "ratio": 0.748,
+   "n_human": 5
+  },
+  "session-a5bd547c-0e31-43ef-8c28-544b183d6ae6": {
+   "sid": "session-a5bd547c-0e31-43ef-8c28-544b183d6ae6",
+   "span": 247.9,
+   "unattended": 110.7,
+   "idle": 137.2,
+   "ratio": 0.447,
+   "n_human": 2
+  },
+  "session-ac838029-465e-437d-9b58-d6a460e15e3d": {
+   "sid": "session-ac838029-465e-437d-9b58-d6a460e15e3d",
+   "span": 1206.6,
+   "unattended": 344.3,
+   "idle": 862.3,
+   "ratio": 0.285,
+   "n_human": 43
+  },
+  "session-d0ae28fa-0866-48c6-8205-497e7efe0a10": {
+   "sid": "session-d0ae28fa-0866-48c6-8205-497e7efe0a10",
+   "span": 1836.6,
+   "unattended": 1614.2,
+   "idle": 222.4,
+   "ratio": 0.879,
+   "n_human": 15
+  },
+  "session-f1cd15d6-5454-4d17-818f-bef13477472e": {
+   "sid": "session-f1cd15d6-5454-4d17-818f-bef13477472e",
+   "span": 157.1,
+   "unattended": 89.4,
+   "idle": 67.7,
+   "ratio": 0.569,
+   "n_human": 15
+  },
+  "session-fbf9cf62-a43b-49a6-8058-f143353f451e": {
+   "sid": "session-fbf9cf62-a43b-49a6-8058-f143353f451e",
+   "span": 11.6,
+   "unattended": 2.7,
+   "idle": 8.9,
+   "ratio": 0.235,
+   "n_human": 2
+  },
+  "session-ad189cb0-f0b2-4443-864d-bf4bcb9bd32d": {
+   "sid": "session-ad189cb0-f0b2-4443-864d-bf4bcb9bd32d",
+   "span": 20113.8,
+   "unattended": 19923.6,
+   "idle": 190.2,
+   "ratio": 0.991,
+   "n_human": 5
+  },
+  "session-taskboard-832f3cf5-1831-4a94-8e57-8a901b316374": {
+   "sid": "session-taskboard-832f3cf5-1831-4a94-8e57-8a901b316374",
+   "span": 56112.4,
+   "unattended": 54999.8,
+   "idle": 1112.7,
+   "ratio": 0.98,
+   "n_human": 13
+  },
+  "session-taskboard-98e8548f-14f2-4f0d-a5d8-5324036c669f": {
+   "sid": "session-taskboard-98e8548f-14f2-4f0d-a5d8-5324036c669f",
+   "span": 56160.0,
+   "unattended": 56160.0,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 1
+  },
+  "session-taskboard-d95492eb-17f1-49d2-a218-9ae0bc9f26e1": {
+   "sid": "session-taskboard-d95492eb-17f1-49d2-a218-9ae0bc9f26e1",
+   "span": 58097.1,
+   "unattended": 57865.7,
+   "idle": 231.3,
+   "ratio": 0.996,
+   "n_human": 6
+  },
+  "session-455f4823-622a-42a9-906c-adce1cfd5b1a": {
+   "sid": "session-455f4823-622a-42a9-906c-adce1cfd5b1a",
+   "span": 1023.1,
+   "unattended": 851.6,
+   "idle": 171.5,
+   "ratio": 0.832,
+   "n_human": 18
+  },
+  "session-db9bfb87-4e57-468c-9b85-4a30cf9c8220": {
+   "sid": "session-db9bfb87-4e57-468c-9b85-4a30cf9c8220",
+   "span": 0.0,
+   "unattended": 0.0,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-29033bc0-3cb9-459c-8c5e-36e952b9a54b": {
+   "sid": "session-29033bc0-3cb9-459c-8c5e-36e952b9a54b",
+   "span": 5.5,
+   "unattended": 5.5,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 1
+  },
+  "session-799ec920-2f80-4a33-ac7d-ffdfc608c7c6": {
+   "sid": "session-799ec920-2f80-4a33-ac7d-ffdfc608c7c6",
+   "span": 4.1,
+   "unattended": 4.1,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 1
+  },
+  "session-1a7d3084-de03-4a80-81b6-e93a626776a4": {
+   "sid": "session-1a7d3084-de03-4a80-81b6-e93a626776a4",
+   "span": 3877.1,
+   "unattended": 3877.1,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 1
+  },
+  "session-7e4a8c3f-215f-4081-8d15-8c16e26f258f": {
+   "sid": "session-7e4a8c3f-215f-4081-8d15-8c16e26f258f",
+   "span": 107.7,
+   "unattended": 45.3,
+   "idle": 62.4,
+   "ratio": 0.42,
+   "n_human": 9
+  },
+  "session-bb8b2e85-a725-4df0-bd94-8d098bc6ab4d": {
+   "sid": "session-bb8b2e85-a725-4df0-bd94-8d098bc6ab4d",
+   "span": 5493.0,
+   "unattended": 133.9,
+   "idle": 5359.1,
+   "ratio": 0.024,
+   "n_human": 14
+  },
+  "session-f8f4e5b8-185f-451c-8fbe-37e7aa36d2d4": {
+   "sid": "session-f8f4e5b8-185f-451c-8fbe-37e7aa36d2d4",
+   "span": 466.1,
+   "unattended": 376.4,
+   "idle": 89.7,
+   "ratio": 0.808,
+   "n_human": 5
+  },
+  "session-80417ac4-464c-427a-b964-c927066ed5a9": {
+   "sid": "session-80417ac4-464c-427a-b964-c927066ed5a9",
+   "span": 0.0,
+   "unattended": 0.0,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-9e7abdf0-de9a-4a1b-a200-fbe24f6d34c9": {
+   "sid": "session-9e7abdf0-de9a-4a1b-a200-fbe24f6d34c9",
+   "span": 340.6,
+   "unattended": 188.4,
+   "idle": 152.2,
+   "ratio": 0.553,
+   "n_human": 25
+  },
+  "session-a2d6d22d-4b60-4340-a87f-8e27413dbfc7": {
+   "sid": "session-a2d6d22d-4b60-4340-a87f-8e27413dbfc7",
+   "span": 13127.1,
+   "unattended": 141.7,
+   "idle": 12985.4,
+   "ratio": 0.011,
+   "n_human": 3
+  },
+  "session-e65e16ae-8671-44a2-9637-bfc20eb281fe": {
+   "sid": "session-e65e16ae-8671-44a2-9637-bfc20eb281fe",
+   "span": 0.1,
+   "unattended": 0.1,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 0
+  },
+  "session-bd1701f8-7721-465a-aae5-336765a09903": {
+   "sid": "session-bd1701f8-7721-465a-aae5-336765a09903",
+   "span": 5942.9,
+   "unattended": 5942.9,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 1
+  },
+  "session-d1406048-0ac8-4164-a929-c7430eba5a1b": {
+   "sid": "session-d1406048-0ac8-4164-a929-c7430eba5a1b",
+   "span": 1991.0,
+   "unattended": 1545.6,
+   "idle": 445.4,
+   "ratio": 0.776,
+   "n_human": 4
+  },
+  "session-7d57e4cd-b8e0-4116-b6a4-33a88ee8e252": {
+   "sid": "session-7d57e4cd-b8e0-4116-b6a4-33a88ee8e252",
+   "span": 315.0,
+   "unattended": 34.4,
+   "idle": 280.5,
+   "ratio": 0.109,
+   "n_human": 4
+  },
+  "session-9625c9f9-3628-4a35-a0e0-d7fb0714deb6": {
+   "sid": "session-9625c9f9-3628-4a35-a0e0-d7fb0714deb6",
+   "span": 28.4,
+   "unattended": 17.2,
+   "idle": 11.2,
+   "ratio": 0.606,
+   "n_human": 3
+  },
+  "session-babd227b-901a-4c61-a04a-126f44b37b40": {
+   "sid": "session-babd227b-901a-4c61-a04a-126f44b37b40",
+   "span": 5738.6,
+   "unattended": 32.9,
+   "idle": 5705.6,
+   "ratio": 0.006,
+   "n_human": 3
+  },
+  "session-ca35bba7-f6c5-4d7b-8db2-8761c512ef86": {
+   "sid": "session-ca35bba7-f6c5-4d7b-8db2-8761c512ef86",
+   "span": 352.5,
+   "unattended": 195.8,
+   "idle": 156.7,
+   "ratio": 0.555,
+   "n_human": 13
+  },
+  "session-cb574b9d-5d40-4af0-80a5-bc91c1bff9fc": {
+   "sid": "session-cb574b9d-5d40-4af0-80a5-bc91c1bff9fc",
+   "span": 67.0,
+   "unattended": 67.0,
+   "idle": 0.0,
+   "ratio": 1.0,
+   "n_human": 1
+  }
+ },
+ "dim3_class": {
+  "session-02552ea6-ad14-4902-a3f0-749276de4f72": {
+   "goal_def": 1,
+   "correct": 20,
+   "other": 35,
+   "accept": 1
+  },
+  "session-422e8d5a-8eb5-4637-b4a9-02a0b12ed967": {
+   "goal_def": 1,
+   "correct": 14,
+   "other": 22
+  },
+  "session-455f4823-622a-42a9-906c-adce1cfd5b1a": {
+   "goal_def": 1,
+   "other": 8,
+   "correct": 8,
+   "accept": 1
+  },
+  "session-48551c04-d368-4375-afc3-306c25e0891a": {
+   "goal_def": 1,
+   "correct": 5,
+   "other": 5,
+   "accept": 1
+  },
+  "session-4eaa9b58-6734-456f-9114-fc1e68959ba1": {
+   "goal_def": 1,
+   "other": 4,
+   "correct": 1
+  },
+  "session-5b1b5f9f-1dc9-4a51-bcaf-aedba19d976e": {
+   "goal_def": 1,
+   "correct": 1
+  },
+  "session-799ec920-2f80-4a33-ac7d-ffdfc608c7c6": {
+   "goal_def": 1
+  },
+  "session-7b11fa71-1221-463e-bedb-1ab90e8ad972": {
+   "goal_def": 1,
+   "correct": 1,
+   "other": 2,
+   "accept": 1
+  },
+  "session-7d57e4cd-b8e0-4116-b6a4-33a88ee8e252": {
+   "goal_def": 1,
+   "other": 1,
+   "correct": 1,
+   "accept": 1
+  },
+  "session-7e4a8c3f-215f-4081-8d15-8c16e26f258f": {
+   "goal_def": 1,
+   "correct": 2,
+   "other": 5,
+   "accept": 1
+  },
+  "session-9625c9f9-3628-4a35-a0e0-d7fb0714deb6": {
+   "goal_def": 1,
+   "other": 1,
+   "accept": 1
+  },
+  "session-9e7abdf0-de9a-4a1b-a200-fbe24f6d34c9": {
+   "goal_def": 1,
+   "other": 16,
+   "correct": 7,
+   "accept": 1
+  },
+  "session-a2e26e90-5652-4426-9fa0-2c1902dcba82": {
+   "goal_def": 1,
+   "other": 2,
+   "correct": 1,
+   "accept": 1
+  },
+  "session-a5bd547c-0e31-43ef-8c28-544b183d6ae6": {
+   "goal_def": 1,
+   "accept": 1
+  },
+  "session-ac838029-465e-437d-9b58-d6a460e15e3d": {
+   "goal_def": 1,
+   "correct": 18,
+   "other": 24
+  },
+  "session-c5e252df-eb59-45e1-9c61-55be439f83d1": {
+   "goal_def": 1,
+   "accept": 1
+  },
+  "session-ca35bba7-f6c5-4d7b-8db2-8761c512ef86": {
+   "goal_def": 1,
+   "other": 7,
+   "correct": 4,
+   "accept": 1
+  },
+  "session-cb574b9d-5d40-4af0-80a5-bc91c1bff9fc": {
+   "goal_def": 1
+  },
+  "session-d0ae28fa-0866-48c6-8205-497e7efe0a10": {
+   "goal_def": 1,
+   "correct": 6,
+   "other": 7,
+   "accept": 1
+  },
+  "session-d7299c92-b135-4bb0-8bb8-bef37ef090da": {
+   "goal_def": 1,
+   "other": 2,
+   "accept": 1
+  },
+  "session-f8f4e5b8-185f-451c-8fbe-37e7aa36d2d4": {
+   "goal_def": 1,
+   "other": 2,
+   "correct": 1,
+   "accept": 1
+  },
+  "session-taskboard-2359da6d-937a-4430-a42e-e30f35e7f794": {},
+  "session-taskboard-7e3af283-6eac-4d3e-9c9b-55d087c61075": {},
+  "session-taskboard-98e8548f-14f2-4f0d-a5d8-5324036c669f": {
+   "goal_def": 1
+  },
+  "session-taskboard-c72e5a02-833f-4492-b485-942f34b5b8d8": {},
+  "session-taskboard-d95492eb-17f1-49d2-a218-9ae0bc9f26e1": {
+   "goal_def": 1,
+   "other": 3,
+   "correct": 1,
+   "accept": 1
+  }
+ },
+ "dim3_totals": {
+  "goal_def": 23,
+  "correct": 91,
+  "other": 146,
+  "accept": 16
+ },
+ "dim3_goal": {
+  "session-taskboard-d95492eb-17f1-49d2-a218-9ae0bc9f26e1": {
+   "goals_with_corr": 4,
+   "goals_total": 4
+  },
+  "session-taskboard-98e8548f-14f2-4f0d-a5d8-5324036c669f": {
+   "goals_with_corr": 0,
+   "goals_total": 1
+  },
+  "session-a2e26e90-5652-4426-9fa0-2c1902dcba82": {
+   "goals_with_corr": 2,
+   "goals_total": 2
+  },
+  "session-02552ea6-ad14-4902-a3f0-749276de4f72": {
+   "goals_with_corr": 31,
+   "goals_total": 31
+  },
+  "session-d0ae28fa-0866-48c6-8205-497e7efe0a10": {
+   "goals_with_corr": 9,
+   "goals_total": 9
+  },
+  "session-ac838029-465e-437d-9b58-d6a460e15e3d": {
+   "goals_with_corr": 14,
+   "goals_total": 14
+  },
+  "session-a5bd547c-0e31-43ef-8c28-544b183d6ae6": {
+   "goals_with_corr": 0,
+   "goals_total": 1
+  },
+  "session-7b11fa71-1221-463e-bedb-1ab90e8ad972": {
+   "goals_with_corr": 7,
+   "goals_total": 7
+  },
+  "session-422e8d5a-8eb5-4637-b4a9-02a0b12ed967": {
+   "goals_with_corr": 14,
+   "goals_total": 14
+  },
+  "session-taskboard-7e3af283-6eac-4d3e-9c9b-55d087c61075": {
+   "goals_with_corr": 0,
+   "goals_total": 14
+  },
+  "session-5b1b5f9f-1dc9-4a51-bcaf-aedba19d976e": {
+   "goals_with_corr": 12,
+   "goals_total": 12
+  },
+  "session-4eaa9b58-6734-456f-9114-fc1e68959ba1": {
+   "goals_with_corr": 3,
+   "goals_total": 3
+  },
+  "session-taskboard-2359da6d-937a-4430-a42e-e30f35e7f794": {
+   "goals_with_corr": 0,
+   "goals_total": 1
+  },
+  "session-taskboard-c72e5a02-833f-4492-b485-942f34b5b8d8": {
+   "goals_with_corr": 0,
+   "goals_total": 3
+  },
+  "session-d7299c92-b135-4bb0-8bb8-bef37ef090da": {
+   "goals_with_corr": 0,
+   "goals_total": 1
+  },
+  "session-455f4823-622a-42a9-906c-adce1cfd5b1a": {
+   "goals_with_corr": 16,
+   "goals_total": 16
+  },
+  "session-48551c04-d368-4375-afc3-306c25e0891a": {
+   "goals_with_corr": 8,
+   "goals_total": 8
+  },
+  "session-9625c9f9-3628-4a35-a0e0-d7fb0714deb6": {
+   "goals_with_corr": 0,
+   "goals_total": 2
+  },
+  "session-7d57e4cd-b8e0-4116-b6a4-33a88ee8e252": {
+   "goals_with_corr": 3,
+   "goals_total": 3
+  },
+  "session-ca35bba7-f6c5-4d7b-8db2-8761c512ef86": {
+   "goals_with_corr": 9,
+   "goals_total": 9
+  },
+  "session-cb574b9d-5d40-4af0-80a5-bc91c1bff9fc": {
+   "goals_with_corr": 0,
+   "goals_total": 1
+  },
+  "session-f8f4e5b8-185f-451c-8fbe-37e7aa36d2d4": {
+   "goals_with_corr": 2,
+   "goals_total": 2
+  },
+  "session-7e4a8c3f-215f-4081-8d15-8c16e26f258f": {
+   "goals_with_corr": 4,
+   "goals_total": 4
+  },
+  "session-9e7abdf0-de9a-4a1b-a200-fbe24f6d34c9": {
+   "goals_with_corr": 4,
+   "goals_total": 4
+  },
+  "session-799ec920-2f80-4a33-ac7d-ffdfc608c7c6": {
+   "goals_with_corr": 0,
+   "goals_total": 1
+  }
+ },
+ "dim4": {
+  "verdicts": {
+   "verdict.met=True": 126,
+   "no-verdict(quick轮)": 17,
+   "verdict.met=False": 28
+  },
+  "triage_items": {
+   "human": 178,
+   "defer": 140,
+   "auto": 107
+  },
+  "goals": 144,
+  "rounds_hist": {
+   "1": 128,
+   "2": 10,
+   "3": 4,
+   "4": 1,
+   "7": 1
+  },
+  "multi_round_goals": 16,
+  "corrective_rounds": 27,
+  "bad_round_files": 0
+ },
+ "dim5": {
+  "goals_total": 168,
+  "chain_hist": {
+   "0": 110,
+   "1": 15,
+   "2": 8,
+   "3": 6,
+   "4": 5,
+   "5": 5,
+   "6": 4,
+   "7": 4,
+   "8": 3,
+   "9": 2,
+   "10": 1,
+   "11": 1,
+   "12": 1,
+   "13": 1,
+   "14": 1,
+   "15": 1
+  },
+  "revisions": 58
+ },
+ "dim6": [
+  {
+   "group": "cyb-main",
+   "sessions": 26,
+   "input": 22555715,
+   "output": 973614,
+   "cache": 839485591,
+   "cache_pct_of_input": 3721.8,
+   "roles": {
+    "main": {
+     "sessions": 26,
+     "input": 22555715,
+     "output": 973614,
+     "cache": 839485591,
+     "cache_pct": 3721.8
+    }
+   }
+  },
+  {
+   "group": "cyb-sub",
+   "sessions": 459,
+   "input": 24609683,
+   "output": 3507747,
+   "cache": 596197291,
+   "cache_pct_of_input": 2422.6,
+   "roles": {
+    "task": {
+     "sessions": 207,
+     "input": 14576137,
+     "output": 2418038,
+     "cache": 514492651,
+     "cache_pct": 3529.7
+    },
+    "triage": {
+     "sessions": 126,
+     "input": 3701264,
+     "output": 254970,
+     "cache": 7214592,
+     "cache_pct": 194.9
+    },
+    "verify": {
+     "sessions": 120,
+     "input": 5816517,
+     "output": 735466,
+     "cache": 64166208,
+     "cache_pct": 1103.2
+    },
+    "other": {
+     "sessions": 6,
+     "input": 515765,
+     "output": 99273,
+     "cache": 10323840,
+     "cache_pct": 2001.7
+    }
+   }
+  },
+  {
+   "group": "norm-main",
+   "sessions": 53,
+   "input": 10253049,
+   "output": 444872,
+   "cache": 197271488,
+   "cache_pct_of_input": 1924.0,
+   "roles": {
+    "main": {
+     "sessions": 53,
+     "input": 10253049,
+     "output": 444872,
+     "cache": 197271488,
+     "cache_pct": 1924.0
+    }
+   }
+  },
+  {
+   "group": "norm-sub",
+   "sessions": 12,
+   "input": 624745,
+   "output": 40998,
+   "cache": 16861248,
+   "cache_pct_of_input": 2698.9,
+   "roles": {
+    "other": {
+     "sessions": 8,
+     "input": 506574,
+     "output": 34322,
+     "cache": 16483200,
+     "cache_pct": 3253.9
+    },
+    "triage": {
+     "sessions": 2,
+     "input": 53723,
+     "output": 1325,
+     "cache": 32768,
+     "cache_pct": 61.0
+    },
+    "verify": {
+     "sessions": 2,
+     "input": 64448,
+     "output": 5351,
+     "cache": 345280,
+     "cache_pct": 535.7
+    }
+   }
+  }
+ ]
+}

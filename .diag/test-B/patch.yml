@@ -1,0 +1,470 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+# The DSH Desktop app migrates ~/.dsh/.credentials.yaml to its newer
+# versioned format, which this checkout's credentials-local cannot parse;
+# point CLI-booted profiles at a separate flat document instead.
+- id: credentials
+  config:
+    path: /Users/mars/.dsh/.credentials-cli.yaml
+- id: describe-image
+  config:
+    baseURL: https://open.bigmodel.cn/api/paas/v4
+    model: glm-5v-turbo
+    apiKeyEnv: ZHIPU_API_KEY
+- id: bloom-theme
+  disabled: true
+# @linxin666/dsh-client-ui-task-board 0.3.10 requires dsh >= 0.1.2-alpha.1
+# (typert session/* Remotes via @deepseek-ai/dsh-api-session-controller); this
+# checkout is 0.1.0-rc.8 and exports no `session` Remote, so every poll logged
+# `invocation-unavailable: session/list`. Disable until the host is upgraded.
+# dsh-web-ui-all aggregates the same task-board package under its own row id;
+# disable that copy too, or the poll error survives the standalone disable.
+# (In this profile task-board is only mounted through the aggregate, so the
+# single web-ui-task-board disable below covers it. Its /api/task-board/events
+# SSE also permanently holds one of Chrome's six HTTP/1.1 connections per tab.)
+- id: web-ui-task-board
+  disabled: true
+# The standalone @linxin666/dsh-client-ui-git-graph bundle (row ui-git-graph,
+# listed in this profile's bundles) mounts the same package; the aggregate
+# copy inside dsh-web-ui-all is a redundant second mount of the git service
+# and /git/* routes. Disable it; git status viewing is unaffected.
+# dsh-web-ui-all seeds web-ui-ssh with enabled:false; without this override the
+# SSH panel's /api/dsh-ssh/* routes are never registered (HTTP 404: invalid
+# JSON response).
+- id: web-ui-ssh
+  config:
+    enabled: true
+
+# dsh-at-file 0.6.3 still statically imports `settingsNamespace` from
+# @deepseek-ai/dsh-settings, removed in 0.1.2-alpha.2; the import fails boot
+# on dsh 0.1.2-rc.1. Re-enable once upstream migrates to the new settings API.
+- id: dsh-at-file
+  disabled: true
+# @mars.liu/dsh-graft 0.2.2 migrated its Node half from the removed `apiProxy`
+# seam to ctx.sessionController; re-enabled after verification on dsh 0.1.2-rc.1.
+# Correction (0.2.4): dsh 0.1.2-rc.1's turnTail owner passes a TurnLocation
+# object (its `.turn` field is the number), never a bare numeric prop, and the
+# turnTail CHAIN slot loses the host deliverables badge's registration-order
+# election on every file-producing turn — the turn picker now lives in the
+# assistant-actions LIST slot instead, where entries coexist by id/order.
+# @linxin666/dsh-client-ui-aionui-panel 0.3.6 (latest; mounted by dsh-web-ui-all
+# as web-ui-dsh-aionui-panel) requires @deepseek-ai/dsh-client-runtime, a seam
+# that does not exist in dsh 0.1.2-rc.1; its client module import fails boot.
+# Re-enable once the host is upgraded past 0.1.2 or upstream ships a
+# 0.1.2-compatible panel build.
+- id: web-ui-dsh-aionui-panel
+  disabled: true
+# dsh-recover-context 1.0.6 (latest) waits for the service `conversationEvents`,
+# which no dsh 0.1.2-rc.1 package provides; the entry stays pending and blocks
+# web boot. Re-enable once the host is upgraded or upstream ships a
+# 0.1.2-compatible build.
+- id: dsh-recover-context
+  disabled: true
+- id: ui-git-graph
+  disabled: false
+# dshmarket 1.45.0 的 client 注入 @deepseek-ai/dsh-client-runtime——该 seam 在
+# 0.1.2-rc.1 上不完整（同 aionui-panel 前科）；它不崩 boot，但会静默阻断后续
+# client 模块加载，dsh-context 的 /context 命令因此注册不上（2026-09-08 经
+# canary 隔离环境 6 轮二分定位，issue: dsh-market/dsh-market#554）。
+# 插件市场为日常必需，反向取舍：保留 dsh-market，禁用 dsh-context。
+- id: dsh-market
+  disabled: false
+- id: ui-settings-general
+  name: "@deepseek-ai/dsh-client-ui-settings-general"
+  config:
+    welcomeNoticeVersion: 2026-09-28.1
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      zai-coding-cn:
+        apiKeyEnv: ZHIPU_API_KEY
+        displayName: GLM (智谱)
+        models:
+          - id: glm-4.5-air
+          - id: glm-4.7
+          - id: glm-5-turbo
+          - id: glm-5.1
+          - id: glm-5.2
+          - id: glm-5v-turbo
+          - id: glm-5.3
+            name: GLM-5.3
+            contextWindow: 1000000
+            maxTokens: 131072
+            reasoningEfforts:
+              off: null
+              minimal: high
+              low: high
+              medium: high
+              high: high
+              max: max
+            compat:
+              supportsReasoningEffort: true
+          - id: glm-5.3-flash
+            name: GLM-5.3 Flash
+            contextWindow: 1000000
+            maxTokens: 131072
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              off: null
+              minimal: high
+              low: high
+              medium: high
+              high: high
+              max: max
+            compat:
+              supportsReasoningEffort: true
+      kimi:
+        apiKeyEnv: KIMI_API_KEY
+        displayName: Kimi Code
+        api: openai-completions
+        baseURL: https://api.kimi.com/coding/v1
+        models:
+          - id: k3
+            name: Kimi K3
+            contextWindow: 1048576
+            input:
+              - text
+              - image
+          - id: k3-256k
+            name: Kimi K3 (256k)
+            contextWindow: 262144
+            input:
+              - text
+              - image
+          - id: kimi-for-coding
+            name: Kimi K2.7 Code
+            contextWindow: 262144
+            input:
+              - text
+              - image
+          - id: kimi-for-coding-highspeed
+            name: Kimi K2.7 Code HighSpeed
+            contextWindow: 262144
+            input:
+              - text
+              - image
+      ollama:
+        displayName: Ollama (本地)
+        apiKeyEnv: OLLAMA_API_KEY
+        api: openai-completions
+        baseURL: http://localhost:11434/v1
+        models:
+          - id: qwen3.8:latest
+            name: Qwen3.8 27B (Ollama)
+            contextWindow: 262144
+            maxTokens: 16384
+            input:
+              - text
+              - image
+          - id: qwen3-vl:latest
+            name: Qwen3-VL 8B (Ollama)
+            contextWindow: 262144
+            maxTokens: 16384
+            input:
+              - text
+              - image
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: zai-coding-cn
+    model: glm-5.3-flash
+- id: ui-theme
+  name: "@deepseek-ai/dsh-client-ui-theme"
+  config:
+    preference: system
+
+# dsh-photostory / dsh-knowledge inject the pre-0.1.7 client service `settingsScope`,
+# removed in 0.1.7-rc.1 (the settings domain now rides remote.settings through
+# @deepseek-ai/dsh-client-ui-settings); both entries stay pending. Disable until
+# the plugins migrate to the current settings API.
+- id: web-ui-skin-center
+  name: "@linxin666/dsh-client-ui-skin-center"
+  config:
+    skin-custom-theme:
+      applied: false
+- id: hypatia-auto-memory
+  name: dsh-hypatia-auto-memory
+  config:
+    consolidation:
+      enabled: true
+      models:
+        - provider: zai-coding-cn
+          model: glm-5.3-flash
+        - provider: kimi
+          model: k3
+        - provider: deepseek-official
+          model: deepseek-flash
+        - provider: ollama
+          model: qwen3.8:latest
+      maxInputTokens: 16000
+      maxOutputTokens: 2000
+      timeoutMs: 120000
+      checkEveryTurns: 5
+      minNewTokens: 3000
+      maxWorkUnitsPerRun: 3
+      adjudicate: true
+      dedupMaxDistance: 0.45
+      dedupCandidates: 5
+      cascade:
+        enabled: true
+        batchSize: 16
+# @240xu/dsh-websearch: point the SearXNG backend at the intranet instance so
+# it serves as one selectable source alongside the keyless public backends
+# (exa/parallel/ddg). Unreachable backends soft-fail per search, so the same
+# config works both on and off the intranet.
+- id: dsh-websearch
+  config:
+    searxngBaseURL: https://search.zgci.org
+- id: tool-email
+  name: dsh-email
+  config:
+    provider: ""
+    user: ""
+    password: ""
+    authUser: ""
+    authPassword: ""
+    imap:
+      host: outlook.office365.com
+      port: 993
+      secure: true
+    smtp:
+      host: smtp.office365.com
+      port: 587
+      secure: false
+    inboxFolder: INBOX
+    sendApproval: true
+    maxBodyChars: 20000
+    downloadDir: /Users/mars/jobs/workshop/mail
+    accounts: {}
+    accountsYaml: |
+      v-lx@zgci.ac.cn:
+        provider: 阿里云企业邮箱
+        inboxFolder: INBOX
+        user: v-lx@zgci.ac.cn
+        password: l4hA9yUuQtc5sKPy
+        senderName: 刘鑫
+        imap:
+          host: imap.qiye.aliyun.com
+          port: 993
+          secure: true
+        smtp:
+          host: smtp.qiye.aliyun.com
+          port: 465
+          secure: true
+      defaultAccount: outlook
+      outlook:
+        provider: outlook
+        inboxFolder: INBOX
+        user: mars.liu@outlook.com
+        imap:
+          host: outlook.office365.com
+          port: 993
+          secure: true
+        smtp:
+          host: smtp.office365.com
+          port: 587
+          secure: false
+      gmail:
+        provider: gmail
+        inboxFolder: INBOX
+        user: march.liu@gmail.com
+        senderName: 刘鑫
+        authPassword: rmdl zlug okww ovun
+        password: rmdl zlug okww ovun
+        imap:
+          host: imap.gmail.com
+          port: 993
+          secure: true
+        smtp:
+          host: smtp.gmail.com
+          port: 465
+          secure: true
+    serverPresets: |
+      "阿里云企业邮箱":
+        label: "学院邮箱"
+        imap:
+          host: imap.qiye.aliyun.com
+          port: 993
+          secure: true
+        smtp:
+          host: smtp.qiye.aliyun.com
+          port: 465
+          secure: true
+      "Google Mail":
+        imap:
+          host: imap.gmail.com
+          port: 993
+          secure: true
+        smtp:
+          host: smtp.gmail.com
+          port: 465
+          secure: true
+    newMailPopup: true
+    trustedRecipientsYaml: ""
+- id: better-sidebar
+  name: dsh-better-sidebar
+  config:
+    workspaceFence: false
+    agentOpenTools: true
+# dsh-knowledge: unlock write tools (knowledge_save 等)；默认 readOnly=true 仅锁定。
+- id: knowledge
+  config:
+    readOnly: false
+# pet 试用清理（2026-10）：只保留 @linxin666/dsh-pet 一个，且保持隐藏。
+# web-ui-pet 这行只做配置覆盖（挂载来自 @linxin666/dsh-web-all bundle 的同一行 id），
+# 不再用 name 重复 insert；原先多余的第二个实例 `pet` 行已删除，
+# 否则同一包被 mount 两次。
+- id: web-ui-pet
+  config:
+    visible: true
+    size: 160
+    right: 19
+    bottom: 78
+    petId: whale-girl-refined
+# @michengai/dsh-codex-pet 0.1.15 在本 profile 会被加载两次，其 /dsh-codex-pet
+# 前缀路由第二次注册时报 duplicate prefix route，插件初始化失败（等于没装）。
+# 已同步从 package.json bundles 列表移除；如需重试先解决重复加载。
+- id: michengai-codex-pet
+  disabled: true
+- id: deepseek-harness-pets
+  disabled: true
+- id: pet-whale
+  disabled: true
+- id: subagent-workspace-manager
+  disabled: true
+- id: better-workspace
+  name: dsh-better-workspace
+  config:
+    styling:
+      session:session-4c994f76-85b3-48ae-b757-f85a4862d01a:
+        color: ""
+        glow: 0
+        stroke: false
+        strokeWidth: 1
+      session:session-d66bddb9-38e5-4972-bc10-340f6f0f556f:
+        color: ""
+        glow: 0
+        stroke: false
+        strokeWidth: 1
+      workspace:5e18c527-7fc6-42ca-943c-df6f377115c2:
+        color: "#5b8def"
+        glow: 0
+        stroke: false
+        strokeWidth: 1
+        icon: solid
+      workspace:51205b54-6191-41c8-9ad3-e131fc16c38a:
+        color: ""
+        glow: 0
+        weight: 600
+        stroke: false
+        strokeWidth: 1
+        icon: IconAgentPresetOutline16
+      workspace:da860df6-489d-4ce7-8629-92dde01d27dd:
+        color: "#39c5cf"
+        glow: 0
+        weight: 500
+        stroke: false
+        strokeWidth: 1
+        icon: solid
+      workspace:a77a7167-20fa-4f2e-b9b0-8b39811c2df7:
+        color: ""
+        glow: 0
+        weight: 600
+        stroke: false
+        strokeWidth: 1
+        icon: solid
+      workspace:ff6e5ba9-0acf-4ea1-95a5-b89442419936:
+        color: ""
+        glow: 0
+        weight: 600
+        stroke: false
+        strokeWidth: 1
+        icon: solid
+    appearance:
+      color: ""
+      glow: 0
+      weight: 0
+      shadow: false
+      stroke: false
+      strokeWidth: 1
+      strokeColor: "#808080"
+- id: tool-email
+  disabled: true
+
+# dsh-video-preview 0.1.4 仍等待 0.2.0 的 webRuntime 服务（0.2.1 已移除），
+# 且无更新版本；先禁用，等上游适配。
+- id: video-preview
+  disabled: true
+# Ayakaleaf Pro（Overleaf 增强版）本地实例的 MCP 服务器，端点为每项目一个；
+# Bearer token 是 Overleaf Git authentication token（与 git clone 同一套凭据），
+# 来源：/Users/mars/WorkBuddy AI/ayakaleaf-pro/.local-runtime/mcp-token.txt
+- id: mcp-overleaf
+  name: "@deepseek-ai/dsh-mcp-client"
+  config:
+    serverName: overleaf
+    transport: streamable-http
+    url: http://localhost:18080/project/6ad9fc2b38fed4e7db7e7444/mcp
+    headers:
+      Authorization: "Bearer olp_wL8rcqZNZOJ0tdecDcmV2AxOaK0aO8cZz9G7"
+
+# rc.3: 与官方 agent-team 争抢 agentTeams 服务名，整行被拒挂载（仅告警）。
+# 保留官方 agent-team 与其 tools；代价是失去 @linxin666 的 Agents 面板。
+- id: web-ui-agents
+  disabled: true
+- id: ui-dsh-soup
+  disabled: true
+- id: tool-subagent-control
+  disabled: false
+- id: tool-subagent-list-agents
+  disabled: false
+- id: tool-subagent
+  disabled: false
+- id: tool-subagent-fork
+  disabled: false
+- id: tool-goal
+  disabled: false
+
+# 修 web_fetch 的 WEB_PROVIDER_AMBIGUOUS（deepseek-fetch-api, http）：
+# @240xu/dsh-websearch 的 bundle patch 用 `- id: web` 覆写了同一行，而 patch
+# 语义是整块替换 config 而非合并，于是 base 里的 fetchProvider: http 被抹掉；
+# fetch 侧同时注册了 http 与 deepseek-fetch-api 两个可用 provider，没指定就抛歧义。
+# search 侧不受影响是因为 searchProvider: unified 有值。用户层最后写入，这里两项一起重述。
+- id: web
+  name: '@deepseek-ai/dsh-web'
+  config:
+    searchProvider: unified
+    fetchProvider: http
+- id: waste-market
+  disabled: true
+- id: photostory
+  disabled: true
+- id: opencode-palette
+  disabled: true
+- id: wallpaper-engine
+  disabled: true
+- id: wallpaper-engine-about-notice
+  disabled: true
+- id: wallpaper-engine-mascot-avatar
+  disabled: true
+- id: wallpaper-engine-media-bridge
+  disabled: true
+- id: wallpaper-engine-pet-link
+  disabled: true
+- id: wallpaper-engine-fx
+  disabled: true
+- id: wallpaper-engine-parallax
+  disabled: true
+- id: wallpaper-engine-fonts
+  disabled: true
+- id: dsh-cybernetics
+  name: "@mars.liu/dsh-cybernetics"
+  config:
+    taskAgentModel: zai-coding-cn/glm-5.3-flash
+    verifyAgentModel: zai-coding-cn/glm-5.3-flash
+    allGoalsMode: true
+    triageAgentModel: zai-coding-cn/glm-5.3-flash
+    hardGate: true

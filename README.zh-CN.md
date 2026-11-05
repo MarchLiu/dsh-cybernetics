@@ -4,7 +4,7 @@
 
 ![version](https://img.shields.io/badge/version-0.10.0-blue) ![protocol](https://img.shields.io/badge/license-MIT-lightgrey) ![platform](https://img.shields.io/badge/platform-DSH%20plugin-9b59b6)
 
-**dsh-cybernetics 是一个把 LLM Agent 编排明确设计成控制回路的 DSH 插件**：session goal 作为 agent 的思考产物持久存在，task agent 行动、verify agent 测量、triage agent 分诊，controller 在轮间推进，用户通过对话完成外环校准——目标、行动、测量、校准的负反馈闭环。
+**dsh-cybernetics 是一个把多 agent 协作明确设计成控制回路的 DSH 插件**：session goal 作为 agent 的思考产物持久存在，task agent 行动、verify agent 测量、triage agent 分诊，controller 在轮间推进，用户通过对话完成外环校准——目标、行动、测量、校准的负反馈闭环。
 
 这套协议得名于维纳的控制论：设定目标（setpoint）、行动、测量输出与目标的偏差、用偏差修正下一次行动。传统的一次性 prompt 是开环系统——目标只活在当前 prompt 里，测量的责任全在人；本项目把回路搬进系统本身，让人从「逐条 prompt 的作者」变成「目标的设定者与外环的校准者」。设计理念详见博客文章《[Cybernetics Agent——人工智能应用的新范式](https://marchliu.github.io/2026/11/03/cybernetics-agent-new-paradigm)》。
 
@@ -16,7 +16,7 @@
 ```mermaid
 flowchart TB
     user["用户<br/>（外环校准者）"] -- "对话校准 / 确认完成" --> sa
-    sa["session agent<br/>（编排者 / 控制器）"]
+    sa["session agent<br/>（控制器）"]
     subgraph loop["内环：一轮（workflows/round.js）"]
         ta["task agent<br/>执行者"] --> va["verify agent<br/>独立测量"] --> ga["triage agent<br/>四分拣"]
     end
@@ -27,7 +27,7 @@ flowchart TB
 
 | 角色 | 职责 |
 |---|---|
-| **session agent** | 编排者（控制器）：识别用户输入、维护 goal 板、启动/收取/取消轮、向用户转述；从不亲自执行任务 |
+| **session agent** | 控制器：识别用户输入、维护 goal 板、启动/收取/取消轮、向用户转述；从不亲自执行任务 |
 | **controller** | `src/controller.ts` 的轮间状态机：`startRound`/`foldRound`/`runRound`，按轮推进 subgoal（task → verify → triage），维护审计日志 |
 | **task agent** | 执行器：无对话历史的独立 sub agent，面向工作委托书（brief）实际执行，产出结构化交付报告 |
 | **verify agent** | 测量仪器：独立于执行者验收，产出结构化 verdict `{met, criteria, gaps, goalItselfQuestionable}` |
@@ -46,7 +46,7 @@ flowchart TB
 
 **热切换（v0.8.10）**：`hardGate` 已是 **volatile** 字段——插件页设置卡片上有实时开关。保存即把新值提交进运行实例，插件随即卸载或重装门禁监听（装配摘工具 + 分发拒绝 + 审批透传），**即时生效，无需重启、无需插件重载**。从关到开的热启按当前 `gateMode` 解析结果接线（显式配置优先，否则结构性 allowlist）。其余门字段（`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`/`gateApprovalRelay`）仍是非 volatile 配置文档字段，请在 profile 配置文档中维护（保存触发插件重载）。部署注意：本构建首次上线时运行中宿主仍是旧代码——重启宿主一次加载新代码，此后开关即热生效（`lib/client.js` 只需刷新浏览器）。
 
-**生效语义（v0.8.6，默认安全）**：`hardGate` 开启且未配置 `gateMode` 时，门按 **`allowlist`** 运行——顶层 session agent 只保留读 + 对话 + 展示 + goal/编排动词（内置 `DEFAULT_GATE_ALLOWLIST`，可经 `gateAllowlist`/`gateAllowlistExtra` 扩展），所有变更类工具在装配期被**移除**，并在**调用分发层被拒绝**。之所以改为这个默认：旧的 `denylist` 默认是个陷阱——它只隐藏 `gatedTools` 的三个名字（bash/edit/write），`bsk_*`、`taskboard_*`、`schedule_*`、`farm_*`、`uno_*`、`ppt_*`、`config_restore` 以及整个变更工具长尾全都仍可调用，名为硬门、实为半门。`hardGate: false` 与以前完全一致（不装门）；显式配置的 `gateMode` 一律原样尊重；schema 不再给 `gateMode` 设默认值，因此「未设置」与「显式 denylist」可以被区分。
+**生效语义（v0.8.6，默认安全）**：`hardGate` 开启且未配置 `gateMode` 时，门按 **`allowlist`** 运行——顶层 session agent 只保留读 + 对话 + 展示 + goal/控制动词（内置 `DEFAULT_GATE_ALLOWLIST`，可经 `gateAllowlist`/`gateAllowlistExtra` 扩展），所有变更类工具在装配期被**移除**，并在**调用分发层被拒绝**。之所以改为这个默认：旧的 `denylist` 默认是个陷阱——它只隐藏 `gatedTools` 的三个名字（bash/edit/write），`bsk_*`、`taskboard_*`、`schedule_*`、`farm_*`、`uno_*`、`ppt_*`、`config_restore` 以及整个变更工具长尾全都仍可调用，名为硬门、实为半门。`hardGate: false` 与以前完全一致（不装门）；显式配置的 `gateMode` 一律原样尊重；schema 不再给 `gateMode` 设默认值，因此「未设置」与「显式 denylist」可以被区分。
 
 **显式 `gateMode: 'denylist'`（残留风险，需主动选择）**：只移除 `gatedTools` 中的工具名（默认 bash/edit/write）。顶层 agent 至少仍可使用：`bsk_*`（浏览器自动化，含 `bsk_session` 启停）、`taskboard_*` 写操作（create/update/move/comment/checklist/delete）、`schedule_*` 写操作、`farm_*` 服务生命周期（start/restart/stop/register/unregister）、`uno_*` 与 `ppt_*` 生成器、`config_restore`、`subagent`/team 派生、`knowledge_save`、`job_kill`——凡未被列入 `gatedTools` 的都在，且这个集合随每个新装插件增长，denylist 永远不可能完备。只有在你清醒接受该风险时才显式选择它（例如确实要 session agent 管理服务），并把需要的变更工具逐项补进 `gatedTools`。该模式下注入的 HARD GATE 提示会如实说明「只摘 `gatedTools`」的半门立场，不再假称所有改世界的工具都结构性不可用。
 
@@ -93,9 +93,9 @@ goal 一经存在不再原地修改。`revise` 是唯一的改目标动词（必
 - **「目标 / Goal」**：本会话全部 goal（标题 / 状态徽标 / 第 N 轮 / 当前 subgoal / depth、executor 小标签 / 被取代与修订来源标注），按「未完成在前、已完成在后」两段排序；空板回退 dsh-goal 单 goal 渲染。
 - **「控制 / Control」**：递归展示本会话全部 agent（主控 + subagent catalog）的运行状态与各自 goal 视图，顶部汇总运行中数量，并列出每个 goal 的执行者行（状态 + 标题 + executor 临时/持久 + 持久 teammate 名称 + 轮次），与「目标」页签同一数据源。
 
-### 编排模式可视化指示（v0.10.0）
+### 控制模式可视化指示（v0.10.0）
 
-每个会话头部常驻一枚徽标，一眼可见当前编排模式生效态：**绿点 +「开」** = 生效中（本会话 `/cybernetics on` 显式 override，或继承全局 `allGoalsMode`），**灰点 +「关」** = 生效关闭，**暗「…」** = 投影/配置尚未加载（加载态而非错误态）。tooltip 注明生效来源（「本会话显式设置」vs「继承全局配置」）。点击徽标即切换——走的正是斜杠菜单同款 `/cybernetics on|off` 命令通道（宿主 `commands.execute`，不新增服务端 API），写入的是同一条 durable 会话事件、投影实时回流。编排生效时，输入框上方显示一条细提示条说明下一次输入的去向，文案随 volatile `inputPolicy` 变化（insert →「新输入将作为外环控制即时插入当前回合」；queue →「新输入将排队为下一轮输入」）。数据联接：会话投影 `cyberneticsMode`（{override: true|false|null}）+ ConfigForm 里的全局 volatile `allGoalsMode`，客户端按与服务端 `resolveMode`（src/sessionMode.ts）一致的规则就地联接——投影只在会话事件时重发布，全局 volatile 翻转无法抵达服务端算好的生效值，而两个输入在客户端都是响应式的。文案双语（zh/en）。仅客户端改动：宿主重启（客户端模块图启动时构建）+ 刷新浏览器后生效。
+每个会话头部常驻一枚徽标，一眼可见当前控制模式生效态：**绿点 +「开」** = 生效中（本会话 `/cybernetics on` 显式 override，或继承全局 `allGoalsMode`），**灰点 +「关」** = 生效关闭，**暗「…」** = 投影/配置尚未加载（加载态而非错误态）。tooltip 注明生效来源（「本会话显式设置」vs「继承全局配置」）。点击徽标即切换——走的正是斜杠菜单同款 `/cybernetics on|off` 命令通道（宿主 `commands.execute`，不新增服务端 API），写入的是同一条 durable 会话事件、投影实时回流。控制模式生效时，输入框上方显示一条细提示条说明下一次输入的去向，文案随 volatile `inputPolicy` 变化（insert →「新输入将作为外环控制即时插入当前回合」；queue →「新输入将排队为下一轮输入」）。数据联接：会话投影 `cyberneticsMode`（{override: true|false|null}）+ ConfigForm 里的全局 volatile `allGoalsMode`，客户端按与服务端 `resolveMode`（src/sessionMode.ts）一致的规则就地联接——投影只在会话事件时重发布，全局 volatile 翻转无法抵达服务端算好的生效值，而两个输入在客户端都是响应式的。文案双语（zh/en）。仅客户端改动：宿主重启（客户端模块图启动时构建）+ 刷新浏览器后生效。
 
 ### 插件页配置卡片
 
@@ -152,7 +152,7 @@ Web 编辑器「插件」页的本插件卡片上直接配置——v0.8.1 起卡
 - **task/verify/triage agent 模型**（`taskAgentModel` / `verifyAgentModel` / `triageAgentModel`，volatile）：下拉加持的文本框——从实时系统模型列表选择（显示 `providerName · provider/model`）或手工输入「provider/model」/裸模型名，回车或移开焦点即保存，留空继承 session agent（triage = 收敛决策角色，仅 full 轮启用）。配置值不在实时模型列表中时显示不可用警告（运行时回退到 session agent 模型）并附一键清除；
 - **递归深度 / 并行上限**（`roundsPerSubgoal` 整数 ≥1 / `maxConcurrentRounds` 整数 ≥0，volatile）：数字框，回车或失焦保存，留空恢复默认（`unset` 写入）；
 - **roles 高级配置**（`roles`，非 volatile）：profile 配置 yaml 直接维护——见下方小节；
-- **硬编排门**（`hardGate`，v0.8.10 起 volatile）：卡片布尔开关——装配期从顶层 agent 摘除写/执行工具，所有变更经 goal 循环完成；保存即时生效（门禁监听热装卸），无需重启；
+- **硬控制门**（`hardGate`，v0.8.10 起 volatile）：卡片布尔开关——装配期从顶层 agent 摘除写/执行工具，所有变更经 goal 循环完成；保存即时生效（门禁监听热装卸），无需重启；
 - **其余门字段**（`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`/`gateApprovalRelay`，非 volatile）：不进入卡片，请在 profile 配置文档中维护（保存触发插件重载）。`gateMode` 无默认值：未设置 + `hardGate: true` 按 `allowlist` 运行；显式 `denylist` 会被尊重，并带有上文记录的残留风险。
 
 ### roles 高级配置（profile yaml，agent 指导）
@@ -200,13 +200,13 @@ session agent 在会话内通过 `cybernetics` 工具（`toolName` 可配置）�
 - **为什么「goal 是 agent 的思考产物」**：传统范式里人是控制器、模型是执行器，回路只存在于人的脑子里。让 session agent 自己把用户输入整理为持久 goal（用户通过对话校准 agent，agent 修订 goal），目标才成为系统里可跟踪的一等公民状态——反馈回路的第一块积木。
 - **为什么 append-only**：目标被悄悄改写，会摧毁「经 goal 跟踪 agent」的全部价值——页签上的目标不再是你当初设定的目标。身份与历史由 goal 链表达，正如 git 用不可变 commit 表达历史；每次修订的 reason + 审计行就是校准的显式变更记录。
 - **为什么 verify 独立于 task**：验证者若看执行者的叙述，会退化成「检查自述是否自洽」而非「检查事实是否满足目标」。测量仪器必须独立于被测对象——协议的核心不变量：**上下文是被配给的，不是被继承的**（task 只拿委托书、verify 只拿 goal + 报告 + 证据、triage 只拿 verdict，永不用 `context: 'fork'`）。持久的是身份和 goal 边界，不是会话历史。
-- **为什么硬门**：早期的「session agent 不亲自执行」只是提示里的劝告，模型看到琐碎任务就会内联干完。硬门在装配期物理移除执行工具，把劝告变成结构——编排者的全部产出是 goal 和 brief（信息），执行者的全部产出是对世界的改变（行动），可观测性与可控性的边界划在角色上，不依赖模型自觉。
+- **为什么硬门**：早期的「session agent 不亲自执行」只是提示里的劝告，模型看到琐碎任务就会内联干完。硬门在装配期物理移除执行工具，把劝告变成结构——控制者的全部产出是 goal 和 brief（信息），执行者的全部产出是对世界的改变（行动），可观测性与可控性的边界划在角色上，不依赖模型自觉。
 - **振荡防御与升级路径**：每轮连续迭代上限是对「反馈延迟过大导致振荡」的工程化防御；triage 的 human 分拣是控制器为「不可自动处理的扰动」预留的升级路径；`goalItselfQuestionable` 在结构上区分「方向错了」和「执行得不好」。
 
 ## 与 DSH 现有机制的关系
 
 - **goal**：不替代——dsh-goal 仍是 durable setpoint 与续跑驱动；本插件是它的工作回路。
-- **workflow**：每轮就是一次 `ctx.workflowEngine.start()` run；不新增编排机制（构建在 `dsh-workflow` 之上）。
+- **workflow**：每轮就是一次 `ctx.workflowEngine.start()` run；不新增独立控制机制（构建在 `dsh-workflow` 之上）。
 - **完成确认**：controller 永不自宣完成、不代改 goal phase；`met` 也只暂停等用户。
 
 ## 已知限制
@@ -221,7 +221,7 @@ session agent 在会话内通过 `cybernetics` 工具（`toolName` 可配置）�
 | 版本 | 关键节点 |
 |---|---|
 | v0.2 | session-goal 模式 + 隐式触发 + 角色化 sub agent + 客户端 goal 页签 |
-| v0.3 | 多 goal 板 + 编排者协议 + 异步轮（start/collect/cancel/list）+ 委托书 brief |
+| v0.3 | 多 goal 板 + 控制者协议 + 异步轮（start/collect/cancel/list）+ 委托书 brief |
 | v0.4 / v0.4.1 | 硬门；allowlist 门模式（封住变更工具长尾） |
 | v0.5 | 双档轮次 depth（quick / full） |
 | v0.6 | append-only goals、持久执行者、多 goal 投影、板持久化与 rehydrate、控制页签执行者行 |

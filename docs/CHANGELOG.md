@@ -4,6 +4,19 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.11.1（2026-11-05）：用户可见术语统一——「编排/orchestration」→「控制/control」
+
+**需求**：用户 2026-11-05 提出——control 比 orchestration 更贴切（cybernetics = 控制论），且插件内已有「控制」标签页（`view.control`），同一概念两处叫法需要统一，同时避免与泛用的多 agent「编排」概念混淆。
+
+**术语决策**：所有用户可见 UI 文案（lib/client.js zh/en 双字典 + `src/index.ts` 斜杠命令回执）统一为「控制模式 / Control」；`hardGate` 中文标签定为「硬控制门」（与「控制模式」保持同一词根，比保留「硬门」简写更可检索）；代码内部英文标识符与注释**不重命名**（避免无意义 diff），历史 CHANGELOG 条目保持原样不改写。
+
+- **lib/client.js（zh）**：`settings.cardLabel`「Cybernetics 编排循环」→「Cybernetics 控制循环」；`settings.hardGate`「硬编排门」→「硬控制门」；`mode.pill`「编排」→「控制」；`mode.tip.*`「编排模式：…」→「控制模式：…」；`hint.insert/queue`「编排模式生效中：…」→「控制模式生效中：…」。
+- **lib/client.js（en）**：`settings.hardGate`「Hard orchestration gate」→「Hard control gate」；`mode.pill`「Orchestration」→「Control」；`mode.tip.*`「Orchestration: …」→「Control: …」；`hint.insert/queue`「Orchestration active: …」→「Control mode active: …」。
+- **src/index.ts（用户可见回执/描述）**：`hardGate` schema description「硬编排门」→「硬控制门」；`/cybernetics on|off` 成功回执「cybernetics 编排已…」→「cybernetics 控制已…」。
+- **文档**：README.zh-CN.md 全文改用新术语（含架构叙述：「编排者」→「控制器」）；README.md 模式指示器章节标题与正文改用 control-mode（架构性角色词 orchestrator 作为英文概念保留）。
+- **测试**：test/ 无对「编排」的字符串断言，零改动；v03/v09/v10/plan-precedence 四套全部通过，`tsc --noEmit` 与基线（5 条既有 TS5097 同类）无新增。
+- **生效手段**：`lib/client.js` 改动——重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器。
+
 ## v0.11.0（2026-11-05）：plan mode ⊃ cybernetics 优先级语义（plan 期间豁免硬门）
 
 **需求**：会话进入 plan 模式时按 plan 语义执行（只读规划 + `exit_plan_mode` 审批），cybernetics 的 ALL-GOALS 路由与硬门禁在该会话**暂停**；批准退出或 `/plan off` 后，下一请求自动恢复 cybernetics 配置语义（实施请求走 goal 循环、写工具重新被门禁约束）。一句话：**plan 决定"能不能动手"，cybernetics 决定"动手走不走循环"**。

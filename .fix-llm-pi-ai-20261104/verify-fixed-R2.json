@@ -1,0 +1,87 @@
+{
+  "file": "/Users/mars/jobs/dsh-cybernetics/.fix-llm-pi-ai-20261104/cordis.patch.yml.fixed",
+  "sha256_note": "see shasum",
+  "jsYamlVersion": "4.3.2",
+  "yamlPkgVersion": "2.9.1",
+  "jsYaml": {
+    "ok": true,
+    "entries": 49
+  },
+  "yamlPkg": {
+    "ok": true,
+    "entries": 49
+  },
+  "ambiguousYaml11Keys": [
+    "$[11].config.providers.zai-coding-cn.models[6].reasoningEfforts.off (typeof key=\"string\", value=null)",
+    "$[11].config.providers.zai-coding-cn.models[7].reasoningEfforts.off (typeof key=\"string\", value=null)"
+  ],
+  "llmPiAi": {
+    "ok": true,
+    "providers": [
+      "zai-coding-cn",
+      "kimi",
+      "ollama"
+    ],
+    "modelsPerProvider": {
+      "zai-coding-cn": [
+        "glm-4.5-air",
+        "glm-4.7",
+        "glm-5-turbo",
+        "glm-5.1",
+        "glm-5.2",
+        "glm-5v-turbo",
+        "glm-5.3",
+        "glm-5.3-flash"
+      ],
+      "kimi": [
+        "k3",
+        "k3-256k",
+        "kimi-for-coding",
+        "kimi-for-coding-highspeed"
+      ],
+      "ollama": [
+        "qwen3.8:latest",
+        "qwen3-vl:latest"
+      ]
+    },
+    "reasoningEffortKeys": [
+      {
+        "id": "glm-5.3",
+        "keys": [
+          "string:off",
+          "string:minimal",
+          "string:low",
+          "string:medium",
+          "string:high",
+          "string:max"
+        ]
+      },
+      {
+        "id": "glm-5.3-flash",
+        "keys": [
+          "string:off",
+          "string:minimal",
+          "string:low",
+          "string:medium",
+          "string:high",
+          "string:max"
+        ]
+      }
+    ]
+  },
+  "cybernetics": {
+    "taskAgentModel": "zai-coding-cn/glm-5.3-flash",
+    "verifyAgentModel": "zai-coding-cn/glm-5.3-flash",
+    "allGoalsMode": true,
+    "triageAgentModel": "zai-coding-cn/glm-5.3-flash",
+    "hardGate": true
+  },
+  "commentLines": 0,
+  "hardGatePresentInText": true,
+  "allGoalsModePresentInText": true,
+  "agentDefaultModel": {
+    "provider": "deepseek-account",
+    "model": "deepseek-flash",
+    "reasoningEffort": "high"
+  }
+}

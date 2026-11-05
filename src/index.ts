@@ -227,7 +227,7 @@ export const Config = z.object({
    * + approval relay) without a plugin remount, mirroring the
    * registerGuidanceSection re-derive pattern.
    */
-  hardGate: z.boolean().default(true).volatile().description('硬编排门（默认开启）：装配期从顶层 session agent 摘除执行工具，所有改动必须经 cybernetics goal + task agent。设置卡片可开关，保存后即时生效（热装卸门禁监听），无需重启宿主。'),
+  hardGate: z.boolean().default(true).volatile().description('硬控制门（默认开启）：装配期从顶层 session agent 摘除执行工具，所有改动必须经 cybernetics goal + task agent。设置卡片可开关，保存后即时生效（热装卸门禁监听），无需重启宿主。'),
   /** Tool names hidden in denylist mode (default DEFAULT_GATED_TOOLS). */
   gatedTools: z.array(z.string()).description('denylist 模式下隐藏的工具名（缺省内置 DEFAULT_GATED_TOOLS）。'),
   /**
@@ -1177,8 +1177,8 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           return {
             kind: 'success' as const,
             text: arg === 'on'
-              ? 'cybernetics 编排已对本会话开启（ALL-GOALS 路由 + 硬门禁 + 新输入外环插入）。覆盖全局配置；/cybernetics off 可关闭。'
-              : 'cybernetics 编排已对本会话关闭：不再注入编排 guidance，硬门禁放行，新输入回归 DSH 原生行为。/cybernetics on 可恢复。',
+              ? 'cybernetics 控制已对本会话开启（ALL-GOALS 路由 + 硬门禁 + 新输入外环插入）。覆盖全局配置；/cybernetics off 可关闭。'
+              : 'cybernetics 控制已对本会话关闭：不再注入控制 guidance，硬门禁放行，新输入回归 DSH 原生行为。/cybernetics on 可恢复。',
           }
         }
         // No argument (or unknown text) = status report.

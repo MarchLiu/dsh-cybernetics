@@ -1,0 +1,449 @@
+- id: credentials
+  config:
+    path: /Users/mars/.dsh/.credentials-cli.yaml
+- id: describe-image
+  config:
+    baseURL: https://open.bigmodel.cn/api/paas/v4
+    model: glm-5v-turbo
+    apiKeyEnv: ZHIPU_API_KEY
+- id: bloom-theme
+  disabled: true
+- id: web-ui-task-board
+  disabled: true
+- id: web-ui-ssh
+  config:
+    enabled: true
+- id: dsh-at-file
+  disabled: true
+- id: web-ui-dsh-aionui-panel
+  disabled: true
+- id: dsh-recover-context
+  disabled: true
+- id: ui-git-graph
+  disabled: false
+- id: dsh-market
+  disabled: false
+- id: ui-settings-general
+  name: '@deepseek-ai/dsh-client-ui-settings-general'
+  config:
+    welcomeNoticeVersion: 2026-09-28.1
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      zai-coding-cn:
+        apiKeyEnv: ZHIPU_API_KEY
+        displayName: GLM (智谱)
+        models:
+          - id: glm-4.5-air
+          - id: glm-4.7
+          - id: glm-5-turbo
+          - id: glm-5.1
+          - id: glm-5.2
+          - id: glm-5v-turbo
+          - id: glm-5.3
+            name: GLM-5.3
+            contextWindow: 1000000
+            maxTokens: 131072
+            reasoningEfforts:
+              'off': null
+              minimal: high
+              low: high
+              medium: high
+              high: high
+              max: max
+            compat:
+              supportsReasoningEffort: true
+          - id: glm-5.3-flash
+            name: GLM-5.3 Flash
+            contextWindow: 1000000
+            maxTokens: 131072
+            input:
+              - text
+              - image
+            reasoningEfforts:
+              'off': null
+              minimal: high
+              low: high
+              medium: high
+              high: high
+              max: max
+            compat:
+              supportsReasoningEffort: true
+      kimi:
+        apiKeyEnv: KIMI_API_KEY
+        displayName: Kimi Code
+        api: openai-completions
+        baseURL: https://api.kimi.com/coding/v1
+        models:
+          - id: k3
+            name: Kimi K3
+            contextWindow: 1048576
+            input:
+              - text
+              - image
+          - id: k3-256k
+            name: Kimi K3 (256k)
+            contextWindow: 262144
+            input:
+              - text
+              - image
+          - id: kimi-for-coding
+            name: Kimi K2.7 Code
+            contextWindow: 262144
+            input:
+              - text
+              - image
+          - id: kimi-for-coding-highspeed
+            name: Kimi K2.7 Code HighSpeed
+            contextWindow: 262144
+            input:
+              - text
+              - image
+      ollama:
+        displayName: Ollama (本地)
+        apiKeyEnv: OLLAMA_API_KEY
+        api: openai-completions
+        baseURL: http://localhost:11434/v1
+        models:
+          - id: qwen3.8:latest
+            name: Qwen3.8 27B (Ollama)
+            contextWindow: 262144
+            maxTokens: 16384
+            input:
+              - text
+              - image
+          - id: qwen3-vl:latest
+            name: Qwen3-VL 8B (Ollama)
+            contextWindow: 262144
+            maxTokens: 16384
+            input:
+              - text
+              - image
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: deepseek-account
+    model: deepseek-flash
+    reasoningEffort: high
+- id: ui-theme
+  name: '@deepseek-ai/dsh-client-ui-theme'
+  config:
+    preference: system
+- id: web-ui-skin-center
+  name: '@linxin666/dsh-client-ui-skin-center'
+  config:
+    skin-custom-theme:
+      applied: false
+- id: hypatia-auto-memory
+  name: dsh-hypatia-auto-memory
+  config:
+    consolidation:
+      enabled: true
+      models:
+        - provider: zai-coding-cn
+          model: glm-5.3-flash
+        - provider: kimi
+          model: k3
+        - provider: deepseek-official
+          model: deepseek-flash
+        - provider: ollama
+          model: qwen3.8:latest
+      maxInputTokens: 16000
+      maxOutputTokens: 2000
+      timeoutMs: 120000
+      checkEveryTurns: 5
+      minNewTokens: 3000
+      maxWorkUnitsPerRun: 3
+      adjudicate: true
+      dedupMaxDistance: 0.45
+      dedupCandidates: 5
+      cascade:
+        enabled: true
+        batchSize: 16
+- id: dsh-websearch
+  config:
+    searxngBaseURL: https://search.zgci.org
+- id: tool-email
+  name: dsh-email
+  config:
+    provider: ''
+    user: ''
+    password: ''
+    authUser: ''
+    authPassword: ''
+    imap:
+      host: outlook.office365.com
+      port: 993
+      secure: true
+    smtp:
+      host: smtp.office365.com
+      port: 587
+      secure: false
+    inboxFolder: INBOX
+    sendApproval: true
+    maxBodyChars: 20000
+    downloadDir: /Users/mars/jobs/workshop/mail
+    accounts: {}
+    accountsYaml: "v-lx@zgci.ac.cn:
+
+      \  provider: 阿里云企业邮箱
+
+      \  inboxFolder: INBOX
+
+      \  user: v-lx@zgci.ac.cn
+
+      \  password: l4hA9yUuQtc5sKPy
+
+      \  senderName: 刘鑫
+
+      \  imap:
+
+      \    host: imap.qiye.aliyun.com
+
+      \    port: 993
+
+      \    secure: true
+
+      \  smtp:
+
+      \    host: smtp.qiye.aliyun.com
+
+      \    port: 465
+
+      \    secure: true
+
+      defaultAccount: outlook
+
+      outlook:
+
+      \  provider: outlook
+
+      \  inboxFolder: INBOX
+
+      \  user: mars.liu@outlook.com
+
+      \  imap:
+
+      \    host: outlook.office365.com
+
+      \    port: 993
+
+      \    secure: true
+
+      \  smtp:
+
+      \    host: smtp.office365.com
+
+      \    port: 587
+
+      \    secure: false
+
+      gmail:
+
+      \  provider: gmail
+
+      \  inboxFolder: INBOX
+
+      \  user: march.liu@gmail.com
+
+      \  senderName: 刘鑫
+
+      \  authPassword: rmdl zlug okww ovun
+
+      \  password: rmdl zlug okww ovun
+
+      \  imap:
+
+      \    host: imap.gmail.com
+
+      \    port: 993
+
+      \    secure: true
+
+      \  smtp:
+
+      \    host: smtp.gmail.com
+
+      \    port: 465
+
+      \    secure: true\n"
+    serverPresets: "\"阿里云企业邮箱\":
+
+      \  label: \"学院邮箱\"
+
+      \  imap:
+
+      \    host: imap.qiye.aliyun.com
+
+      \    port: 993
+
+      \    secure: true
+
+      \  smtp:
+
+      \    host: smtp.qiye.aliyun.com
+
+      \    port: 465
+
+      \    secure: true
+
+      \"Google Mail\":
+
+      \  imap:
+
+      \    host: imap.gmail.com
+
+      \    port: 993
+
+      \    secure: true
+
+      \  smtp:
+
+      \    host: smtp.gmail.com
+
+      \    port: 465
+
+      \    secure: true\n"
+    newMailPopup: true
+    trustedRecipientsYaml: ''
+- id: better-sidebar
+  name: dsh-better-sidebar
+  config:
+    workspaceFence: false
+    agentOpenTools: true
+- id: knowledge
+  config:
+    readOnly: false
+- id: web-ui-pet
+  config:
+    visible: true
+    size: 160
+    right: 19
+    bottom: 78
+    petId: whale-girl-refined
+- id: michengai-codex-pet
+  disabled: true
+- id: deepseek-harness-pets
+  disabled: true
+- id: pet-whale
+  disabled: true
+- id: subagent-workspace-manager
+  disabled: true
+- id: better-workspace
+  name: dsh-better-workspace
+  config:
+    styling:
+      session:session-4c994f76-85b3-48ae-b757-f85a4862d01a:
+        color: ''
+        glow: 0
+        stroke: false
+        strokeWidth: 1
+      session:session-d66bddb9-38e5-4972-bc10-340f6f0f556f:
+        color: ''
+        glow: 0
+        stroke: false
+        strokeWidth: 1
+      workspace:5e18c527-7fc6-42ca-943c-df6f377115c2:
+        color: '#5b8def'
+        glow: 0
+        stroke: false
+        strokeWidth: 1
+        icon: solid
+      workspace:51205b54-6191-41c8-9ad3-e131fc16c38a:
+        color: ''
+        glow: 0
+        weight: 600
+        stroke: false
+        strokeWidth: 1
+        icon: IconAgentPresetOutline16
+      workspace:da860df6-489d-4ce7-8629-92dde01d27dd:
+        color: '#39c5cf'
+        glow: 0
+        weight: 500
+        stroke: false
+        strokeWidth: 1
+        icon: solid
+      workspace:a77a7167-20fa-4f2e-b9b0-8b39811c2df7:
+        color: ''
+        glow: 0
+        weight: 600
+        stroke: false
+        strokeWidth: 1
+        icon: solid
+      workspace:ff6e5ba9-0acf-4ea1-95a5-b89442419936:
+        color: ''
+        glow: 0
+        weight: 600
+        stroke: false
+        strokeWidth: 1
+        icon: solid
+    appearance:
+      color: ''
+      glow: 0
+      weight: 0
+      shadow: false
+      stroke: false
+      strokeWidth: 1
+      strokeColor: '#808080'
+- id: tool-email
+  disabled: true
+- id: video-preview
+  disabled: true
+- id: mcp-overleaf
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: overleaf
+    transport: streamable-http
+    url: http://localhost:18080/project/6ad9fc2b38fed4e7db7e7444/mcp
+    headers:
+      Authorization: Bearer olp_wL8rcqZNZOJ0tdecDcmV2AxOaK0aO8cZz9G7
+- id: web-ui-agents
+  disabled: true
+- id: ui-dsh-soup
+  disabled: true
+- id: tool-subagent-control
+  disabled: false
+- id: tool-subagent-list-agents
+  disabled: false
+- id: tool-subagent
+  disabled: false
+- id: tool-subagent-fork
+  disabled: false
+- id: tool-goal
+  disabled: false
+- id: web
+  name: '@deepseek-ai/dsh-web'
+  config:
+    searchProvider: unified
+    fetchProvider: http
+- id: waste-market
+  disabled: true
+- id: photostory
+  disabled: true
+- id: opencode-palette
+  disabled: true
+- id: wallpaper-engine
+  disabled: true
+- id: wallpaper-engine-about-notice
+  disabled: true
+- id: wallpaper-engine-mascot-avatar
+  disabled: true
+- id: wallpaper-engine-media-bridge
+  disabled: true
+- id: wallpaper-engine-pet-link
+  disabled: true
+- id: wallpaper-engine-fx
+  disabled: true
+- id: wallpaper-engine-parallax
+  disabled: true
+- id: wallpaper-engine-fonts
+  disabled: true
+- id: dsh-cybernetics
+  name: '@mars.liu/dsh-cybernetics'
+  config:
+    taskAgentModel: zai-coding-cn/glm-5.3-flash
+    verifyAgentModel: zai-coding-cn/glm-5.3-flash
+    allGoalsMode: true
+    triageAgentModel: zai-coding-cn/glm-5.3-flash
+    hardGate: true

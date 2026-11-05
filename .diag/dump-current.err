@@ -1,0 +1,19 @@
+dsh: skipping profile bundle "@michengai/dsh-codex-pet": Error: Plugin @michengai/dsh-codex-pet@0.1.15 is incompatible with dsh 0.2.1-rc.3: requirements {"@deepseek-ai/dsh-host-webserver":"0.1.2-rc.1 || 0.1.5-rc.1 || 0.1.5-rc.2 || 0.1.5-rc.3 || 0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2"}. Running it may cause crashes or data loss. Update the plugin or install a plugin version compatible with this dsh runtime. To accept this risk explicitly, grant the exact-version exemption for @michengai/dsh-codex-pet@0.1.15 on dsh 0.2.1-rc.3 with `dsh plugin allow-version` or the plugin manager, then retry the installation or restart dsh. Exact-version exemption: not active.
+node:fs:2482
+    return binding.writeFileUtf8(
+                   ^
+
+Error: EPERM: operation not permitted, open '/Users/mars/.dsh/profiles/web/cordis.yml'
+    at writeFileSync (node:fs:2482:20)
+    at prepareProfile (file:///Users/mars/.dsh/profiles/web/node_modules/@deepseek-ai/dsh/lib/profile-boot-C14i-8IN.js:220:2)
+    at runDumpConfig (file:///Users/mars/.dsh/profiles/web/node_modules/@deepseek-ai/dsh/lib/dump-config-CWs_HdOc.js:25:17)
+    at runCli (file:///Users/mars/.dsh/profiles/web/node_modules/@deepseek-ai/dsh/lib/bin.js:241:4)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async file:///Users/mars/.dsh/profiles/web/node_modules/@deepseek-ai/dsh/lib/bin.js:252:23 {
+  errno: -1,
+  code: 'EPERM',
+  syscall: 'open',
+  path: '/Users/mars/.dsh/profiles/web/cordis.yml'
+}
+
+Node.js v24.22.2
