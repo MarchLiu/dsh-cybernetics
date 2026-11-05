@@ -92,6 +92,43 @@ bash /Users/mars/jobs/dsh-cybernetics/effort-patch/apply.sh
 5. 故障回退：手工在 profile patch 里写入该模型不存在的档位 → 下一轮该子 agent 首调
    失败、轮结果 fallbacks 记录，回合以 session 默认完成，UI 不崩溃。
 
+## stage 瘦身（方案 a，2026-11-06）
+
+用户已裁定方案 (a)：stage/ 只保留被补丁工具实际消费的文件，其余镜像文件出库。
+瘦身后 stage/ 共 6 个 tracked 文件（约 308K，此前为 32 个 tracked 文件 / 约 1.4 万行）：
+
+```
+stage/dsh-workflow-ptc/lib/index.js      # apply.sh 目标 + apply-ptc.mjs 校验/重装源
+stage/dsh-cybernetics/src/index.ts       # apply.sh 目标
+stage/dsh-cybernetics/src/controller.ts  # apply.sh 目标
+stage/dsh-cybernetics/workflows/round.js # apply.sh 目标
+stage/dsh-cybernetics/lib/client.js      # apply.sh 目标
+stage/dsh-cybernetics/test/v14-effort-row.mjs # apply.sh 安装的测试
+```
+
+- 删除：26 个 tracked 镜像文件（git rm）；untracked 的
+  `stage/dsh-cybernetics/docs/diag-session-9e7abdf0-20261104.md`（与仓库根
+  gitignored 的诊断文档逐字节相同，按「诊断产物不入库」既定裁定删除）；
+  gitignored 的 `stage/dsh-cybernetics/node_modules/`（staging 跑 v03 的运行产物）。
+- apply.sh 引用的 `v14-effort-row.mjs` 在 stage 内存在、引用有效（仓库现行测试
+  已演进出 `test/v15-effort-reasoning.mjs`，属命名演进、非死引用，未改动脚本）。
+- 校验（瘦身未破坏补丁工具）：`apply-ptc.mjs` stage 侧 post-anchors 6/6 通过，
+  `verify` 确认 live 安装含全部 6 个锚点（exit 0；`check` 模式 real 侧
+  pre-anchors 失配是「补丁已应用」的预期状态，该模式本就拒绝盲目重装）；
+  apply.sh 预检 6/6（6 个 SRC 存在、DST/父目录就绪）；`patch-v2.mjs check`
+  （作用于 checkout 根、不依赖 stage）0 失败、22 锚点均 already applied；
+  `e2e-ptc-effort.mjs` 仅引用 live ptc 路径，不受影响。
+- 内容状态注意（重要）：保留的 6 个文件中，`ptc/lib/index.js` 是已打补丁的接缝
+  （apply-ptc.mjs 的重装源，仍然有效）；`lib/client.js` 是 R1 期已打补丁版本；
+  `src/index.ts` / `src/controller.ts` / `workflows/round.js` 是打补丁前的快照。
+  最终 v0.15 是经 `patch-v2.mjs`+`patches.mjs` 直接落在 checkout（工作区即
+  live install 符号链接目标）上的——因此**不要在今天重跑 apply.sh**：它会把这
+  三个过期快照覆盖到 live install 造成回退；ptc 接缝的重装用
+  `apply-ptc.mjs check|apply|verify`。
+- 复现补丁副本：`patch.mjs` / `patch-client.mjs` 以 stage 文件为输入、期望打补丁
+  前的原文（锚点断言，命中数不符即中止且零写入）。如需重新生成，先把对应 5 个
+  目标原件从 profile checkout 拷回 stage，再运行补丁脚本。
+
 ## 风险
 
 - dsh-workflow-ptc 与 dsh-cybernetics 均为 node_modules 内已装包，`pnpm install`
