@@ -235,6 +235,94 @@ function makeSessionFactoryLocal({ projections, states }) {
   console.log('✓ 4b /cybernetics on|off|status: durable events + accurate status text')
 }
 
+// --- 4c dynamic input hint (v0.14.0) -----------------------------------------
+// The advertised `input.hint` follows the effective mode: global off / override
+// off → '[on|status]', control-mode on → '[off|status]'; redundant on/off stay
+// accepted (the hint narrows the display, never the grammar).
+{
+  // Mode writes fold into the fake projection registry (same seam as 4b).
+  const makeFoldAppender = (host) => (target, type, data) => {
+    const unit = host.projections.get(MODE_PROJECTION_KEY)
+    const perSession = host.states.get(MODE_PROJECTION_KEY)
+    if (!perSession.has(target)) perSession.set(target, unit.init())
+    perSession.set(target, unit.apply(perSession.get(target), { type, data }))
+  }
+  const makeRegistry = () => {
+    const commands = []
+    const handlers = {}
+    return {
+      commands,
+      handlers,
+      stub: {
+        register(definition) {
+          commands.push(definition)
+          handlers[definition.name] = definition.handler
+          return () => {
+            const i = commands.indexOf(definition)
+            if (i >= 0) commands.splice(i, 1)
+          }
+        },
+      },
+    }
+  }
+  const drive = (host, registry) => {
+    const injection = host.injections.find((i) => i.names.includes('commands'))
+    injection.cb({ ...host.ctx, commands: registry.stub })
+  }
+
+  // (1) global off, no override → initial hint offers `on`
+  {
+    const host = fakeHost({ allGoalsMode: false })
+    host.rootSession = host.makeSession
+    const registry = makeRegistry()
+    drive(host, registry)
+    assert.equal(registry.commands.length, 1, 'exactly one live registration')
+    assert.equal(registry.commands[0].input.hint, '[on|status]', 'global off: hint = [on|status]')
+  }
+  // (2) global on, no override → initial hint offers `off`
+  {
+    const host = fakeHost({ allGoalsMode: true })
+    host.rootSession = host.makeSession
+    const registry = makeRegistry()
+    drive(host, registry)
+    assert.equal(registry.commands[0].input.hint, '[off|status]', 'global on: hint = [off|status]')
+  }
+  // (3) toggling re-advertises the hint; redundant on/off stay accepted
+  {
+    const host = fakeHost({ allGoalsMode: false })
+    host.rootSession = host.makeSession
+    const registry = makeRegistry()
+    drive(host, registry)
+    const session = host.rootSession('sess-hint')
+    const invoke = (rawInput) => registry.handlers.cybernetics({ agent: { session }, rawInput })
+    setRecordAppender(makeFoldAppender(host))
+    // control mode on → hint flips to [off|status]
+    const on1 = invoke('on')
+    assert.equal(on1.kind, 'success')
+    assert.equal(registry.commands.length, 1, 're-registration replaces, never duplicates')
+    assert.equal(registry.commands[0].input.hint, '[off|status]', 'control mode: hint = [off|status]')
+    // redundant `on` in control mode: accepted, no error, hint unchanged
+    const on2 = invoke('on')
+    assert.equal(on2.kind, 'success', 'redundant on is idempotent success')
+    assert.equal(registry.commands.length, 1)
+    assert.equal(registry.commands[0].input.hint, '[off|status]')
+    // off → hint returns to [on|status]
+    const off1 = invoke('off')
+    assert.equal(off1.kind, 'success')
+    assert.equal(registry.commands[0].input.hint, '[on|status]', 'control off: hint = [on|status]')
+    // redundant `off` outside control mode: accepted, no error
+    const off2 = invoke('off')
+    assert.equal(off2.kind, 'success', 'redundant off is idempotent success')
+    assert.equal(registry.commands[0].input.hint, '[on|status]')
+    // status always available in both states
+    assert.equal(invoke('status').kind, 'success')
+    invoke('on')
+    assert.equal(invoke('STATUS').kind, 'success', 'status usable in control mode too')
+    setRecordAppender(undefined)
+  }
+  console.log('✓ 4c dynamic input hint: [on|status] ↔ [off|status] follows effective mode; redundant on/off accepted')
+}
+
 // --- 5. input-policy relay: queued user input relocated to next-step ---------
 {
   // Sessions WITHOUT a live projection registry must be untouched (fail-safe).

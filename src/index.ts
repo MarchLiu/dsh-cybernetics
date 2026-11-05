@@ -1175,53 +1175,83 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
   // override is one durable `cybernetics/mode` session event, so resume/fork
   // replay restores it.
   ctx.inject?.(['commands'], (commandCtx: any) => {
-    const commandDisposer = commandCtx.commands.register({
-      name: 'cybernetics',
-      description: 'Toggle cybernetics control loop (ALL-GOALS routing + hard gate) for THIS session; no argument shows status',
-      input: { hint: '[on|off|status]' },
-      handler: (invocation: any) => {
-        const agent = invocation?.agent
-        const session = agent?.session
-        if (session === undefined || typeof session.append !== 'function') {
-          return { kind: 'error' as const, text: 'cybernetics: 会话不可用，无法写入模式事件。' }
+    // Dynamic input hint (v0.14.0): the descriptor registry carries a static
+    // string per registration, so the hint is refreshed by re-registering the
+    // command whenever the invoking session's effective mode flips — the
+    // registry emits `commands/change` on every layer mutation and the
+    // client-side directory invalidates on that event, so the composer menu
+    // picks up the new hint on its next open. `enabledFor` reads the live
+    // session projection (and the volatile global fallback) at call time —
+    // no mirrored/stale copy of the mode. Registration is global (one
+    // descriptor for every session), so the advertised hint follows the most
+    // recent mode change; a multi-session host may briefly show the other
+    // session's hint until that session's own next /cybernetics invocation.
+    const commandHint = (session: unknown): string =>
+      enabledFor(session) ? '[off|status]' : '[on|status]'
+    let commandDisposer: (() => void) | undefined
+    const handler = (invocation: any) => {
+      const agent = invocation?.agent
+      const session = agent?.session
+      if (session === undefined || typeof session.append !== 'function') {
+        return { kind: 'error' as const, text: 'cybernetics: 会话不可用，无法写入模式事件。' }
+      }
+      const arg = (invocation.rawInput ?? '').trim().toLowerCase()
+      const override = modeOverrideOf(ctx, session)
+      const globalOn = allGoalsMode()
+      if (arg === 'on' || arg === 'off') {
+        try {
+          // v0.13.1: the mode override travels as an ignorable plugin record
+          // (`plugin:cybernetics/mode`). The plain `session.append` call the
+          // v0.9.0 path used persisted the type unmarked, which fail-closes
+          // the whole session on any harness build that does not know it.
+          appendModeRecord(session, MODE_EVENT_TYPE, { enabled: arg === 'on' })
+        } catch (error) {
+          return { kind: 'error' as const, text: `cybernetics: 写入会话模式失败：${String(error)}` }
         }
-        const arg = (invocation.rawInput ?? '').trim().toLowerCase()
-        const override = modeOverrideOf(ctx, session)
-        const globalOn = allGoalsMode()
-        if (arg === 'on' || arg === 'off') {
-          try {
-            // v0.13.1: the mode override travels as an ignorable plugin record
-            // (`plugin:cybernetics/mode`). The plain `session.append` call the
-            // v0.9.0 path used persisted the type unmarked, which fail-closes
-            // the whole session on any harness build that does not know it.
-            appendModeRecord(session, MODE_EVENT_TYPE, { enabled: arg === 'on' })
-          } catch (error) {
-            return { kind: 'error' as const, text: `cybernetics: 写入会话模式失败：${String(error)}` }
-          }
-          return {
-            kind: 'success' as const,
-            text: arg === 'on'
-              ? 'cybernetics 控制已对本会话开启（ALL-GOALS 路由 + 硬门禁 + 新输入外环插入）。覆盖全局配置；/cybernetics off 可关闭。'
-              : 'cybernetics 控制已对本会话关闭：不再注入控制 guidance，硬门禁放行，新输入回归 DSH 原生行为。/cybernetics on 可恢复。',
-          }
-        }
-        // No argument (or unknown text) = status report.
-        const effective = override === null ? globalOn : override
-        const overrideText = override === null ? '未设置（遵循全局配置）' : override ? 'on' : 'off'
+        // The effective mode just flipped: re-advertise the command so the
+        // input hint offers the subcommands meaningful in the new state.
+        // Redundant on/off stays accepted above — the hint narrows the
+        // display, never the accepted grammar.
+        try { registerCommand(session) } catch { /* hint refresh is cosmetic, never load-bearing */ }
         return {
           kind: 'success' as const,
-          text:
-            `cybernetics 本会话状态：${effective ? '生效' : '关闭'}\n` +
-            `- 会话 override：${overrideText}\n` +
-            `- 全局 allGoalsMode：${globalOn ? 'on' : 'off'}\n` +
-            `- 硬门禁 hardGate：${hardGate() ? (resolveGateMode(config, true) === 'allowlist' ? 'on（allowlist）' : 'on（denylist）') : 'off'}\n` +
-            `- 新输入策略 inputPolicy：${readConfigField(config.inputPolicy, 'insert')}\n` +
-            `- 轮完成通知策略 noticePolicy：${readConfigField(config.noticePolicy, 'insert')}\n` +
-            `用法：/cybernetics on | /cybernetics off | 无参数或 status = 显示状态`,
+          text: arg === 'on'
+            ? 'cybernetics 控制已对本会话开启（ALL-GOALS 路由 + 硬门禁 + 新输入外环插入）。覆盖全局配置；/cybernetics off 可关闭。'
+            : 'cybernetics 控制已对本会话关闭：不再注入控制 guidance，硬门禁放行，新输入回归 DSH 原生行为。/cybernetics on 可恢复。',
         }
-      },
+      }
+      // No argument (or unknown text) = status report.
+      const effective = override === null ? globalOn : override
+      const overrideText = override === null ? '未设置（遵循全局配置）' : override ? 'on' : 'off'
+      return {
+        kind: 'success' as const,
+        text:
+          `cybernetics 本会话状态：${effective ? '生效' : '关闭'}\n` +
+          `- 会话 override：${overrideText}\n` +
+          `- 全局 allGoalsMode：${globalOn ? 'on' : 'off'}\n` +
+          `- 硬门禁 hardGate：${hardGate() ? (resolveGateMode(config, true) === 'allowlist' ? 'on（allowlist）' : 'on（denylist）') : 'off'}\n` +
+          `- 新输入策略 inputPolicy：${readConfigField(config.inputPolicy, 'insert')}\n` +
+          `- 轮完成通知策略 noticePolicy：${readConfigField(config.noticePolicy, 'insert')}\n` +
+          `用法：/cybernetics on | /cybernetics off | 无参数或 status = 显示状态`,
+      }
+    }
+    const registerCommand = (session: unknown): void => {
+      try {
+        if (typeof commandDisposer === 'function') commandDisposer()
+      } catch { /* a failed unregister must not block the re-register below */ }
+      commandDisposer = commandCtx.commands.register({
+        name: 'cybernetics',
+        description: 'Toggle cybernetics control loop (ALL-GOALS routing + hard gate) for THIS session; no argument shows status',
+        input: { hint: commandHint(session) },
+        handler,
+      })
+    }
+    // Initial advertisement: no session context yet, so the hint follows the
+    // profile-global allGoalsMode (enabledFor(undefined) resolves to it).
+    registerCommand(undefined)
+    disposers.push(() => {
+      try { if (typeof commandDisposer === 'function') commandDisposer() } catch { /* idempotent teardown */ }
     })
-    if (typeof commandDisposer === 'function') disposers.push(() => commandDisposer())
   })
 
   const disposer = (ctx.tools as { register: (d: unknown) => () => void }).register({
