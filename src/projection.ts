@@ -53,6 +53,22 @@ export type GoalExecutor = 'ephemeral' | 'persistent'
  */
 export const COMPLETED_GOAL_STATUSES: ReadonlySet<GoalStatus> = new Set<GoalStatus>(['met', 'cancelled', 'superseded'])
 
+/** One child agent a goal's rounds spawned, as the tab renders it (v0.14). */
+export interface GoalAgentView {
+  /** Child agent session id (click-through target on the client). */
+  id: string
+  /** Role identifier: 'task' | 'verify' | 'triage'. */
+  role: string
+  /** The workflow agent() label (display fallback). */
+  label: string
+  /** Epoch ms of the first observed start. */
+  startedAt: number
+  /** How the child settled; absent while running/unknown. */
+  outcome?: 'completed' | 'failed' | 'cancelled'
+  /** Epoch ms of the settlement. */
+  endedAt?: number
+}
+
 /** One goal as the client tab renders it (wire-safe plain JSON). */
 export interface GoalView {
   goalId: string
@@ -76,6 +92,8 @@ export interface GoalView {
   /** Set when a revision replaced this goal: the successor's goalId. */
   supersededBy?: string
   revisions: GoalRevisionView[]
+  /** Every child agent this goal's rounds spawned (v0.14, aggregated). */
+  agents?: GoalAgentView[]
   /** Epoch milliseconds of the last content change (ordering key for the tab). */
   updatedAt: number
 }
@@ -117,7 +135,7 @@ export const EVENT_TYPE = 'plugin:cybernetics/goals' as const
 /** Pre-fix event name; accepted on restore so older logs still fold. */
 export const LEGACY_EVENT_TYPE = 'cybernetics/goals' as const
 /** Persisted-cache invalidation version of the fold. */
-export const STATE_VERSION = 2
+export const STATE_VERSION = 3
 
 /** Duck-typed Zod stand-in: the host only calls `parse`. */
 interface SchemaLike<T> {
@@ -155,6 +173,23 @@ function isGoalView(value: unknown): value is GoalView {
   return typeof g.goalId === 'string' && typeof g.status === 'string'
 }
 
+/** Normalize one wire agent record into a fresh plain-JSON object. */
+function normalizeAgent(agent: unknown): GoalAgentView | undefined {
+  if (agent === null || typeof agent !== 'object') return undefined
+  const a = agent as Record<string, unknown>
+  if (typeof a.id !== 'string' || a.id.length === 0) return undefined
+  return {
+    id: a.id,
+    role: typeof a.role === 'string' && a.role.length > 0 ? a.role : 'task',
+    label: typeof a.label === 'string' ? a.label : '',
+    startedAt: typeof a.startedAt === 'number' && Number.isFinite(a.startedAt) ? a.startedAt : 0,
+    ...(a.outcome === 'completed' || a.outcome === 'failed' || a.outcome === 'cancelled'
+      ? { outcome: a.outcome }
+      : {}),
+    ...(typeof a.endedAt === 'number' && Number.isFinite(a.endedAt) ? { endedAt: a.endedAt } : {}),
+  }
+}
+
 /** Normalize one wire goal into a fresh plain-JSON object. */
 function normalizeGoal(goal: GoalView): GoalView {
   return {
@@ -182,6 +217,9 @@ function normalizeGoal(goal: GoalView): GoalView {
         at: Number.isFinite(r?.at) ? Number(r.at) : 0,
       }))
       : [],
+    ...(Array.isArray(goal.agents)
+      ? { agents: goal.agents.map(normalizeAgent).filter((a): a is GoalAgentView => a !== undefined) }
+      : {}),
     updatedAt: Number.isFinite(goal.updatedAt) ? Number(goal.updatedAt) : 0,
   }
 }
@@ -246,6 +284,9 @@ function toGoalView(loop: LoopState, now: number): GoalView {
     ...(loop.parentGoalId ? { parentGoalId: loop.parentGoalId } : {}),
     ...(loop.supersededBy ? { supersededBy: loop.supersededBy } : {}),
     revisions: revisions.map((r) => ({ version: r.version, reason: r.reason, at: r.at })),
+    ...(Array.isArray(loop.agents) && loop.agents.length > 0
+      ? { agents: loop.agents.map(normalizeAgent).filter((a): a is GoalAgentView => a !== undefined) }
+      : {}),
     updatedAt: 0,
   }
   const fingerprint = JSON.stringify({ ...view, updatedAt: 0 })

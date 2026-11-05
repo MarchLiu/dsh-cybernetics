@@ -38,6 +38,7 @@
  */
 
 import type { ControllerConfig, LoopState, RoundResult } from './controller.ts'
+import { linkRunToGoal, noteTeamMember } from './agents.ts'
 
 /** Everything one round needs from the goal board (a plain snapshot). */
 export interface TeamRoundInput {
@@ -246,6 +247,12 @@ function nextSettled(ctx: object, childId: string): { promise: Promise<unknown>;
   }
 }
 
+/** The session object a goal-board publish targets (exec.agent's session). */
+function sessionOf(parent: unknown): unknown {
+  const session = (parent as { session?: unknown } | undefined)?.session
+  return session !== undefined && session !== null ? session : parent
+}
+
 /**
  * Start one persistent round: spawn the teammate on the goal's first round,
  * otherwise steer a brief amendment into the same member; await its settled
@@ -303,6 +310,9 @@ export async function startTeamRound(
         childId = String(spawned?.member?.id ?? '')
         state.memberName = memberName
         if (childId.length === 0) throw new Error('TeamExecutor: spawnTeammate returned no member id')
+      // v0.14 goal-agent tracking: the teammate is not a workflow child —
+      // record it on the goal board directly (role 'task', label = member name).
+      noteTeamMember(sessionOf(parent), input.goalId, childId, memberName)
       } else {
         await teams.sendMessage(parent, {
           target: state.memberName,
@@ -316,6 +326,8 @@ export async function startTeamRound(
         const members = teams.listMembers(parent) as Array<{ name?: string; id?: string }>
         childId = String(members.find((m) => m.name === state.memberName)?.id ?? '')
         if (childId.length === 0) throw new Error(`TeamExecutor: teammate "${state.memberName}" not found in the roster`)
+        // Round 2+ on the same durable member: idempotent re-record (dedupe by id).
+        noteTeamMember(sessionOf(parent), input.goalId, childId, memberName)
       }
       if (cancelled) return { stopReason: 'cancelled', error: 'interrupted by session agent' }
 
@@ -378,6 +390,9 @@ export async function startTeamRound(
         parent,
         signal,
       })
+      // v0.14 goal-agent tracking: correlate the verify/triage run with the
+      // goal (its workflow/agent-start|end children fold onto the board).
+      linkRunToGoal((run as { id?: unknown }).id, sessionOf(parent), input.goalId)
       try {
         const settled = await run.result
         if (settled.stopReason !== 'completed') {

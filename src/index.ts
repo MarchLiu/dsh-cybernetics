@@ -33,6 +33,7 @@ import type {
   ControllerConfig, ControllerDecision, LoopState, ResumableReason, RoundResult, RolesConfig,
 } from './controller.ts'
 import { startTeamRound, teamExecutorAvailable, teamExecutorUnavailableError } from './executor.ts'
+import { linkRunToGoal, noteWorkflowAgent, setBoardSource, unlinkRun } from './agents.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setPublishDebugRoot, appendModeRecord } from './projection.ts'
 import {
   MODE_EVENT_TYPE, MODE_LEGACY_EVENT_TYPE, cyberneticsModeProjection, effectiveEnabled, modeOverrideOf, planWanted,
@@ -297,6 +298,10 @@ function readConfigField<T>(field: ConfigField<T> | undefined, fallback: T): T {
  */
 const boards = new Map<unknown, Map<string, LoopState>>()
 
+// v0.14 goal-agent tracking: hand the boards registry to src/agents.ts (no
+// import cycle — agents.ts reaches the board only through this accessor).
+setBoardSource(() => boards)
+
 /** One in-flight async round (action 'start'), keyed by goalId. */
 interface RunningRound {
   goalId: string
@@ -396,6 +401,27 @@ function restoreLoop(raw: unknown): LoopState | undefined {
   }
   if (typeof g.parentGoalId === 'string' && g.parentGoalId.length > 0) loop.parentGoalId = g.parentGoalId
   if (typeof g.supersededBy === 'string' && g.supersededBy.length > 0) loop.supersededBy = g.supersededBy
+  // v0.14 goal-agent records: restore every well-formed entry so the「目标」tab
+  // keeps showing a goal's spawned agents across host restarts.
+  if (Array.isArray(g.agents)) {
+    const agents: LoopState['agents'] = []
+    for (const raw of g.agents) {
+      if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue
+      const a = raw as Record<string, unknown>
+      if (typeof a.id !== 'string' || a.id.length === 0) continue
+      agents.push({
+        id: a.id,
+        role: typeof a.role === 'string' && a.role.length > 0 ? a.role : 'task',
+        label: typeof a.label === 'string' ? a.label : '',
+        startedAt: typeof a.startedAt === 'number' && Number.isFinite(a.startedAt) ? a.startedAt : 0,
+        ...(a.outcome === 'completed' || a.outcome === 'failed' || a.outcome === 'cancelled'
+          ? { outcome: a.outcome }
+          : {}),
+        ...(typeof a.endedAt === 'number' && Number.isFinite(a.endedAt) ? { endedAt: a.endedAt } : {}),
+      })
+    }
+    if (agents.length > 0) loop.agents = agents
+  }
   if (Array.isArray(g.revisions)) {
     loop.revisions = []
     for (const entry of g.revisions) {
@@ -700,6 +726,33 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
     // separate key; replayed eagerly, so modeOverrideOf reads are synchronous).
     const modeDisposer = projections.register(cyberneticsModeProjection())
     if (typeof modeDisposer === 'function') disposers.push(modeDisposer)
+  }
+
+  // v0.14 goal-agent tracking: listen to the host engine's lifecycle events
+  // (the exact seam dsh-tool-workflow uses) and fold each child agent of THIS
+  // plugin's runs onto its goal's board record (src/agents.ts). Only runs the
+  // plugin itself started are correlated (linkRunToGoal at launch), so other
+  // workflows sharing the engine never leak into a goal board. Guarded: a ctx
+  // without `on` (offline harness) skips tracking entirely, and each listener
+  // failure is contained inside noteWorkflowAgent.
+  if (typeof ctx.on === 'function') {
+    try {
+      const offStart = ctx.on('workflow/agent-start', (info: unknown, agent: unknown) => {
+        noteWorkflowAgent(info, agent, undefined)
+      })
+      if (typeof offStart === 'function') disposers.push(offStart)
+      const offEnd = ctx.on('workflow/agent-end', (info: unknown, agent: unknown) => {
+        const outcome = agent !== null && typeof agent === 'object'
+          ? (agent as { outcome?: unknown }).outcome
+          : undefined
+        noteWorkflowAgent(info, agent, outcome === 'completed' || outcome === 'failed' || outcome === 'cancelled' ? outcome : undefined)
+      })
+      if (typeof offEnd === 'function') disposers.push(offEnd)
+      const offRun = ctx.on('workflow/end', (info: unknown) => { unlinkRun((info as { id?: unknown })?.id) })
+      if (typeof offRun === 'function') disposers.push(offRun)
+    } catch {
+      // Events unavailable on this fiber: goal-agent tracking stays off.
+    }
   }
 
   // The implicit guidance section embeds the volatile allGoalsMode wording,
@@ -1591,6 +1644,9 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           return startTeamRound(ctx, parent, target, controllerConfig, signal)
         }
         const started = await startRound(engine, parent, root, target, controllerConfig, { objective: target.objective ?? '' }, signal)
+        // v0.14 goal-agent tracking: correlate this run with the goal so the
+        // workflow/agent-start|end listeners record its children on the board.
+        linkRunToGoal((started.run as { id?: unknown })?.id, parent.session, target.goalId)
         return {
           round: started.round,
           result: started.run.result,

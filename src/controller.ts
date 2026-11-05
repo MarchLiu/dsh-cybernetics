@@ -103,6 +103,22 @@ export type ControllerDecision =
 /** Reason a paused loop can resume: never `met` — completion needs user confirmation, not a resume. */
 export type ResumableReason = 'goal-questionable' | 'human-input' | 'round-cap' | 'failed' | 'no-goal'
 
+/** One child agent a goal's rounds spawned (v0.14 goal-agent tracking). */
+export interface GoalAgentRecord {
+  /** The child agent's session id (workflow childId / teammate member id). */
+  id: string
+  /** Role identifier: 'task' | 'verify' | 'triage' (round.js agent labels). */
+  role: string
+  /** The workflow agent() label the round script passed (display). */
+  label: string
+  /** Epoch ms of the first observed start for this child. */
+  startedAt: number
+  /** How the child settled (workflow/agent-end); absent while running. */
+  outcome?: 'completed' | 'failed' | 'cancelled'
+  /** Epoch ms of the settlement. */
+  endedAt?: number
+}
+
 /** Progress of one goal's loop in the calling session; multi-goal: one per goalId. */
 export interface LoopState {
   /** Registry id of this goal (dsh-goal id when adopted, else `cyb-*`). */
@@ -145,6 +161,13 @@ export interface LoopState {
    * `.cybernetics/revisions-<newGoalId>.jsonl` audit line, and this stays empty.
    */
   revisions?: Array<{ version: number; reason: string; at: number }>
+  /**
+   * Every child agent this goal's rounds spawned (v0.14 goal-agent tracking,
+   * src/agents.ts): task/verify/triage workflow children plus a persistent
+   * teammate. Aggregated across rounds, deduped by child id; the「目标」tab
+   * renders it as the goal's 关联智能体 line with live run state.
+   */
+  agents?: GoalAgentRecord[]
 }
 
 /** One `revise` transition as written to `.cybernetics/revisions-<newGoalId>.jsonl`. */
