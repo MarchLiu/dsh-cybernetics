@@ -2688,8 +2688,8 @@ console.log(JSON.stringify({
   }
   const form57 = volatileForm57(Config)
   assert.deepEqual(Object.keys(form57.dict ?? {}).sort(),
-    ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
-    'the served settings form exposes exactly the eight volatile fields (v0.9.0 adds inputPolicy; roles still not served since v0.8.4)')
+    ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
+    'the served settings form exposes exactly the nine volatile fields (v0.13.0 adds noticePolicy on top of v0.9.0 inputPolicy; roles still not served since v0.8.4)')
   assert.equal(isVolatilePath57(Config, ['roles']), false,
     'a roles write path is NOT volatile (v0.8.4): the panel neither serves nor writes it')
   // STALE-RUNTIME CONTROL: the pre-0.7.7 runtime face (only allGoalsMode
@@ -2725,10 +2725,10 @@ console.log(JSON.stringify({
     const hostForm = hostSchema.volatileForm(Config)
     assert.notEqual(hostForm, undefined, 'host volatileForm serves a form for the current schema')
     assert.deepEqual(Object.keys(hostForm.dict ?? {}).sort(),
-      ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
-      'the REAL host volatileForm serves exactly the eight volatile fields (v0.9.0 adds inputPolicy; roles is off the panel since v0.8.4)')
+      ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'roundsPerSubgoal', 'taskAgentModel', 'triageAgentModel', 'verifyAgentModel'],
+      'the REAL host volatileForm serves exactly the nine volatile fields (v0.13.0 adds noticePolicy; roles is off the panel since v0.8.4)')
     assert.equal(Object.hasOwn(hostForm.dict ?? {}, 'roles'), false, 'the host form does not serve roles any more')
-    for (const path of [['roundsPerSubgoal'], ['maxConcurrentRounds'], ['taskAgentModel'], ['verifyAgentModel'], ['triageAgentModel'], ['allGoalsMode'], ['hardGate'], ['inputPolicy']]) {
+    for (const path of [['roundsPerSubgoal'], ['maxConcurrentRounds'], ['taskAgentModel'], ['verifyAgentModel'], ['triageAgentModel'], ['allGoalsMode'], ['hardGate'], ['inputPolicy'], ['noticePolicy']]) {
       assert.equal(hostSchema.isVolatilePath(Config, path), true, `host write gate accepts ${path.join('.')}`)
     }
     for (const path of [['roles', 'default', 'model'], ['gateMode'], ['gateApprovalRelay'], ['toolName'], ['implicitTrigger']]) {

@@ -4,6 +4,17 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.13.0（2026-11-05）：内环消息自动插入（免手动推送）
+
+**需求**：后台 goal 轮结束产生的内环完成通知（`<cybernetics_round>` followup）此前只在 session agent 空闲时立即唤醒；agent 仍在跑时通知排队在 next-turn，要等当前回合自然结束才被读到，反馈折叠滞后。希望与 v0.9.0 的外环新输入插入对称：内环消息也自动插入（next-step/steer），免手动推送、免等轮后。
+
+- **src/index.ts（input relay 扩展）**：v0.9.0 的 `agent/inbox/inserted` 监听原样保留，过滤条件从「仅 `source.kind === 'user'`」扩展为双策略：user 输入走 `inputPolicy`（v0.9.0 不变），`source.kind === 'cybernetics'` 的轮完成通知走新配置 `noticePolicy`（缺省 `insert`）。两条路径共享同一组非干预守卫（委派子会话不碰、cybernetics 关闭的会话不碰、空闲 agent 不碰——followup 本就立即唤醒、不在 next-turn 的消息不碰——天然防递归）。
+- **新配置 `noticePolicy: 'insert' | 'queue'`**（缺省 `insert`，volatile，保存即时生效）：`queue` 恢复原生 next-turn 排队。与 `inputPolicy` 是两个独立旋钮。
+- **/cybernetics status**：状态回执新增「轮完成通知策略 noticePolicy」一行。
+- **test/v13-notice-auto-insert.mjs 新增**：缺省插桩（通知从 next-turn 摘除并 steer 进 next-step、对象原样重定位、next-step 重插不递归）、`noticePolicy 'queue'` 恢复排队且与外环 user 输入中继互不影响、四类非干预守卫（空闲/override off/委派子/竞态安全）、status 回执展示 noticePolicy。
+- **test/v09-session-mode.mjs、test/v03-offline.mjs 更新**：v0.13 起 cybernetics 通知缺省被中继重定位（v09 原断言「非 user 来源不动」按新语义翻转，补 unknown source kind 反例）；v03 面板 volatile 字段清单 8 → 9（noticePolicy 加入 served form 与宿主 volatileForm/isVolatilePath 真模块交叉核验）。
+- **生效手段**：`src/` 改动——宿主重载生效。
+
 ## v0.12.0（2026-11-05）：控制徽标「内环运行中」脉冲动画（ModePill × cyberneticsGoals）
 
 **需求**：用户此前靠 better sidebar 任务管理页或顶栏「N 个子智能体」pill 监控内环任务；希望控制徽标本身即可传达「内环还有任务在跑」——控制开且会话存在 running goal 时，绿点呼吸脉冲 + tooltip 追加运行细节。

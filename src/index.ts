@@ -140,6 +140,15 @@ export interface Config extends ControllerConfig {
    */
   inputPolicy?: 'insert' | 'queue'
   /**
+   * Round-settled notice delivery policy for sessions where cybernetics is
+   * effective-on (v0.13.0, default 'insert'): the inner-loop completion notice
+   * (notifyRoundSettled followup) that lands in the next-turn queue while a
+   * round keeps the session agent busy is relocated to next-step (steer), so
+   * the feedback is folded without waiting for the turn to end or a manual
+   * push/collect prompt. 'queue' restores the native next-turn delivery.
+   */
+  noticePolicy?: 'insert' | 'queue'
+  /**
    * Max concurrent rounds across ALL sessions (default 0 = unlimited): a new
    * round (blocking, 'start' or 'revise') is refused while this many rounds
    * are in flight, protecting the host from parallel-agent storms.
@@ -259,6 +268,12 @@ export const Config = z.object({
    */
   inputPolicy: z.union(['insert', 'queue'] as const).default('insert').volatile()
     .description('新输入策略（v0.9.0，缺省 insert）：本会话 cybernetics 生效期间，goal 轮运行中到达的新用户输入不再排队到轮后（next-turn），而是作为外环控制直接插入当前回合（next-step/steer）；queue 恢复排队。cybernetics 关闭的会话完全不受此项影响，走 DSH 原生 busyEnter 行为。保存后即时生效。'),
+  /**
+   * Round-settled notice delivery policy (v0.13.0, default 'insert'). Volatile:
+   * read live at every inbox insertion, same timing as inputPolicy.
+   */
+  noticePolicy: z.union(['insert', 'queue'] as const).default('insert').volatile()
+    .description('轮完成通知策略（v0.13.0，缺省 insert）：本会话 cybernetics 生效期间，后台 goal 轮结束产生的内环完成通知（<cybernetics_round>）若排队在 next-turn（session agent 仍在跑），自动重定位为 next-step（steer）即时插入当前回合，免手动推送/等待轮后折叠；queue 恢复原生 next-turn 排队。保存后即时生效。'),
 })
 
 /** One resolved config field: a live reference (volatile), or a plain value. */
@@ -488,8 +503,8 @@ yourself — you manage goals and the task agents that execute them. Classify ea
   the 'cancel' path, and 'cancel' on its own still stops a round without revising the goal).
   NEVER edit a goal's objective in place — 'revise' is the only goal-change verb, and only after the user
   has confirmed the change in conversation.
-- FEEDBACK arrives as the tool result ('round') or, for async rounds, as a queued notification followed by
-  action 'collect'. Then choose: summarize the outcome to the user; start a verification round; or start a
+- FEEDBACK arrives as the tool result ('round') or, for async rounds, as an auto-inserted notification
+  (delivered on settle — no manual push needed) followed by action 'collect'. Then choose: summarize the outcome to the user; start a verification round; or start a
   corrective round whose brief is built from the verdict gaps. On decision 'continue', launch the next
   round with the returned subgoal. On 'pause': 'met' = report and wait for user confirmation;
   'goal-questionable' = re-examine the goal through dialogue; 'human-input' = surface the question;
@@ -1126,15 +1141,20 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
     if (agent?.session?.header?.parentSession !== undefined) return
     // Non-cybernetics sessions: zero intervention, native behavior preserved.
     if (!enabledFor(agent.session)) return
-    // 'queue' restores the native delivery for this deployment.
-    if (readConfigField(config.inputPolicy, 'insert') !== 'insert') return
+    // Act only on messages this deployment relocates: user prompts under
+    // inputPolicy='insert' (outer-loop control insertion, v0.9.0) and our own
+    // inner-loop round-settled notices under noticePolicy='insert' (v0.13.0).
+    // Next-step re-insertions of an already relocated message fall through the
+    // nextTurn membership check below, which also prevents recursion.
+    const sourceKind = message?.source?.kind
+    const isUserInput =
+      sourceKind === 'user' && readConfigField(config.inputPolicy, 'insert') === 'insert'
+    const isRoundNotice =
+      sourceKind === 'cybernetics' && readConfigField(config.noticePolicy, 'insert') === 'insert'
+    if (!isUserInput && !isRoundNotice) return
     // Only a RUNNING agent actually queues behind the current turn; an idle
     // agent wakes on the very followup, so relocation is a no-op there.
     if (agent.status !== 'running') return
-    // Act only on user prompts that landed in the next-turn queue (our own
-    // round notifications and next-step re-insertions of this very relay are
-    // filtered here, which also prevents recursion).
-    if (message?.source?.kind !== 'user') return
     if (!agent.inbox.nextTurn?.some((m: any) => m?.id === message.id)) return
     try {
       if (!agent.inbox.remove(message.id)) return
@@ -1192,6 +1212,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
             `- 全局 allGoalsMode：${globalOn ? 'on' : 'off'}\n` +
             `- 硬门禁 hardGate：${hardGate() ? (resolveGateMode(config, true) === 'allowlist' ? 'on（allowlist）' : 'on（denylist）') : 'off'}\n` +
             `- 新输入策略 inputPolicy：${readConfigField(config.inputPolicy, 'insert')}\n` +
+            `- 轮完成通知策略 noticePolicy：${readConfigField(config.noticePolicy, 'insert')}\n` +
             `用法：/cybernetics on | /cybernetics off | 无参数或 status = 显示状态`,
         }
       },
@@ -1205,8 +1226,9 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       'Goal-driven control loop for the SESSION agent, which never executes task work itself: it manages ' +
       'goals and the independent task agents that execute them. Actions: round (default, blocking) runs one ' +
       'full round (task agent -> verify agent -> triage agent) and returns the controller decision; start ' +
-      'launches the round in the background and returns immediately (a completion notice is queued into this ' +
-      'session); collect folds a finished background round into its decision; cancel aborts a running round ' +
+      'launches the round in the background and returns immediately (a completion notice is auto-inserted ' +
+      'into this session when it settles — next-step while running, next-turn wake while idle); collect ' +
+      'folds a finished background round into its decision; cancel aborts a running round ' +
       '(use when a user correction must interrupt the current task agent); list shows every goal on this ' +
       'session board. New task: pass title + brief (a complete, self-contained work order — the task agent ' +
       'has NO conversation history) to create a goal; one session supports multiple concurrent goals. ' +
@@ -1573,7 +1595,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
             }
             return
           }
-          notifyRoundSettled(parent, target, round)
+          notifyRoundSettled(parent, target, round, readConfigField(config.noticePolicy, 'insert'))
         }).catch(() => { /* result never rejects by contract; belt and braces */ })
         return { round }
       }
@@ -1750,15 +1772,19 @@ function applyDecision(loop: LoopState, round: number, result: RoundResult, deci
 }
 
 /**
- * Queue a completion notice into the session agent's own inbox, so an async
+ * Deliver a completion notice into the session agent's own inbox, so an async
  * round's feedback reaches the session agent even while it is doing something
  * else. Zero-dependency replica of dsh-llm's createUserMessage
- * ({id, role:'user', content, source}) + Agent.followup, the same mechanism
- * dsh-goal-round-driver uses to admit continuation rounds.
+ * ({id, role:'user', content, source}); running agents get it via steer
+ * (next-step, auto-inserted into the current turn — v0.13.0, when
+ * noticePolicy='insert'), idle agents via followup (next-turn, wakes the
+ * driver), the same mechanism dsh-goal-round-driver uses to admit
+ * continuation rounds. The `agent/inbox/inserted` relay (v0.13.0) is the
+ * safety net for any notice that still lands in a running next-turn queue.
  */
-function notifyRoundSettled(parent: any, loop: LoopState, round: number): void {
+function notifyRoundSettled(parent: any, loop: LoopState, round: number, policy: 'insert' | 'queue' = 'insert'): void {
   try {
-    parent.followup({
+    const message = {
       id: randomUUID(),
       role: 'user',
       content: [{
@@ -1768,7 +1794,23 @@ function notifyRoundSettled(parent: any, loop: LoopState, round: number): void {
           `该 goal 的后台轮已结束。调用 cybernetics { action: "collect", goalId: ${JSON.stringify(loop.goalId)} } 折叠结果，然后按协议处理反馈：向用户总结 / 启动验证轮 / 带缺口启动修正轮。\n</cybernetics_round>`,
       }],
       source: { kind: 'cybernetics', goalId: loop.goalId, round },
-    })
+    }
+    // v0.13.0 inner-loop auto-insert (noticePolicy='insert'): while the session
+    // agent is mid-turn, a followup parks the notice in the next-turn inbox,
+    // which the Web GUI queue dock renders as a pending bubble that waits for
+    // a manual send (the "manual push" the user removed). Delivering as
+    // next-step (steer) inserts the notice into the running turn directly, so
+    // it executes on arrival. An idle agent wakes on the very delivery either
+    // way — keep the native followup there. steer wakes too
+    // (send(_, _, true)), so the status-read race (running → idle between
+    // check and call) stays safe. noticePolicy='queue' restores the native
+    // next-turn delivery for this deployment (the inbox relay honors the same
+    // knob, so the two paths stay consistent).
+    if (policy === 'insert' && parent?.status === 'running' && typeof parent.steer === 'function') {
+      parent.steer(message)
+    } else {
+      parent.followup(message)
+    }
   } catch {
     // The notice is a convenience; the session agent can still collect on its
     // next turn. Never let notification failure break the round lifecycle.

@@ -291,13 +291,22 @@ function makeSessionFactoryLocal({ projections, states }) {
   relay.fn({ agent: agentIdle, message: queued })
   assert.equal(removed.length, 0, 'idle agent: untouched (followup already wakes immediately)')
 
-  // Non-user source (our own round notification): untouched.
+  // v0.13.0: our own round notice (source.kind 'cybernetics') IS relocated by
+  // default (noticePolicy 'insert', inner-loop auto insertion); an unknown
+  // source kind stays untouched.
   const notice = { id: 'n1', source: { kind: 'cybernetics' } }
   agent.status = 'running'
   agent.inbox.nextTurn = [notice]
   steered = []; removed = []
   relay.fn({ agent, message: notice })
-  assert.equal(removed.length, 0, 'non-user source: untouched')
+  assert.deepEqual(removed, ['n1'], 'v0.13: round notice relocated (noticePolicy insert default)')
+  assert.equal(steered.length, 1, 'v0.13: round notice steered into next-step')
+  const unknown = { id: 'u1', source: { kind: 'tool' } }
+  agent.inbox.nextTurn = [unknown]
+  steered = []; removed = []
+  relay.fn({ agent, message: unknown })
+  assert.equal(removed.length, 0, 'unknown source kind: untouched')
+  assert.equal(steered.length, 0, 'unknown source kind: nothing steered')
 
   // Delegated child agent: untouched.
   const childAgent = { id: 'child', session: host.childSession('c1', 'sess-relay'), status: 'running', inbox: { nextTurn: [queued], nextStep: [], remove: () => true }, steer: () => {} }
