@@ -127,3 +127,50 @@ export function effectiveEnabled(ctx: unknown, session: unknown, allGoalsMode: b
 export function modeEventPayload(arg: 'on' | 'off'): { enabled: boolean } {
   return { enabled: arg === 'on' }
 }
+
+/**
+ * v0.11.0 plan precedence: the dsh-plan-mode plugin registers its own session
+ * projection under this registry key (planProjectionDefinition,
+ * `node_modules/@deepseek-ai/dsh-plan-mode/lib/index.js:64-127`, stateVersion
+ * 3). Cybernetics reads it through the SAME `sessionProjections` registry it
+ * already injects — no mirrored state, no plan-mode-side cooperation.
+ */
+export const PLAN_PROJECTION_KEY = 'plan'
+
+/** The plan projection's folded state (duck-typed; only these fields matter). */
+interface PlanProjectionState {
+  active?: boolean
+  wanted?: boolean | null
+  running?: { wanted?: boolean } | null
+}
+
+/**
+ * v0.11.0: TRUE when plan mode is active or about to become active for this
+ * session — the single shared predicate for BOTH the guidance text (§4.3)
+ * and the hard-gate exemption (§4.3-硬门), so guidance and gate can never
+ * drift apart. Three plan states count:
+ * - `active === true`        — plan already governing this turn;
+ * - `running?.wanted === true` — a `/plan` command is executing, next step active;
+ * - `wanted === true`        — chosen, pending the boundary flip.
+ * `wanted === false` (exit pending) does NOT count: the current step still
+ * runs under plan policy, and the per-request re-read flips every consumer
+ * back to cybernetics semantics on the very next request with zero recovery
+ * logic. Any failure (plan-mode not mounted, key not replayed, stateOf
+ * throw, malformed state) resolves to false — plain cybernetics session,
+ * exactly the fail-safe shape of modeOverrideOf above.
+ */
+export function planWanted(ctx: unknown, session: unknown): boolean {
+  if (session === undefined || session === null) return false
+  const projections = (ctx as { sessionProjections?: ProjectionsLike })?.sessionProjections
+  if (projections === undefined || typeof projections.stateOf !== 'function') return false
+  try {
+    const state = projections.stateOf(session, PLAN_PROJECTION_KEY) as PlanProjectionState | undefined
+    if (state === undefined || state === null || typeof state !== 'object') return false
+    if (state.active === true) return true
+    if (state.running?.wanted === true) return true
+    if (state.wanted === true) return true
+    return false
+  } catch {
+    return false
+  }
+}

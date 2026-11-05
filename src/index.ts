@@ -35,7 +35,7 @@ import type {
 import { startTeamRound, teamExecutorAvailable, teamExecutorUnavailableError } from './executor.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setPublishDebugRoot } from './projection.ts'
 import {
-  MODE_EVENT_TYPE, cyberneticsModeProjection, effectiveEnabled, modeOverrideOf,
+  MODE_EVENT_TYPE, cyberneticsModeProjection, effectiveEnabled, modeOverrideOf, planWanted,
 } from './sessionMode.ts'
 
 export const name = 'dsh-cybernetics'
@@ -532,6 +532,30 @@ ALL-GOALS MODE ACTIVE (routing protocol — no exceptions, no in-place analysis)
   The chosen branch and its reason are recorded in the .cybernetics/revisions-<newGoalId>.jsonl audit
   line (abort.mode = auto|explicit + basis). Passing abortPrevious explicitly keeps manual control.`
 
+/**
+ * v0.11.0 plan precedence (docs/plan-precedence.md §4.3, design finalized
+ * v0.10.0, user ruling 2026-11-05): when plan mode is active (or pending) for
+ * the requesting session, this segment REPLACES the entire cybernetics
+ * guidance (IMPLICIT + ALL-GOALS + hard-gate wording) — the session agent
+ * plans inline under plan discipline instead of routing everything through
+ * goals. Wording already reflects the v0.10.0 gate policy: the hard gate is
+ * exempted per-session while plan mode is active, so plan discipline is
+ * carried by this guidance + the plan:policy section, not by tool removal.
+ */
+const PLAN_PRECEDENCE_GUIDANCE = `
+PLAN MODE ACTIVE (plan precedence over cybernetics): this session is in plan mode; the plan
+protocol governs this turn and the ALL-GOALS routing protocol is SUSPENDED:
+- Do NOT create goals, do NOT call the cybernetics tool, do NOT delegate — planning is done by
+  you, inline, in this conversation.
+- Stay read-only: research with read/search tools only; no changes to files, services, boards or
+  any other state.
+- Present the complete plan with the exit_plan_mode tool for user approval. On approval plan mode
+  exits, and the session's cybernetics mode (goal loop + hard gate) resumes from the next step:
+  approved implementation work will then be routed through the goal loop.
+The hard gate is EXEMPTED for this session while plan mode is active: full tool access is restored
+for the plan turn. Plan discipline is carried by this guidance and the plan:policy section, not by
+tool removal; the gate returns automatically once plan mode exits.`
+
 /** Tool names hidden from top-level session agents when the hard gate is on. */
 const DEFAULT_GATED_TOOLS = ['bash', 'edit', 'write']
 
@@ -543,6 +567,13 @@ const DEFAULT_GATED_TOOLS = ['bash', 'edit', 'write']
  * cybernetics task agent. The cybernetics tool itself is always re-added.
  */
 const DEFAULT_GATE_ALLOWLIST = [
+  // v0.11.0 plan precedence (docs/plan-precedence.md §4.2): the plan-mode
+  // approval tool is read-only and always registered; outside plan mode a
+  // call throws (plan-mode lib :255), so listing it has no side effect. This
+  // is the FALLBACK that keeps plan approval reachable even when the
+  // planWanted projection detection below fails (plan-mode unmounted, key
+  // renamed, read error) — plan approval must never be double-killed.
+  'exit_plan_mode',
   // local reads & search
   'read', 'read_image', 'read_pdf', 'glob', 'grep', 'working_directory',
   // web reads
@@ -687,6 +718,12 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         const session = context?.agent?.session
         const override = modeOverrideOf(ctx, session)
         if (override === false) return ''
+        // v0.11.0 plan precedence (docs/plan-precedence.md §4.3): plan mode
+        // outranks cybernetics — the whole segment (including the hard-gate
+        // wording, conflict C3) is replaced by the plan protocol. Same
+        // planWanted predicate the gate exemption reads (§4.1), so guidance
+        // and gate can never drift apart.
+        if (planWanted(ctx, session)) return PLAN_PRECEDENCE_GUIDANCE
         const allGoals = override === true ? true : allGoalsMode()
         return IMPLICIT_GUIDANCE + (allGoals ? ALL_GOALS_GUIDANCE : '') + hardGateGuidance
       },
@@ -744,6 +781,13 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       // override the gate applies exactly as configured (hardGate is
       // independent of allGoalsMode, so a null override changes nothing).
       if (modeOverrideOf(ctx, (scope as any)?.session) === false) return next()
+      // v0.11.0 plan precedence (docs/plan-precedence.md §4.3-硬门, user
+      // ruling 2026-11-05): a plan-active session gets the gate PASSED
+      // THROUGH per-request — plan discipline is carried by guidance +
+      // plan:policy, not tool removal; when the projection flips (approval /
+      // /plan off) the very next request is gated again with zero recovery
+      // logic.
+      if (planWanted(ctx, (scope as any)?.session)) return next()
       if (Array.isArray(assembly.tools)) {
         assembly.tools = allowlistMode
           ? assembly.tools.filter((t: any) => keep.has(t?.name))
@@ -771,6 +815,14 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       // v0.9.0: the dispatch-layer gate honors the same per-session override
       // as the assembly filter — an explicit off is never denied here.
       if (modeOverrideOf(ctx, exec?.agent?.session) === false) return next()
+      // v0.11.0 plan precedence (§4.3-硬门): plan-active sessions are never
+      // denied — same per-request exemption as the assembly filter.
+      if (planWanted(ctx, exec?.agent?.session)) return next()
+      // v0.11.0 §4.2 C1 fallback: the plan-approval tool is explicitly passed
+      // at dispatch for BOTH gate modes (double protection alongside the
+      // allowlist entry), so plan approval survives even a planWanted
+      // detection failure.
+      if (name === 'exit_plan_mode') return next()
       const blocked = allowlistMode ? !keep.has(name) : gated.has(name)
       if (!blocked) return next()
       return Promise.resolve({
