@@ -4,6 +4,17 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.15（2026-11-06）：sub agent 思考强度（设置页档位选择 + round 透传与回退 + ptc 接缝补丁工具）
+
+**需求**：task/verify/triage 三类 sub agent 此前只能指定 provider/model，无法单独调思考强度；希望按 agent 选配 reasoning effort 档位（只钉档位、保留会话模型也有效），档位选项动态来自模型能力元数据而非硬编码，档位不被支持时安全回退并可审计。
+
+- **设置页（lib/client.js）**：task/verify/triage 三个 sub agent 各一组「模型 + 思考强度」配对分组（Task → Verify → Triage 顺序，v0.15.1 卡面布局）；强度下拉实时从 model-catalog 的 reasoning 元数据解析可选档位（与会话模型选择器读同一份目录；无档位模型禁用下拉并提示「不支持思考强度」，绝不渲染空下拉）；无模型配置 / 模型不支持档位 / 目录加载中 → 下拉禁用 + 提示；存储的档位 id 已失效 → 按模型默认档位显示并附回退说明；zh/en locale 各 9 个新 key。
+- **配置（src/index.ts + src/controller.ts）**：新增三个 volatile 字段 `taskAgentReasoningEffort` / `verifyAgentReasoningEffort` / `triageAgentReasoningEffort`（缺省 `''` = 模型默认，保存即时生效）；`sanitizeReasoningEffort`（token 形态：字母/数字/`._-`，≤64 字符）在透传前校验，损坏的存储值**丢弃**（不发档位字段 = 模型默认）而非污染请求；`RoleSpec` 增加 `reasoningEffort` 字段与注释说明模型相关性校验边界。
+- **round 透传与回退（workflows/round.js）**：`specFor` 将 `reasoningEffort` 与 provider/model 并行携带（仅档位无模型也有效——agent 保留会话模型、只钉档位）；可用性失败模式新增「档位不被当前模型支持」形态（reasoning/thinking effort not supported 等），命中即按 v0.8 式 call 级回退：以 session 模型 + 默认档位重试一次（回退调用不携带 spec、天然不发送 reasoningEffort），并记入 fallbacks 审计；`specLabel` 含档位 id。
+- **effort-patch/（新增，已入库）**：dsh-workflow-ptc 接缝补丁工具——宿主升级后重新施接缝的安装器（apply.sh / apply-ptc.mjs / patch*.mjs / patches.mjs）+ 端到端探针 e2e-ptc-effort.mjs + stage/ 副本；其 diag/session 文档快照刻意不入库（用户裁定：诊断/会话产物永不入库，apply.sh 亦不消费它）。
+- **测试**：`test/v15-effort-reasoning.mjs` 新增（catalog 透传、档位启用、无档位模型禁用、失效档位回退、分组 + locale 覆盖 5 组）；`test/v03-offline.mjs` volatile 表单断言扩至 12 字段（9 既有 + 3 个 effort）；`test/v12-mode-pill-running.mjs` 随 v0.14 client.js 对齐 inject 断言。
+- **生效手段**：`src/` 改动——宿主重载生效；`lib/client.js` 改动——重启宿主并刷新浏览器；`workflows/round.js` 改动热生效。
+
 ## v0.13.0（2026-11-05）：内环消息自动插入（免手动推送）
 
 **需求**：后台 goal 轮结束产生的内环完成通知（`<cybernetics_round>` followup）此前只在 session agent 空闲时立即唤醒；agent 仍在跑时通知排队在 next-turn，要等当前回合自然结束才被读到，反馈折叠滞后。希望与 v0.9.0 的外环新输入插入对称：内环消息也自动插入（next-step/steer），免手动推送、免等轮后。
