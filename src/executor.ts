@@ -366,7 +366,10 @@ export async function startTeamRound(
           goal: { objective: input.objective },
           state: { round: input.round, doneSummary: input.doneSummary },
           subgoal: input.subgoal,
-          brief: state.brief,
+          // Same binder rule as controller.startRound: an own property with
+          // value undefined is kept by structuredClone and rejected by the
+          // host-side json() — omit the key when there is no work order.
+          ...(state.brief !== undefined ? { brief: state.brief } : {}),
           depth: 'full',
           role: state.role,
           roles: config.roles ?? {},

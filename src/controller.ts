@@ -322,7 +322,11 @@ export async function startRound(
       goal: { objective: goal.objective },
       state: { round, doneSummary: state.doneSummary },
       subgoal: state.subgoal,
-      brief: state.brief,
+      // Never hand the workflow binder an own property whose value is
+      // undefined: structuredClone keeps it and the host-side json()
+      // (snapshotJsonValue) rejects nested undefined — the round dies at
+      // bind time. Omit the key entirely when the goal has no work order.
+      ...(state.brief !== undefined ? { brief: state.brief } : {}),
       depth: state.depth ?? 'full',
       role: state.role,
       roles: config.roles ?? {},

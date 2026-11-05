@@ -1217,9 +1217,12 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         }
       }
 
-      // Per-call overrides.
+      // Per-call overrides. 'revise' is excluded from the brief override: the
+      // call targets the OLD goal (which gets frozen as superseded below), so
+      // writing the new work order onto it would pollute frozen history — the
+      // revise branch assigns the brief to the successor goal itself.
       if (args.subgoal) loop.subgoal = args.subgoal
-      if (args.brief) loop.brief = args.brief
+      if (args.brief && action !== 'revise') loop.brief = args.brief
       if (args.depth) loop.depth = args.depth
       if (args.executor) loop.executor = args.executor
       if (args.role) loop.role = args.role
@@ -1263,6 +1266,20 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           ? `cybernetics: 已有 ${running.size} 个运行中的轮，达到全局并行上限 ${cap}（可在设置面板调高 maxConcurrentRounds 或等待完成）`
           : undefined
       }
+      /**
+       * Brief visibility in tool results: without it the model cannot tell
+       * whether a round was launched WITH a work order — the result looked
+       * identical either way, and a briefless round silently sent the task
+       * agent in with only objective/title (a no-feedback loop).
+       */
+      const briefWarning = (target: LoopState): { warning?: string } =>
+        typeof target.brief === 'string' && target.brief.trim().length > 0
+          ? {}
+          : {
+              warning:
+                '该 goal 没有工作委托书（brief）：task agent 只能看到 objective/title。' +
+                '复杂任务请用 cybernetics revise 补 brief（含背景、路径、验收标准）。',
+            }
       const objective = loop.objective ?? goalView?.objective ?? loop.title ?? ''
 
       /**
@@ -1396,10 +1413,16 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           revised: true,
           round,
           started: true,
+          // Work-order visibility: the successor's effective brief (supplied
+          // or inherited), so the caller can verify the task agent's mandate.
+          workOrder: next.brief
+            ? { present: true, chars: next.brief.length, preview: next.brief.slice(0, 80) }
+            : { present: false },
           ...(aborted ? { aborted } : {}),
           abort: effectiveAbort,
           revision: { from: previous.goalId, to: newGoalId, reason, at },
           ...(revisionLog ? { revisionLog } : {}),
+          ...briefWarning(next),
         }
       }
 
@@ -1449,7 +1472,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
 
       if (action === 'start') {
         const { round } = await launchBackground(loop)
-        return { goalId: loop.goalId, round, started: true }
+        return { goalId: loop.goalId, round, started: true, ...briefWarning(loop) }
       }
 
       // Blocking round (default). Both substrates expose {round, result, dispose}.
@@ -1464,7 +1487,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       applyDecision(loop, result.round, result, decision)
       // Round settlement decision applied — republish (round / status / subgoal).
       await publishBoard()
-      return { goalId: loop.goalId, round: result.round, decision, result }
+      return { goalId: loop.goalId, round: result.round, decision, result, ...briefWarning(loop) }
     },
   })
 

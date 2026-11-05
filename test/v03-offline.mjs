@@ -3921,4 +3921,125 @@ async function loadSettingsCard(formForApply) {
   console.log('✓ 70 gateApprovalRelay: child policy unpin at creation, OUTERMOST relay to the top-level session agent\'s native approval panel (child->mid->root climb, no child callId, question fallback, native-unavailable → visible question card, dual-unavailable → terminal unavailable, explicit cancel/reject semantics, ordering regression + negative control), root pass-through, opt-out, schema+README')
 }
 
-console.log('\nALL 71 CHECKS PASSED')
+// 72. brief omission regression (fix A): a goal WITHOUT a work order must not
+//     hand the workflow binder an own property whose value is undefined —
+//     structuredClone keeps it and the host-side json() (snapshotJsonValue)
+//     rejects nested undefined, killing the round at bind time with
+//     "workflow binding value must be lossless JSON" (the live failure).
+//     The result must also flag the briefless launch (fix C warning).
+{
+  const engine72 = fakeEngine()
+  const host72 = fakeHost(engine72, { sessionId: 'sess-test-72' })
+  host72.ctx.workingDirectory = { get: () => root }
+  apply(host72.ctx, {})
+  const tool72 = host72.tools[0]
+  const exec72 = { agent: host72.parent, signal: undefined }
+  const metRound72 = {
+    round: 1,
+    report: { summary: '完成', done: true, artifacts: [], evidence: 'e', nextStepThoughts: [] },
+    verdict: { met: true, criteria: [], gaps: [], goalItselfQuestionable: false },
+    triage: { auto: [], defer: [], reject: [], human: [] },
+  }
+
+  // (a) background start without brief: no own `brief` key reaches the binder.
+  const s = await tool72.execute({ action: 'start', title: '无委托书任务' }, exec72)
+  assert.equal(s.started, true)
+  assert.equal(Object.hasOwn(engine72.runs.at(-1).request.args, 'brief'), false,
+    'briefless start: workflow args carry no own `brief` property (undefined would kill the bind)')
+  assert.match(s.warning ?? '', /没有工作委托书/, 'briefless start carries the no-work-order warning')
+
+  engine72.runs.at(-1).settle({ stopReason: 'completed', value: metRound72 })
+  await new Promise((r) => setImmediate(r))
+  await tool72.execute({ action: 'collect', goalId: s.goalId }, exec72)
+
+  // (b) blocking round without brief: the same binder rule on the sync path.
+  const p = tool72.execute({ action: 'round', goalId: s.goalId }, exec72)
+  const before72 = engine72.runs.length
+  for (let i = 0; i < 100 && engine72.runs.length === before72; i++) await new Promise((r) => setImmediate(r))
+  assert.equal(Object.hasOwn(engine72.runs.at(-1).request.args, 'brief'), false,
+    'briefless blocking round: workflow args carry no own `brief` property')
+  engine72.runs.at(-1).settle({ stopReason: 'completed', value: { ...metRound72, round: 2 } })
+  const out72 = await p
+  assert.match(out72.warning ?? '', /没有工作委托书/, 'briefless blocking round carries the warning too')
+
+  // (c) control: a briefed goal still passes its brief through (test-3 invariant).
+  const c = await tool72.execute({ action: 'start', title: '有委托书任务', brief: '完整委托书' }, exec72)
+  assert.equal(engine72.runs.at(-1).request.args.brief, '完整委托书', 'briefed goal: brief still passed through')
+  assert.equal(c.warning, undefined, 'briefed launch carries no warning')
+  console.log('✓ 72 brief omission: no own `brief` key in workflow args (start + blocking round); warning surfaces; briefed control intact')
+}
+
+// 73. revise brief hygiene (fix B): a revision's new brief lands on the
+//     SUCCESSOR goal only — it must never rewrite the frozen old goal — and
+//     the revise result echoes the effective work order (fix C workOrder).
+{
+  const engine73 = fakeEngine()
+  const host73 = fakeHost(engine73, { sessionId: 'sess-test-73' })
+  host73.ctx.workingDirectory = { get: () => root }
+  apply(host73.ctx, {})
+  const tool73 = host73.tools[0]
+  const exec73 = { agent: host73.parent, signal: undefined }
+  const metRound73 = {
+    round: 1,
+    report: { summary: '完成', done: true, artifacts: [], evidence: 'e', nextStepThoughts: [] },
+    verdict: { met: true, criteria: [], gaps: [], goalItselfQuestionable: false },
+    triage: { auto: [], defer: [], reject: [], human: [] },
+  }
+
+  const a = await tool73.execute({ action: 'start', title: '旧任务', brief: '旧委托书内容' }, exec73)
+  engine73.runs[0].settle({ stopReason: 'completed', value: metRound73 })
+  await new Promise((r) => setImmediate(r))
+  await tool73.execute({ action: 'collect', goalId: a.goalId }, exec73)
+
+  const newBrief = `新委托书：方向改为 Y，验收标准 Z（${'x'.repeat(120)}）`
+  const r = await tool73.execute({ action: 'revise', goalId: a.goalId, reason: '补充新委托书', brief: newBrief }, exec73)
+  assert.equal(r.workOrder?.present, true, 'revise echoes the effective work order')
+  assert.equal(r.workOrder.chars, newBrief.length, 'workOrder reports the brief length')
+  assert.equal(r.workOrder.preview, newBrief.slice(0, 80), 'workOrder previews the first 80 chars')
+  assert.equal(r.warning, undefined, 'a briefed successor carries no warning')
+  assert.equal(engine73.runs.at(-1).request.args.brief, newBrief, 'successor round receives the new brief')
+
+  // The FROZEN old goal must keep ITS brief — read the persisted board, the
+  // exact surface the「目标」tab and rehydration consume.
+  const saved73 = JSON.parse(await readFile(join(root, '.cybernetics', 'board-sess-test-73.json'), 'utf8'))
+  const oldEntry73 = saved73.goals.find((g) => g.goalId === a.goalId)
+  assert.equal(oldEntry73.status, 'superseded')
+  assert.equal(oldEntry73.brief, '旧委托书内容',
+    'the old goal keeps ITS brief — a revision must not rewrite frozen history')
+  const newEntry73 = saved73.goals.find((g) => g.goalId === r.goalId)
+  assert.equal(newEntry73.brief, newBrief, 'the successor carries the new brief')
+
+  // A revision WITHOUT a new brief inherits the previous work order
+  // (documented behavior) and reports it through workOrder.
+  engine73.runs.at(-1).settle({ stopReason: 'completed', value: metRound73 })
+  await new Promise((r2) => setImmediate(r2))
+  await tool73.execute({ action: 'collect', goalId: r.goalId }, exec73)
+  const r2 = await tool73.execute({ action: 'revise', goalId: r.goalId, reason: '仅微调标题', title: '换名任务' }, exec73)
+  assert.equal(r2.workOrder?.present, true, 'inherited brief is reported as present')
+  assert.equal(r2.workOrder.chars, newBrief.length)
+  assert.equal(engine73.runs.at(-1).request.args.brief, newBrief, 'unspecified brief inherits the previous work order')
+  console.log('✓ 73 revise brief hygiene: old goal unpolluted, successor carries/inherits brief, workOrder echoed')
+}
+
+// 74. revise warning (fix C): revising a briefless goal without supplying a
+//     brief launches a briefless successor — the result must say so
+//     (workOrder.present=false + warning), and the successor round must still
+//     bind cleanly (no undefined brief key, fix A on the revise path).
+{
+  const engine74 = fakeEngine()
+  const host74 = fakeHost(engine74, { sessionId: 'sess-test-74' })
+  host74.ctx.workingDirectory = { get: () => root }
+  apply(host74.ctx, {})
+  const tool74 = host74.tools[0]
+  const exec74 = { agent: host74.parent, signal: undefined }
+
+  const a = await tool74.execute({ action: 'start', title: '无委托书旧任务' }, exec74)
+  const r = await tool74.execute({ action: 'revise', goalId: a.goalId, reason: '修正但忘了带委托书' }, exec74)
+  assert.equal(r.workOrder?.present, false, 'no brief anywhere: workOrder reports absent')
+  assert.match(r.warning ?? '', /没有工作委托书/, 'the briefless successor is flagged')
+  assert.equal(Object.hasOwn(engine74.runs.at(-1).request.args, 'brief'), false,
+    'the successor round still binds cleanly (no own `brief` key)')
+  console.log('✓ 74 revise warning: briefless lineage → workOrder.present=false + warning + clean args')
+}
+
+console.log('\nALL 74 CHECKS PASSED')
