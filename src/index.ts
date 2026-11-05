@@ -33,9 +33,9 @@ import type {
   ControllerConfig, ControllerDecision, LoopState, ResumableReason, RoundResult, RolesConfig,
 } from './controller.ts'
 import { startTeamRound, teamExecutorAvailable, teamExecutorUnavailableError } from './executor.ts'
-import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setPublishDebugRoot } from './projection.ts'
+import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setPublishDebugRoot, appendModeRecord } from './projection.ts'
 import {
-  MODE_EVENT_TYPE, cyberneticsModeProjection, effectiveEnabled, modeOverrideOf, planWanted,
+  MODE_EVENT_TYPE, MODE_LEGACY_EVENT_TYPE, cyberneticsModeProjection, effectiveEnabled, modeOverrideOf, planWanted,
 } from './sessionMode.ts'
 
 export const name = 'dsh-cybernetics'
@@ -1190,7 +1190,11 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         const globalOn = allGoalsMode()
         if (arg === 'on' || arg === 'off') {
           try {
-            session.append(MODE_EVENT_TYPE, { enabled: arg === 'on' })
+            // v0.13.1: the mode override travels as an ignorable plugin record
+            // (`plugin:cybernetics/mode`). The plain `session.append` call the
+            // v0.9.0 path used persisted the type unmarked, which fail-closes
+            // the whole session on any harness build that does not know it.
+            appendModeRecord(session, MODE_EVENT_TYPE, { enabled: arg === 'on' })
           } catch (error) {
             return { kind: 'error' as const, text: `cybernetics: 写入会话模式失败：${String(error)}` }
           }

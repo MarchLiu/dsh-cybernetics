@@ -706,6 +706,25 @@ export function setRecordAppender(appender: RecordAppender | undefined): void {
   recordAppender = appender ?? defaultAppender
 }
 
+/**
+ * Append one per-session mode override as an ignorable plugin record
+ * (`plugin:cybernetics/mode { enabled }`). The plain `Session.append` path the
+ * v0.9.0 `/cybernetics` command used persists the event WITHOUT the envelope
+ * `ignorable` marker, so any harness build that does not know the type
+ * fail-closes on load (storage-contract.ts:75) and the whole session becomes
+ * unloadable. `appendPluginRecord` stamps `ignorable: true`, which every
+ * reader may safely skip. Throws on failure — the caller surfaces the error
+ * to the user instead of silently losing the override.
+ * @param session - the invoking agent's session.
+ * @param type - the plugin record type (kept a parameter so this zero-dep
+ *   module stays free of a sessionMode.ts value import; the caller passes
+ *   `MODE_EVENT_TYPE` = `plugin:cybernetics/mode`).
+ * @param data - the payload ({ enabled }).
+ */
+export function appendModeRecord(session: unknown, type: string, data: unknown): unknown {
+  return recordAppender(session, type, data)
+}
+
 /** Outcome of one publish attempt. */
 export type PublishResult = 'published' | 'unchanged' | 'skipped' | 'failed'
 

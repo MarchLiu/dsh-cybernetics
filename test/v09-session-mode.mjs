@@ -8,6 +8,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply } from '../src/index.ts'
+import { setRecordAppender } from '../src/projection.ts'
 import { MODE_EVENT_TYPE, MODE_PROJECTION_KEY, cyberneticsModeProjection } from '../src/sessionMode.ts'
 
 // --- fake host ctx with a working projection registry + command registry ----
@@ -189,6 +190,19 @@ function makeSessionFactoryLocal({ projections, states }) {
 
   const session = host.rootSession('sess-cmd')
   const invocation = (rawInput) => ({ agent: { session }, rawInput })
+  // v0.13.1: the handler writes the mode override through the plugin-record
+  // appender seam (appendPluginRecord path), not plain session.append. Inject
+  // a recording appender that folds into the fake projection registry exactly
+  // like the fake session.append the earlier path used, and capture the
+  // written records for the wire-shape assertions below.
+  const written = []
+  setRecordAppender((target, type, data) => {
+    written.push({ session: target, type, data })
+    const unit = host.projections.get(MODE_PROJECTION_KEY)
+    const perSession = host.states.get(MODE_PROJECTION_KEY)
+    if (!perSession.has(target)) perSession.set(target, unit.init())
+    perSession.set(target, unit.apply(perSession.get(target), { type, data }))
+  })
   // status with no override
   const status1 = handlers.cybernetics(invocation(''))
   assert.equal(status1.kind, 'success')
@@ -209,6 +223,15 @@ function makeSessionFactoryLocal({ projections, states }) {
   assert.equal(state2.override, true, 'on appended the durable mode event')
   const status3 = handlers.cybernetics(invocation('STATUS'))
   assert.match(status3.text, /生效/, 'status (case-insensitive arg) reports enabled')
+  // Wire-shape: both writes went through the plugin-record appender with the
+  // ignorable-record type (the plain `cybernetics/mode` type fail-closes an
+  // older harness on load — see storage-contract.ts:75).
+  assert.equal(MODE_EVENT_TYPE, 'plugin:cybernetics/mode', 'mode event type uses the plugin: ignorable-record namespace')
+  assert.equal(written.length, 2, 'exactly on+off records written')
+  assert.deepEqual(written.map((w) => w.session), [session, session], 'records bound to the invoking session')
+  assert.deepEqual(written.map((w) => w.type), [MODE_EVENT_TYPE, MODE_EVENT_TYPE], 'records use the plugin: record type')
+  assert.deepEqual(written.map((w) => w.data), [{ enabled: false }, { enabled: true }], 'record payloads whole-value { enabled }')
+  setRecordAppender(undefined)
   console.log('✓ 4b /cybernetics on|off|status: durable events + accurate status text')
 }
 

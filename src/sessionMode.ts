@@ -4,7 +4,8 @@
  * consumer (guidance section, hard gate, input-policy relay) shares.
  *
  * Pattern copied from @deepseek-ai/dsh-plan-mode: one append-only session log
- * event (`cybernetics/mode { enabled }`) folded by a registered session
+ * event (`plugin:cybernetics/mode { enabled }`, written as an ignorable
+ * plugin record) folded by a registered session
  * projection, so the override survives resume and fork (both replay the log
  * prefix). `enabled: null` clears the override and falls the session back to
  * the profile-global `allGoalsMode` volatile configuration.
@@ -15,7 +16,17 @@
  */
 
 /** Session log event type carrying the per-session override. */
-export const MODE_EVENT_TYPE = 'cybernetics/mode'
+export const MODE_EVENT_TYPE = 'plugin:cybernetics/mode'
+
+/**
+ * Pre-fix event name: v0.9.0–v0.13.0 wrote `cybernetics/mode` via the plain
+ * `Session.append` path, so it persisted WITHOUT the envelope `ignorable`
+ * marker and made every log carrying it unloadable on a harness build that
+ * does not know the type (validateStoredEvents fail-close,
+ * `session-persistence/src/storage-contract.ts:75`). Accepted on restore so
+ * old logs still fold after the legacy records are marked ignorable.
+ */
+export const MODE_LEGACY_EVENT_TYPE = 'cybernetics/mode'
 
 /** Projection registry key for the folded override state. */
 export const MODE_PROJECTION_KEY = 'cyberneticsMode'
@@ -55,7 +66,7 @@ export function cyberneticsModeProjection(): ModeProjectionDefinitionLike {
     stateSchema: passThrough<CyberneticsModeState>(),
     init: () => ({ override: null }),
     apply(state, event) {
-      if (event?.type !== MODE_EVENT_TYPE) return state
+      if (event?.type !== MODE_EVENT_TYPE && event?.type !== MODE_LEGACY_EVENT_TYPE) return state
       const data = event.data as { enabled?: unknown } | undefined
       if (data === null || typeof data !== 'object') return state
       const enabled = data.enabled
