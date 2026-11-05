@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | [English](README.md)
 
-![version](https://img.shields.io/badge/version-0.8.2-blue) ![protocol](https://img.shields.io/badge/license-MIT-lightgrey) ![platform](https://img.shields.io/badge/platform-DSH%20plugin-9b59b6)
+![version](https://img.shields.io/badge/version-0.10.0-blue) ![protocol](https://img.shields.io/badge/license-MIT-lightgrey) ![platform](https://img.shields.io/badge/platform-DSH%20plugin-9b59b6)
 
 **dsh-cybernetics 是一个把 LLM Agent 编排明确设计成控制回路的 DSH 插件**：session goal 作为 agent 的思考产物持久存在，task agent 行动、verify agent 测量、triage agent 分诊，controller 在轮间推进，用户通过对话完成外环校准——目标、行动、测量、校准的负反馈闭环。
 
@@ -92,6 +92,10 @@ goal 一经存在不再原地修改。`revise` 是唯一的改目标动词（必
 
 - **「目标 / Goal」**：本会话全部 goal（标题 / 状态徽标 / 第 N 轮 / 当前 subgoal / depth、executor 小标签 / 被取代与修订来源标注），按「未完成在前、已完成在后」两段排序；空板回退 dsh-goal 单 goal 渲染。
 - **「控制 / Control」**：递归展示本会话全部 agent（主控 + subagent catalog）的运行状态与各自 goal 视图，顶部汇总运行中数量，并列出每个 goal 的执行者行（状态 + 标题 + executor 临时/持久 + 持久 teammate 名称 + 轮次），与「目标」页签同一数据源。
+
+### 编排模式可视化指示（v0.10.0）
+
+每个会话头部常驻一枚徽标，一眼可见当前编排模式生效态：**绿点 +「开」** = 生效中（本会话 `/cybernetics on` 显式 override，或继承全局 `allGoalsMode`），**灰点 +「关」** = 生效关闭，**暗「…」** = 投影/配置尚未加载（加载态而非错误态）。tooltip 注明生效来源（「本会话显式设置」vs「继承全局配置」）。点击徽标即切换——走的正是斜杠菜单同款 `/cybernetics on|off` 命令通道（宿主 `commands.execute`，不新增服务端 API），写入的是同一条 durable 会话事件、投影实时回流。编排生效时，输入框上方显示一条细提示条说明下一次输入的去向，文案随 volatile `inputPolicy` 变化（insert →「新输入将作为外环控制即时插入当前回合」；queue →「新输入将排队为下一轮输入」）。数据联接：会话投影 `cyberneticsMode`（{override: true|false|null}）+ ConfigForm 里的全局 volatile `allGoalsMode`，客户端按与服务端 `resolveMode`（src/sessionMode.ts）一致的规则就地联接——投影只在会话事件时重发布，全局 volatile 翻转无法抵达服务端算好的生效值，而两个输入在客户端都是响应式的。文案双语（zh/en）。仅客户端改动：宿主重启（客户端模块图启动时构建）+ 刷新浏览器后生效。
 
 ### 插件页配置卡片
 

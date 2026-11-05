@@ -98,12 +98,29 @@ export function modeOverrideOf(ctx: unknown, session: unknown): boolean | null {
 }
 
 /**
+ * Canonical tri-state join (v0.10.0): the session override wins; without one
+ * the profile-global `allGoalsMode` volatile value decides. `source` names the
+ * deciding side ('override' | 'global') so UI consumers (the session-header
+ * pill in lib/client.js) can explain WHY a mode is effective without
+ * duplicating the resolution rule.
+ */
+export interface ResolvedMode {
+  enabled: boolean
+  source: 'override' | 'global'
+}
+
+export function resolveMode(override: boolean | null, globalMode: boolean): ResolvedMode {
+  return override === null
+    ? { enabled: globalMode === true, source: 'global' }
+    : { enabled: override, source: 'override' }
+}
+
+/**
  * Effective cybernetics enablement for one session: the per-session override
  * wins; without one the profile-global `allGoalsMode` volatile value decides.
  */
 export function effectiveEnabled(ctx: unknown, session: unknown, allGoalsMode: boolean): boolean {
-  const override = modeOverrideOf(ctx, session)
-  return override === null ? allGoalsMode === true : override
+  return resolveMode(modeOverrideOf(ctx, session), allGoalsMode).enabled
 }
 
 /** The parsed slash-command argument → the event payload to append. */

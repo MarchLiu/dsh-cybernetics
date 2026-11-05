@@ -4,6 +4,17 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.10.0（2026-11-05）：编排模式可视化状态指示（会话头部徽标 + 输入框提示条）
+
+**需求**：让用户一眼区分当前会话是否处于 cybernetics 控制状态（ALL-GOALS 路由 + 硬门禁 + 外环输入插入），并区分「显式 override」与「继承全局」两种生效来源；点击即切换。
+
+- **会话头部徽标（`lib/client.js`，插槽 `conversation.session.header.utilities`）**：常驻 Pill——绿点「开」= 生效中（override on 或继承全局 on），灰点「关」= 生效关闭，暗「…」= 投影/配置未就绪（加载态，非错误态）。tooltip 注明生效来源（本会话显式设置 vs 继承全局配置）。点击 = `remote.commands.execute(sessionId, '/cybernetics on|off')`——与斜杠菜单、dsh-client-ui-plan（/plan off）完全同款命令通道，不新增服务端 API；写入的是 v0.9.0 同一条 durable 会话事件，徽标经投影实时回流刷新。切换失败把宿主错误折进 tooltip 6 秒（快照仍是唯一被确认的状态）；宿主无 `remote.commands` 命名空间时徽标呈禁用态 + 提示（inject 声明 `remote.commands`，运行时 guard）。
+- **输入框提示条（插槽 `conversation.composer.dock`）**：仅当编排模式在本会话生效时渲染一条细提示条，文案随 volatile `inputPolicy` 变化：insert（默认）→「新输入将作为外环控制即时插入当前回合」；queue →「新输入将排队为下一轮输入（inputPolicy=queue）」。
+- **数据联接（设计偏差，已验证）**：生效态由客户端就地联接，而非服务端算好投进投影——`cyberneticsMode` 投影只在会话事件时重发布，全局 `allGoalsMode`（volatile）翻转不会产生会话事件，服务端投影无法把全局变化反映进投影值（除非新增 API，违反「优先不新增服务端 API」边界）。客户端两个输入都是响应式的：会话投影 face（`projections.faceOf('cyberneticsMode')`，宿主实时推送）+ 插件 ConfigForm（`configForms.get` live face，设置卡片 v0.7.2 起已验证的同一响应式通道，allGoalsMode / inputPolicy 同源）。联接规则与新增的 `src/sessionMode.ts resolveMode(override, globalMode)`（canonical，返回 `{enabled, source}`）逐字一致；服务端 `effectiveEnabled` 重构为其上封装，行为不变。投影 wire 不变（`{override}`，stateVersion 1）——v0.9 客户端零影响。
+- **locale**：新增 `mode.*` / `hint.*` 共 14 个 key，zh/en 双语（zh 为 key-set 基准）。
+- **测试**：`test/v10-mode-indicator.mjs` 新增——resolveMode 三值矩阵（override/global/effective + source）、effectiveEnabled null 继承与 fail-safe 语义、resume/fork 重放前缀折叠一致性、投影 wire 向后兼容断言、client.js 工厂求值 + `remote.commands` inject 声明 smoke；既有 `test/v03-offline.mjs` 75 项、`test/v09-session-mode.mjs` 全部通过。`tsc --noEmit` 基线 4 条 + 1 条 TS5097（sessionMode.ts 的 `.ts` 导入，v0.9.0 引入，同类可接受）。
+- **生效手段**：`lib/client.js` 改动——重启宿主 + 刷新浏览器。
+
 ## v0.9.0（2026-11-05）：按会话 /cybernetics 开关 + 新输入外环插入
 
 **需求**：(A) 同一会话粒度地开关 cybernetics 编排（ALL-GOALS 路由 + 硬门禁），未设置的会话遵循全局 volatile 配置；(B) 会话有活跃 goal 轮时，新用户输入不再排队到轮后，而是作为外环控制直接插入当前回合——且与 DSH 原生输入路由互不干扰。

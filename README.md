@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-![version](https://img.shields.io/badge/version-0.8.2-blue) ![protocol](https://img.shields.io/badge/license-MIT-lightgrey) ![platform](https://img.shields.io/badge/platform-DSH%20plugin-9b59b6)
+![version](https://img.shields.io/badge/version-0.10.0-blue) ![protocol](https://img.shields.io/badge/license-MIT-lightgrey) ![platform](https://img.shields.io/badge/platform-DSH%20plugin-9b59b6)
 
 **dsh-cybernetics is a DSH plugin that explicitly designs LLM agent orchestration as a control loop**: the session goal persists as an artifact of the agent's thinking; the task agent acts, the verify agent measures, the triage agent triages, the controller advances between rounds, and the user calibrates the outer loop through conversation — a negative-feedback loop of goal, action, measurement, and calibration.
 
@@ -92,6 +92,10 @@ One session supports multiple concurrent goals (the plugin's own goal board; dsh
 
 - **"Goals"**: all goals of this session (title / status badge / round N / current subgoal / depth and executor chips / superseded and revision-source annotations), sorted in two segments — unfinished first, completed last; an empty board falls back to dsh-goal's single-goal rendering.
 - **"Control"**: recursively shows the run state of every agent in this session (main controller + subagent catalog) with each one's goal view, a running-count summary at the top, and an executor row per goal (status + title + executor ephemeral/persistent + persistent teammate name + round count), sharing the same data source as the "Goals" tab.
+
+### Orchestration-mode indicator (v0.10.0)
+
+Every session header carries an always-visible pill showing the effective orchestration mode at a glance: **green dot + "On"** = effective (explicit `/cybernetics on` override, or inherited from the global `allGoalsMode`), **gray dot + "Off"** = effective off, **dim "…"** = the projection/config has not loaded yet (a loading state, never an error state). The tooltip names the deciding source ("explicit session override" vs "inherited from global config"). Clicking the pill toggles the mode — it sends the same `/cybernetics on|off` command the slash menu takes (host `commands.execute` transport; no new server API), so the write is the same durable session event with live projection feedback. When the mode is effective, a thin hint bar above the composer states what will happen to the next input, and its wording follows the volatile `inputPolicy` (insert → "new input is inserted into the current turn as outer-loop control"; queue → "new input queues as the next turn"). Data join: the session projection `cyberneticsMode` ({override: true|false|null}) + the global volatile `allGoalsMode` from the plugin's ConfigForm, joined client-side by the same rule as the server's `resolveMode` (src/sessionMode.ts) — the projection only republishes on session events, so a global volatile flip cannot reach a server-computed effective value, while both inputs are reactive on the client. All copy is bilingual (zh/en). Client-side only: takes effect after a host restart (client module graph rebuilds at boot) plus a browser refresh.
 
 ### Plugin-page config card
 
