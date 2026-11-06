@@ -99,7 +99,7 @@ goal 一经存在不再原地修改。`revise` 是唯一的改目标动词（必
 
 ### 插件页配置卡片
 
-`src/index.ts` 导出 schemastery `Config` schema，它决定宿主设置传输层服务与接受哪些字段（仅 `.volatile()` 字段）；卡片 UI 本身由 `lib/client.js` 绘制，注册 `plugins.item` / `plugins.bundle.config` / `plugins.row.config` 三个席位（bundle 详情页与组件详情页都能配置）。**这张卡片是本插件设置在 GUI 中的唯一 surface**：宿主「插件」页对插件配置完全交给 slot 卡片渲染、自身一个字段都不画，@deepseek-ai/dsh-client-ui-settings 只提供 `configForms` 服务（传输层）而非通用字段渲染器——因此 v0.8.1 起卡片渲染全部 volatile 字段的可编辑控件（v0.16 起共 13 个）：全目标模式开关、硬门开关、**智能选择 Agent 配置开关**、task/verify/triage 各自的「模型 + 思考强度」配对分组、子目标轮数上限与并行轮数上限数字框。`roles` 表**不在卡片上**（v0.8.4）：在 GUI 里手工编辑 JSON 对象对用户不友善，roles 改为非 volatile——面板不再服务也不接受写入——改经 profile 配置 yaml 直接配置（见下文「roles 高级配置」小节）。volatile 字段保存即时生效（loader 直接提交进运行实例，不 remount）；非 volatile 字段保存触发插件行 remount（需宿主重载）。写入落点是用户 patch 行（profile `cordis.patch.yml` 的 `{id, name, config}` 行）。
+`src/index.ts` 导出 schemastery `Config` schema，它决定宿主设置传输层服务与接受哪些字段（仅 `.volatile()` 字段）；卡片 UI 本身由 `lib/client.js` 绘制，注册 `plugins.item` / `plugins.bundle.config` / `plugins.row.config` 三个席位（bundle 详情页与组件详情页都能配置）。**这张卡片是本插件设置在 GUI 中的唯一 surface**：宿主「插件」页对插件配置完全交给 slot 卡片渲染、自身一个字段都不画，@deepseek-ai/dsh-client-ui-settings 只提供 `configForms` 服务（传输层）而非通用字段渲染器——因此 v0.8.1 起卡片渲染全部 volatile 字段的可编辑控件（v0.17 起共 16 个）：全目标模式开关、硬门开关、**智能选择 Agent 配置开关**、**预置方案下拉框**及其推荐请求模型字段、task/verify/triage 各自的「模型 + 思考强度」配对分组、子目标轮数上限与并行轮数上限数字框。`roles` 表**不在卡片上**（v0.8.4）：在 GUI 里手工编辑 JSON 对象对用户不友善，roles 改为非 volatile——面板不再服务也不接受写入——改经 profile 配置 yaml 直接配置（见下文「roles 高级配置」小节）。volatile 字段保存即时生效（loader 直接提交进运行实例，不 remount）；非 volatile 字段保存触发插件行 remount（需宿主重载）。写入落点是用户 patch 行（profile `cordis.patch.yml` 的 `{id, name, config}` 行）。
 
 ### agent 模型选择
 
@@ -161,6 +161,16 @@ goal 一经存在不再原地修改。`revise` 是唯一的改目标动词（必
 - **v0.16 不自动分配思考强度**：档位 id 是模型相关的，自动分配需逐选中模型 `resolveModelInfo` 探测（每轮每角色一次适配器 I/O + 额外失败面）；智能选择本轮只选路由，档位留给模型默认或现有平面 effort 字段（显式模型行 + effort 字段可精确固定）。
 - **为什么用规则启发式而不是一次廉价模型调用**：宿主确有裸补全面（`ctx.llm.prepareCall().stream()`，session-title-llm 模式），但要求引入 `@deepseek-ai/dsh-llm` 运行时依赖（本插件刻意零依赖）、每轮启动前多一次 provider 往返与整条失败面。确定性关键词分类零成本、离线可测，误分类可经审计发现并由显式配置覆盖——显式配置恒优先是安全底线。
 
+### 预置方案（`presetPlan`，v0.17）
+
+设置卡片新增「预置方案」下拉，共 9 个选项：**根据现有配置自动推荐** + 八家**厂商方案**（OpenAI / Claude / Gemini / DeepSeek / Kimi / Qwen / 火山 Coding Plan / Minimax，全量数据见 `src/modelPresets.ts`）。选择写入 volatile `presetPlan` 字段；插件在 `loader/volatile-update` 上对每次变更**一次性（one-shot）解析**，把结果应用到 task/verify/triage 的扁平模型 + 思考强度字段（即下方各角色分组渲染的字段），结果记录写入 volatile `presetRecommendation`，在下拉框下方渲染。
+
+**作用范围（用户裁定，最高优先）**：**session agent 不在本功能范围内**——session 模型由用户随时自行调整，因此选择方案与自动推荐只写三个子 agent 角色的配置：`src/modelPresets.ts` 的 `ALLOWED_OP_PATHS` 把可写字段结构性地钉死为六个扁平子 agent 字段（三个模型字段 + 三个思考强度字段）；推荐 prompt 明令输出只允许 task/verify/triage 三个键、禁止 session 键（解析器对模型万一直出的 session 键丢弃并显式注明）；各厂商的 session 推荐仅作参考数据保留在注册表（`variant.session`），卡片上常驻「session 由用户自行管理，方案不应用此项」提示，永远不会进入任何写入。
+
+- **厂商方案（数据驱动，`status: 'ready'`）**：每厂商含逐角色模型 + 思考强度 token（异构：OpenAI/Minimax 五档 low/medium/high/xhigh/max、DeepSeek thinking 开关、其余模型默认）、可升级档、可用性 fallback、逐角色 rationale、厂商备注（⚠️ 注意事项——如 Qwen 的「verify 绝不用 Turbo（幻觉共振）」、Kimi 的避开退役 K2、DeepSeek 的「成本不应成为降级 verify 的理由」）与**多变体**（Claude 常规/高要求，Qwen A/B/C，DeepSeek 仅本家/verify 外置，Kimi 长期组合/最高验收质量，火山 A/B）。选择方案应用其**默认变体**（第一个）；结果记录披露所应用变体并列出其余变体。厂商原生模型 id 逐字应用——部署目录中不存在的 id 会显示卡片不可用警告，轮内可用性 fallback（v0.8）保证轮次存活。
+- **自动推荐**：探测实时目录（`probeCatalogOptions`，与智能选择同源），构建推荐请求——内嵌目录（唯一可选来源）、跨厂商通用原则（verify 档位不低于 task；verify/task 跨代际跨家族保持独立；verify 不能过度自信；省成本先压 task/triage、verify 最后动且成本不是降级 verify 的理由；triage 轻量）、当前角色配置与全部厂商方案（仅作参考）——随后发起**一次受守卫的一次性 LLM 调用**（`ctx.llm.prepareCall().stream()`；消息与分块收集器内联实现，保持零 `@deepseek-ai` 依赖；路由 = `presetRecommendModel` 或目录首个顶配档）。回复严格解析（模型必须命中目录；逐角色 `reasoningEffort` 经 `ctx.llm.resolveModelInfo` 校验，不支持时降为模型默认并注明），经设置服务写入。任何失败（目录为空/调用失败/回复不可解析/零选择）都降级为带原因的 `degraded` 记录——不应用任何更改、不阻塞任何轮次。
+- **选择是一次性的**：重复选择同一项不会再次触发（处理器按最后处理值守卫；跨重启持久化的值不会在启动时重放）。要重复应用某项，先切「（未选择）」再选。
+
 ## 安装与使用
 
 ### 安装
@@ -198,6 +208,7 @@ Web 编辑器「插件」页的本插件卡片上直接配置——v0.8.1 起卡
 - **roles 高级配置**（`roles`，非 volatile）：profile 配置 yaml 直接维护——见下方小节；
 - **硬控制门**（`hardGate`，v0.8.10 起 volatile）：卡片布尔开关——装配期从顶层 agent 摘除写/执行工具，所有变更经 goal 循环完成；保存即时生效（门禁监听热装卸），无需重启；
 - **智能选择 Agent 配置**（`smartAgentModelSelection`，v0.16 起 volatile）：卡片布尔开关——每轮启动时按任务内容从实时模型目录为 task/verify/triage 自动选模型（简单任务轻量模型、困难任务顶配）；显式配置的角色模型恒优先，选不到时保持继承并记审计；保存后下一轮 goal 生效——详见「Features → 智能选择 Agent 配置」小节的分类规则表；
+- **预置方案**（`presetPlan` / `presetRecommendModel` / `presetRecommendation`，v0.17 起 volatile）：卡片下拉（自动推荐 + 八家厂商方案）+ 推荐请求模型字段——选择方案应用其默认变体的 task/verify/triage 模型与思考强度；「自动推荐」经一次 AI 调用从实时目录产出三角色推荐并写入；作用范围仅三个子 agent 角色，session 配置永不被触碰——详见「Features → 预置方案」小节；
 - **其余门字段**（`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`/`gateApprovalRelay`，非 volatile）：不进入卡片，请在 profile 配置文档中维护（保存触发插件重载）。`gateMode` 无默认值：未设置 + `hardGate: true` 按 `allowlist` 运行；显式 `denylist` 会被尊重，并带有上文记录的残留风险。
 
 ### roles 高级配置（profile yaml，agent 指导）

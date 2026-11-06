@@ -10,6 +10,7 @@
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { WorkflowEngine } from '@deepseek-ai/dsh-workflow'
 import type { SmartSelectionAudit } from './modelSelection.ts'
 
@@ -372,7 +373,7 @@ export function supersedeGoal(previous: LoopState, newGoalId: string): LoopState
  */
 export async function startRound(
   engine: WorkflowEngine,
-  parent: unknown,
+  parent: Agent,
   root: string,
   state: LoopState,
   config: ControllerConfig,
@@ -437,7 +438,7 @@ export async function foldRound(
  */
 export async function runRound(
   engine: WorkflowEngine,
-  parent: unknown,
+  parent: Agent,
   root: string,
   state: LoopState,
   config: ControllerConfig,

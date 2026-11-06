@@ -35,6 +35,11 @@ import type {
 import { startTeamRound, teamExecutorAvailable, teamExecutorUnavailableError } from './executor.ts'
 import { computeSmartSelection, probeCatalogOptions, sessionRouteOf } from './modelSelection.ts'
 import type { SmartSelectionAudit } from './modelSelection.ts'
+import {
+  PRESET_AUTO_ID, PRESET_IDS, formatRecommendationRecord, presetById, presetChoiceLabel, recommendModels,
+  vendorPresetApplyOps,
+} from './modelPresets.ts'
+import type { PresetRecommendationRecord, SettingsOp } from './modelPresets.ts'
 import { linkRunToGoal, noteWorkflowAgent, setBoardSource, unlinkRun } from './agents.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setPublishDebugRoot, appendModeRecord } from './projection.ts'
 import {
@@ -98,6 +103,20 @@ export interface Config extends ControllerConfig {
    * audit (`smartSelection` on the round record). Volatile — next round.
    */
   smartAgentModelSelection?: boolean
+  /**
+   * v0.17 preset plans (预置方案): the settings card's selector ('' = none,
+   * 'auto' = AI auto-recommend over the live catalog, otherwise a vendor
+   * registry id). Selecting writes this volatile field; the
+   * loader/volatile-update handler resolves each change ONE-SHOT and applies
+   * the result to the flat task/verify/triage model+effort fields only — the
+   * session agent's configuration is user-managed and structurally out of
+   * scope (src/modelPresets.ts ALLOWED_OP_PATHS).
+   */
+  presetPlan?: string
+  /** v0.17: explicit route ('provider/model' or bare model) for the auto-recommend one-shot call; '' = first high-tier catalog entry. Volatile. */
+  presetRecommendModel?: string
+  /** v0.17: the card-visible JSON record of the last preset selection outcome ({status, preset, label, at, picks?, efforts?, variant?, notes?, reason?...}). Volatile. */
+  presetRecommendation?: string
   /**
    * Hard control gate (default false): hide execution tools from
    * TOP-LEVEL session agents at prompt-assembly time, so the session agent
@@ -259,6 +278,36 @@ export const Config = z.object({
    * audit with its reason.
    */
   smartAgentModelSelection: z.boolean().default(false).volatile().description('智能选择 Agent 配置（v0.16，缺省关）：开启后每轮启动时按任务内容（委托书/子目标/目标）从当前系统可用模型列表为 task/verify/triage 自动选择合适模型——简单任务（删文件、git 提交等）用轻量模型提速省资源，困难任务（不常见语言、复杂数学等）用顶配模型。显式配置的角色模型始终优先；目录不可用或选不到合适模型时保持继承 session agent；每次决策（含保持继承的理由）写入轮审计（.cybernetics/round-*.json 的 smartSelection 字段）。保存后下一轮 goal 生效。'),
+  /**
+   * v0.17 preset plans (预置方案) — the settings card's selector. '' = none;
+   * 'auto' = 根据现有配置自动推荐 (recommend via one guarded LLM call over
+   * the live catalog, vendor presets injected as reference); the other ids
+   * name the vendor registry entries (src/modelPresets.ts, placeholder this
+   * round). Selecting writes this volatile field; the loader/volatile-update
+   * handler below resolves it ONE-SHOT: 'auto' runs the recommendation and
+   * writes the winning routes into the three flat model fields; a READY
+   * vendor preset applies its roles the same way; a PLACEHOLDER one only
+   * records the status note. The applied values live in the standard flat
+   * fields, so persistence, display and the round-start fold are all the
+   * existing paths — this field is the trigger, not a parallel config.
+   */
+  presetPlan: z.union(['', ...PRESET_IDS] as const).default('').volatile().description('预置方案选择（v0.17，缺省空）：设置卡片下拉框的当前选择。选「根据现有配置自动推荐」(auto) 会读取当前系统可用模型列表、经 AI 推荐后把 task/verify/triage 的模型与思考强度写入下方各角色字段（已显式配置的角色会被覆盖，请以推荐结果为准复核）；选某厂商方案时应用其默认变体的组合（OpenAI/Claude/Gemini/DeepSeek/Kimi/Qwen/火山 Coding Plan/Minimax，数据见 src/modelPresets.ts）。作用范围仅 task/verify/triage 三个子 agent 角色——session agent 由用户自行管理，方案与自动推荐都不应用 session 项（厂商 session 推荐仅作参考展示）。每次选择的结果记录在 presetRecommendation 字段。'),
+  /**
+   * v0.17: the route the auto-recommendation one-shot call runs on
+   * ('provider/model' or a bare model name; '' = the first high-tier entry of
+   * the live catalog, i.e. the strongest listed model). Volatile: an edit
+   * governs the very next selection.
+   */
+  presetRecommendModel: z.string().default('').volatile().description('自动推荐请求所用模型（「provider/model」或裸模型名；留空 = 目录中最高档的首个模型）：该模型仅负责产出推荐 JSON，不参与 goal 轮执行。保存后下次选择「根据现有配置自动推荐」即生效。'),
+  /**
+   * v0.17: the card-visible outcome of the last preset selection. The server
+   * writes a compact JSON record ({status: ok|placeholder|degraded, preset,
+   * label, at, picks?, reason?...}) through the settings service — the exact
+   * write path the panel uses — and the card renders it under the dropdown.
+   * Volatile both so the card can render it and so the record is transient
+   * state (the applied models themselves live in the three flat fields).
+   */
+  presetRecommendation: z.string().default('').volatile().description('最近一次预置方案应用/自动推荐的结果记录（JSON）：ok=已应用（picks 列出各角色写入的模型）；placeholder=厂商方案占位待填充（未更改配置）；degraded=降级原因（目录不可用/调用失败/回复不可解析）。设置卡片在下拉框下方渲染该记录。'),
   /**
    * Max consecutive rounds per subgoal before the loop pauses for the user
    * (controller round-cap, default 3). Volatile: read per round start, so the
@@ -1208,6 +1257,356 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
   ctx.on?.('loader/volatile-update', () => {
     registerGuidanceSection()
     installGate()
+  })
+
+  // --- v0.17.0 preset plans (预置方案): one-shot selection handler ----------
+  // The settings card writes `presetPlan` (volatile selector); this handler
+  // resolves each CHANGE of that value exactly once:
+  //   'auto'   → recommendModels(): probe the live catalog, build the request
+  //              (catalog + current role fields + vendor presets as reference),
+  //              one guarded LLM call, strict catalog-validated parse, then
+  //              WRITE the winning routes into the three flat volatile model
+  //              fields via the settings service (ctx.get('settings').mutate —
+  //              the same face remote.settings.mutate exposes to the panel's
+  //              fallback write; unconditional expectedRevision, which the
+  //              settings controller documents as an unconditional write).
+  //   vendor   → READY preset: apply its roles the same way; PLACEHOLDER: only
+  //              record the status note (no model field is touched).
+  // The outcome (picks / placeholder note / degradation reason) is always
+  // written into `presetRecommendation` (same write path), which the card
+  // renders under the dropdown. Guarded by `lastHandledPresetPlan` so:
+  //  - the handler's own writes (which re-enter loader/volatile-update) are
+  //    no-ops (they never change presetPlan);
+  //  - a value that persists across a restart is not re-applied at boot
+  //    (lastHandledPresetPlan is seeded from the CURRENT value).
+  // EVERY failure is contained: the settings service may be absent (host
+  // without dsh-settings — log + record nothing), any throw lands in a
+  // degraded record, and the handler never throws into the loader event.
+  const SETTINGS_NAMESPACE = 'dsh-cybernetics' // the loader row id = the card's SETTINGS_ENTRY_ID
+  let lastHandledPresetPlan: string | undefined
+  try {
+    lastHandledPresetPlan = readConfigField(config.presetPlan, '')
+  } catch { /* live-ref read failure: treat as never-handled */ }
+  // --- v0.17.1 preset-handler diagnostics + settings resolution fallback ----
+  // The live host surfaced a silent defect: GUI preset selections commit
+  // (client mutate works) but the one-shot handler's writes never land and its
+  // warn() output is invisible (host stdout only). Two additions, both inert
+  // when everything already works:
+  //  1. presetDiag(): append one JSON line to /tmp/dsh-cyb-preset-diag.jsonl so
+  //     the handler's decision points are observable without host logs.
+  //  2. settingsMutate() gains a ctx.root fallback: if the entry-scoped
+  //     ctx.get('settings') cannot resolve the root-provided settings service
+  //     (realm/proxy composition differences), resolve it from the root
+  //     context instead. Deliberately NOT a static inject addition — a
+  //     missing dependency would pend boot; a lazy fallback cannot.
+  const presetDiag = (payload: Record<string, unknown>): void => {
+    try {
+      const line = JSON.stringify({ at: new Date().toISOString(), ...payload }) + '\n'
+      appendFile('/tmp/dsh-cyb-preset-diag.jsonl', line, 'utf8').catch(() => { /* diagnostics must never throw */ })
+    } catch { /* diagnostics must never throw */ }
+  }
+  const probeSettings = (scope: string): Record<string, unknown> => {
+    try {
+      const scopeCtx = scope === 'root' ? (ctx as { root?: unknown }).root : ctx
+      const get = typeof (scopeCtx as { get?: unknown })?.get === 'function'
+        ? (scopeCtx as { get: (name: string) => unknown }).get.bind(scopeCtx)
+        : undefined
+      if (get === undefined) return { scope, result: 'no-get' }
+      const settings = get('settings')
+      if (settings === undefined) return { scope, result: 'undefined' }
+      const mutateType = typeof (settings as { mutate?: unknown })?.mutate
+      return { scope, result: mutateType === 'function' ? 'ok' : `mutate:${mutateType}` }
+    } catch (error) {
+      return { scope, result: 'threw', error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+  /**
+   * v0.17.2 — the live host serializes every config write through the dsh-hmr
+   * service: the settings.mutate chain ends in configEditor.edit →
+   * hmr.runExclusive, and runExclusive REJECTS when its AsyncLocalStorage
+   * store is set ("HMR transactions cannot be nested"). A preset handler runs
+   * from loader/volatile-update — synchronously inside the very transaction
+   * that committed the volatile write — and that store leaks into every async
+   * continuation scheduled during the transaction (verified empirically:
+   * timers fired after run() completed still saw the store), so the v0.17.1
+   * live diag recorded write-refused … "HMR transactions cannot be nested"
+   * even though the settings service itself resolved. dsh-hmr's own
+   * watchConfig faces the identical problem and escapes with
+   * `this.executing.exit(...)`; we mirror exactly that: resolve the hmr
+   * service and run the mutate with the transaction store cleared, so
+   * runExclusive sees a fresh caller and QUEUES the write behind the
+   * in-flight transaction (the loader emits volatile-update without awaiting
+   * listeners, so queueing cannot deadlock). When the hmr service is
+   * unreachable (offline stubs, composition changes) the plain call is kept —
+   * behavior identical to v0.17.1.
+   */
+  const resolveHmrExit = (): ((cb: () => unknown) => unknown) | undefined => {
+    try {
+      const scopes: Array<() => unknown> = [
+        () => typeof (ctx as { get?: unknown })?.get === 'function' ? (ctx as { get: (name: string) => unknown }).get('hmr') : undefined,
+        () => {
+          const root = (ctx as { root?: unknown })?.root as { get?: (name: string) => unknown } | undefined
+          return typeof root?.get === 'function' ? root.get('hmr') : undefined
+        },
+      ]
+      for (const scope of scopes) {
+        const hmr = scope() as { executing?: { exit?: (cb: () => unknown) => unknown } } | undefined
+        const exit = (hmr?.executing as { exit?: unknown } | undefined)?.exit
+        if (typeof exit === 'function') return exit.bind(hmr!.executing) as (cb: () => unknown) => unknown
+      }
+    } catch { /* hmr service absent or Cordis proxy guard — plain mutate */ }
+    return undefined
+  }
+  const probeHmr = (): Record<string, unknown> => {
+    try {
+      return { result: resolveHmrExit() === undefined ? 'undefined' : 'ok-exit' }
+    } catch (error) {
+      return { result: 'threw', error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+  /**
+   * v0.17.2: the live auto-recommend returned degraded on its first firing
+   * (write-refused status:'degraded' — the v0.17.1 build has no reason-level
+   * diag). Prime suspect: `ctx.llm` is read as a CONTEXT PROPERTY by
+   * probeCatalogOptions/callLlmOneShot, and the entry-scoped ctx handed to
+   * loader/volatile-update may not carry the host's llm service — the same
+   * composition-layer class as the v0.17.1 settings gap. Probe both scopes
+   * into the boot diag and resolve a face for the recommend call with a root
+   * fallback; recommendModels only ever touches `ctx.llm`, so a wrapper
+   * context `{ llm }` is a complete substitute when the entry scope is bare.
+   */
+  const probeLlm = (scope: string): Record<string, unknown> => {
+    try {
+      const scopeCtx = scope === 'root' ? (ctx as { root?: unknown }).root : ctx
+      const llm = (scopeCtx as { llm?: unknown } | null | undefined)?.llm
+      if (llm === undefined || llm === null) return { scope, result: 'undefined' }
+      const face = llm as { prepareCall?: unknown; listProviders?: unknown }
+      return { scope, result: typeof face.prepareCall === 'function' && typeof face.listProviders === 'function' ? 'ok' : 'partial' }
+    } catch (error) {
+      return { scope, result: 'threw', error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+  const resolveLlmFace = (): unknown => {
+    try {
+      const direct = (ctx as { llm?: unknown } | null | undefined)?.llm
+      if (direct !== undefined && direct !== null) return direct
+    } catch { /* Cordis proxy guard — fall through */ }
+    try {
+      const rootLlm = ((ctx as { root?: unknown })?.root as { llm?: unknown } | undefined)?.llm
+      if (rootLlm !== undefined && rootLlm !== null) return rootLlm
+    } catch { /* Cordis proxy guard — give up */ }
+    return undefined
+  }
+  presetDiag({
+    event: 'boot',
+    seededPlan: lastHandledPresetPlan,
+    presetPlanBinding: typeof config.presetPlan === 'object' && config.presetPlan !== null && typeof (config.presetPlan as { get?: unknown }).get === 'function' ? 'ref' : typeof config.presetPlan,
+    ctxOn: typeof ctx.on,
+    hmr: probeHmr(),
+    llm: [probeLlm('entry'), probeLlm('root')],
+    settings: [probeSettings('entry'), probeSettings('root')],
+  })
+  const settingsMutate = (): ((ns: string, ops: unknown[], expectedRevision?: number) => Promise<unknown>) | undefined => {
+    let bound: ((ns: string, ops: unknown[], expectedRevision?: number) => Promise<unknown>) | undefined
+    let scopeLabel = ''
+    const scopes: Array<{ label: string; get: (() => unknown) | undefined }> = [
+      { label: 'entry', get: typeof ctx.get === 'function' ? () => ctx.get('settings') : undefined },
+      { label: 'root', get: typeof (ctx as { root?: unknown }).root === 'object' && typeof ((ctx as { root?: { get?: unknown } }).root as { get?: unknown })?.get === 'function' ? () => (ctx as { root: { get: (name: string) => unknown } }).root.get('settings') : undefined },
+    ]
+    for (const scope of scopes) {
+      if (scope.get === undefined) continue
+      try {
+        const settings = scope.get()
+        if (settings && typeof (settings as { mutate?: unknown }).mutate === 'function') {
+          bound = (settings as { mutate: (ns: string, ops: unknown[], expectedRevision?: number) => Promise<unknown> }).mutate.bind(settings)
+          scopeLabel = scope.label
+          break
+        }
+      } catch { /* service absent or Cordis proxy guard — try the next scope */ }
+    }
+    if (bound === undefined) {
+      presetDiag({ event: 'settings-unavailable', probed: [probeSettings('entry'), probeSettings('root')] })
+      return undefined
+    }
+    const hmrExit = resolveHmrExit()
+    presetDiag({ event: 'settings-resolved', scope: scopeLabel, hmr: hmrExit === undefined ? 'plain' : 'exit' })
+    if (hmrExit === undefined) return bound
+    return (ns: string, ops: unknown[], expectedRevision?: number) => {
+      try {
+        return Promise.resolve(hmrExit(() => bound!(ns, ops, expectedRevision)))
+      } catch (error) {
+        // Belt and braces: if the exit escape itself throws synchronously,
+        // fall back to the plain call (v0.17.1 behavior) so the outcome is at
+        // least attempted — and observe the fallback in the diag.
+        presetDiag({ event: 'write-escape-fallback', error: error instanceof Error ? error.message : String(error) })
+        return bound!(ns, ops, expectedRevision)
+      }
+    }
+  }
+  const warnOf = (message: string, error?: unknown): void => {
+    try {
+      const logger = (ctx as { logger?: { warn?: (m: string, e?: unknown) => void } }).logger
+      logger?.warn?.(message, error)
+    } catch { /* logging must never throw */ }
+  }
+  const writePresetRecord = async (ops: SettingsOp[], record: PresetRecommendationRecord): Promise<boolean> => {
+    const mutate = settingsMutate()
+    if (mutate === undefined) {
+      warnOf(`cybernetics: preset plan "${record.preset}" resolved but the settings service is unavailable — the outcome (${record.status}) could not be written to the card`)
+      presetDiag({ event: 'write-skipped', preset: record.preset, status: record.status, reason: 'settings service unavailable' })
+      return false
+    }
+    const allOps = [...ops, { op: 'set', path: ['presetRecommendation'], value: formatRecommendationRecord(record) }]
+    try {
+      await mutate(SETTINGS_NAMESPACE, allOps, undefined)
+      presetDiag({ event: 'write-ok', preset: record.preset, status: record.status, ops: ops.length + 1 })
+      return true
+    } catch (error) {
+      warnOf(`cybernetics: preset plan "${record.preset}" write refused by the settings service`, error)
+      presetDiag({ event: 'write-refused', preset: record.preset, status: record.status, error: error instanceof Error ? error.message : String(error) })
+      return false
+    }
+  }
+  const readCurrentOverrides = (): RolesConfig => {
+    const overrides: RolesConfig = {}
+    for (const [roleKey, field] of [['default', 'taskAgentModel'], ['verify', 'verifyAgentModel'], ['triage', 'triageAgentModel']] as const) {
+      const spec = parseAgentModelSpec(readConfigField(config[field] as unknown as string, ''))
+      if (spec) overrides[roleKey] = spec
+    }
+    return overrides
+  }
+  const recordOf = (preset: string, patch: Partial<PresetRecommendationRecord>): PresetRecommendationRecord => ({
+    status: 'ok', preset, label: presetChoiceLabel(preset), at: new Date().toISOString(), ...patch,
+  })
+  /**
+   * The record every applied outcome carries for the card's session-scope
+   * note: the session agent is user-managed — neither presets nor the auto
+   * recommendation touch it (ops builders are structurally limited to the
+   * six flat sub-agent fields; src/modelPresets.ts ALLOWED_OP_PATHS).
+   */
+  const SESSION_SCOPE_NOTE = 'session 由用户自行管理，方案不应用此项'
+  const handlePresetSelection = async (plan: string): Promise<void> => {
+    try {
+      if (plan === PRESET_AUTO_ID) {
+        // v0.17.2: prefer the entry-scoped llm face, fall back to the root
+        // scope when the entry ctx is bare (recommendModels only touches
+        // `ctx.llm`, so `{ llm }` is a complete substitute context).
+        const llmFace = resolveLlmFace()
+        const outcome = await recommendModels(llmFace !== undefined ? { llm: llmFace } : ctx, {
+          route: readConfigField(config.presetRecommendModel, ''),
+          currentOverrides: readCurrentOverrides(),
+        })
+        // v0.17.2: land the recommendation's own decision points in the diag —
+        // the write below may be refused, but the LLM pipeline's result (live
+        // catalog size, resolved route, picks, or the concrete degradation
+        // reason + the shape of the request that WAS built) must stay
+        // observable either way.
+        presetDiag(outcome.status === 'ok' ? {
+          event: 'recommend-outcome',
+          status: 'ok',
+          route: [outcome.route.provider, outcome.route.model].filter(Boolean).join('/'),
+          catalogSize: outcome.catalogSize,
+          picks: Object.fromEntries((['task', 'verify', 'triage'] as const).filter((k) => outcome.picks[k] !== undefined).map((k) => [k, `${outcome.picks[k]!.provider}/${outcome.picks[k]!.model}`])),
+          ignoredSession: outcome.ignoredSession,
+          notes: outcome.notes,
+        } : {
+          event: 'recommend-outcome',
+          status: 'degraded',
+          ...(outcome.route !== undefined ? { route: [outcome.route.provider, outcome.route.model].filter(Boolean).join('/') } : {}),
+          catalogSize: outcome.catalogSize,
+          reason: outcome.reason,
+          request: { systemChars: outcome.request.system.length, userChars: outcome.request.user.length, hasPrinciples: /跨厂商|通用原则/.test(outcome.request.system) },
+        })
+        if (outcome.status === 'ok') {
+          const picks: Record<string, string> = {}
+          const efforts: Record<string, string> = {}
+          for (const roleKey of ['task', 'verify', 'triage'] as const) {
+            const pick = outcome.picks[roleKey]
+            if (!pick) continue
+            picks[roleKey] = `${pick.provider}/${pick.model}`
+            efforts[roleKey] = pick.reasoningEffort ?? ''
+          }
+          await writePresetRecord(outcome.ops, recordOf(PRESET_AUTO_ID, {
+            route: [outcome.route.provider, outcome.route.model].filter(Boolean).join('/'),
+            catalogSize: outcome.catalogSize,
+            picks,
+            efforts,
+            notes: [SESSION_SCOPE_NOTE, ...outcome.notes],
+            ...(outcome.invalid.length > 0 ? { invalid: outcome.invalid } : {}),
+          }))
+          return
+        }
+        await writePresetRecord([], recordOf(PRESET_AUTO_ID, {
+          status: 'degraded',
+          ...(outcome.route !== undefined ? { route: [outcome.route.provider, outcome.route.model].filter(Boolean).join('/') } : {}),
+          catalogSize: outcome.catalogSize,
+          reason: outcome.reason,
+        }))
+        return
+      }
+      const preset = presetById(plan)
+      if (preset === undefined) {
+        warnOf(`cybernetics: unknown preset plan "${plan}" — ignored`)
+        return
+      }
+      const applied = vendorPresetApplyOps(preset)
+      if (!applied.ready) {
+        await writePresetRecord([], recordOf(plan, {
+          status: 'placeholder',
+          reason: '厂商方案为占位条目（模型组合待填充），本次选择仅记录、未更改任何模型配置',
+        }))
+        return
+      }
+      // picks/efforts render from the applied VARIANT's roles (models only);
+      // the session suggestion never enters either record or ops — the ops
+      // builders read task/verify/triage exclusively.
+      const roles = applied.variant !== undefined ? applied.variant.roles : preset.roles
+      const picks: Record<string, string> = {}
+      const efforts: Record<string, string> = {}
+      for (const roleKey of ['task', 'verify', 'triage'] as const) {
+        const spec = roles[roleKey]
+        if (!spec || (!spec.provider && !spec.model)) continue
+        picks[roleKey] = spec.provider ? `${spec.provider}/${spec.model}` : String(spec.model)
+        efforts[roleKey] = spec.reasoningEffort ?? ''
+      }
+      const variantLabels = Array.isArray(preset.variants) ? preset.variants.map((v) => v?.label ?? v?.id ?? '') : []
+      const otherVariants = applied.variant !== undefined
+        ? variantLabels.filter((label) => label !== '' && label !== applied.variant!.label)
+        : []
+      await writePresetRecord(applied.ops, recordOf(plan, {
+        picks,
+        efforts,
+        ...(applied.variant !== undefined ? { variant: applied.variant.label } : {}),
+        ...(otherVariants.length > 0 ? { otherVariants } : {}),
+        notes: [
+          SESSION_SCOPE_NOTE,
+          ...(applied.variant?.session && (applied.variant.session.provider || applied.variant.session.model)
+            ? [`session 参考（未应用）：${[applied.variant.session.provider, applied.variant.session.model].filter(Boolean).join('/')}`]
+            : []),
+          ...(preset.note !== undefined ? [preset.note] : []),
+          ...(preset.source !== undefined ? [`来源：${preset.source}`] : []),
+        ],
+      }))
+    } catch (error) {
+      // Belt and braces (recommendModels is designed not to throw): record
+      // the degradation so the card shows WHY nothing was applied.
+      await writePresetRecord([], recordOf(plan, {
+        status: 'degraded',
+        reason: `预置方案处理异常：${error instanceof Error ? error.message : String(error)}`,
+      }))
+    }
+  }
+  ctx.on?.('loader/volatile-update', () => {
+    let plan: string
+    try {
+      plan = readConfigField(config.presetPlan, '')
+    } catch { return }
+    const willHandle = plan !== lastHandledPresetPlan && plan !== ''
+    presetDiag({ event: 'volatile-update', plan, lastHandled: lastHandledPresetPlan, willHandle })
+    if (plan === lastHandledPresetPlan) return
+    lastHandledPresetPlan = plan
+    if (plan === '') return
+    void handlePresetSelection(plan)
   })
 
   // --- v0.9.0 input-policy relay (outer-loop control insertion) -------------

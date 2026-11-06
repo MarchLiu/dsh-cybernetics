@@ -4,6 +4,38 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.17.2（2026-11-06）：预置方案活体验收修复（二）——HMR 事务逃逸 + 推荐结果诊断
+
+**背景**：v0.17.1 随宿主重启加载后，活体 OpenAI 方案选择的诊断链首次完整落地：`volatile-update (willHandle:true)` → `settings-resolved (scope:entry)` → **`write-refused "HMR transactions cannot be nested"`**。根因实锤：宿主把一切配置写经 `dsh-hmr.runExclusive` 串行化（settings.mutate → configEditor.edit → `ownerContext.get("hmr")` → `hmr.runExclusive`），而预置处理器恰在该事务提交 volatile 写的 `loader/volatile-update` 同步发射中执行——该事务的 AsyncLocalStorage 存储会泄漏进事务期间调度的全部异步续体（实测：`run()` 完成后触发的定时器仍读到存储），于是处理器发起的 mutate 被判为嵌套而拒绝。v0.17.1 的 settings 解析回退本身工作正常（entry 作用域即可解析），缺陷在更深的写互斥层。
+
+- **修复（HMR 事务逃逸）**：`settingsMutate()` 解析 settings 服务后，再经 `ctx.get('hmr')`（root 回退同款）解析 dsh-hmr 服务，把 mutate 调用包进 `hmr.executing.exit(...)`——与 dsh-hmr 自身 `watchConfig` 使用的逃逸手法完全一致：清空事务存储后 runExclusive 视为全新调用方，写操作排队到在飞事务**之后**执行（loader 发射 volatile-update 不 await 监听器，排队不会死锁）。hmr 服务不可达（离线 stub/组合变化）时保持 v0.17.1 的裸调用；exit 同步抛错时回退裸调用并记 `write-escape-fallback` 诊断。
+- **诊断增强**：(1) boot 行新增 `hmr` 探测（`ok-exit`/`undefined`/`threw`）与 `llm` 双作用域探测（entry/root 的 `prepareCall`+`listProviders` 面）；`settings-resolved` 行新增 `hmr: exit|plain` 标记。(2) auto 推荐分支新增 `recommend-outcome` 事件——ok 记 route/catalogSize/picks/ignoredSession/notes，degraded 记 reason/目录大小与已构建请求的形状摘要（`request:{systemChars,userChars,hasPrinciples}`）——写入被拒也不丢推荐管线的可观测性。
+- **修复（llm 调用面 root 回退）**：活体 auto 推荐首鸣即 `write-refused status:'degraded'`（v0.17.1 无 reason 级诊断，原因不可见）。头号嫌疑与 settings 同类：`probeCatalogOptions`/`callLlmOneShot`/`validatePickEfforts` 都以**上下文属性**形式读 `ctx.llm`，entry 作用域的 volatile-update ctx 未必携带宿主 llm 服务。修复：`resolveLlmFace()` entry→root 渐进解析，命中时以 `{ llm }` 包装上下文传入 `recommendModels`（该函数只触 `ctx.llm`，包装即完整替身）；双 scope 皆空时保持原行为。
+- **验证**：v17 新增第 10 组（真 AsyncLocalStorage 模拟在飞事务：escape 路径下 stub mutate 内 `getStore()===undefined` 且写成功落账；无 hmr 服务时回退裸调用行为不变）与第 11 组（entry ctx 无 llm 面、root 携带服务时 auto 推荐 ok 落地）；v17/v16/v03 全量复跑通过；`tsc --noEmit` 零有效错误。
+- **生效手段**：`src/` 改动宿主重载生效（部署同步 + 重启需另行授权）。
+
+## v0.17.1（2026-11-06）：预置方案活体验收修复——settings 服务解析回退 + 处理器诊断
+
+**背景**：重启后的活体验收发现真实缺陷：GUI 预置方案选择在客户端写路径完整生效（`presetPlan`/`presetRecommendModel` 经 `remote.settings.mutate` 持久化、卡片即时渲染），但服务端一次性处理器从未产出 `presetRecommendation`、六字段从未被方案写入（openai/claude/auto/gemini 多次选择均复现；离线 v17 套件 9/9 全绿——缺陷在宿主组合层，离线 stub 测不到）。宿主 warn 仅落 stdout（用户终端），无可读日志。
+
+- **修复（settings 服务解析回退）**：`settingsMutate()` 在 `ctx.get('settings')` 不可用（undefined/代理守卫抛错）时，回退到 `ctx.root.get('settings')`——settings 服务由 dsh-base 以根级条目提供，entry 作用域解析失败时 root 解析可命中。刻意**不**把 `settings` 加入 `static inject`：缺依赖会让 fiber 在启动时 pend（挂启动）；惰性回退零风险。
+- **诊断（presetDiag）**：处理器全部决策点（boot 种子/presetPlan 绑定形态/ctx.on·get 可用性/settings 双作用域探测/volatile-update 事件与 willHandle 判定/write ok·skipped·refused）追加 JSON 行到 `/tmp/dsh-cyb-preset-diag.jsonl`——重启后一次选择即可实锤剩余根因（loader 级静默吞事件 vs 服务解析）。诊断写入全部 try/catch 包裹，绝不影响行为。
+- **验证**：`tsc --noEmit` 零有效错误；v17/v16/v03 全量复跑通过（诊断与回退对离线 stub 全透明）。
+
+## v0.17（2026-11-06）：预置方案（厂商方案下拉 + AI 自动推荐，作用范围仅 task/verify/triage）
+
+**需求**：模型配置完全靠手工逐字段填，希望提供整套方案：设置卡片「预置方案」下拉（9 选项 = 自动推荐 + 8 家厂商），厂商方案数据（变体/思考强度/可升级档/fallback/rationale/备注）数据驱动入库；「根据现有配置自动推荐」读取当前系统模型列表、经一次 AI 调用产出推荐并写入。**用户裁定（最高优先）**：session agent 不在功能范围内——用户随时自行调整 session 模型，方案与自动推荐只应用 task/verify/triage；厂商 session 推荐仅作参考展示。
+
+- **两轮接续**：本轮前半（上一轮次产出）建立了骨架——`src/modelPresets.ts`（注册表/请求构建/解析/apply-ops/一次性 LLM 调用 `callLlmOneShot`，消息与 text-delta 收集器内联实现保持零 `@deepseek-ai` 依赖）、`src/index.ts` 的 `loader/volatile-update` 一次性处理器 + `presetPlan`/`presetRecommendModel`/`presetRecommendation` 三个 volatile 字段（经 `ctx.get('settings').mutate` 写入，与面板同一写路径）、`lib/client.js` 的 `preset` 行（下拉 + 结果记录渲染）。本轮按最新裁定修正并填全：
+- **注册表填全 8 家厂商（全 `status: 'ready'`）**：OpenAI（gpt-6.1-sol task/verify + gpt-6-luna triage，effort 五档）、Claude（常规/高要求两变体，verify 恒高一档补偿单家族）、Gemini（家族 + 最新版本运行时解析，不硬编码旧版本号）、DeepSeek（仅本家/verify 外置两变体，verify thinking 档，「成本不应成为降级 verify 的理由」）、Kimi（长期组合/最高验收质量两变体，避开退役 K2）、Qwen（A/B/C 三变体，⚠️ verify 绝不用 Turbo——幻觉共振）、火山 Coding Plan（A/B 两变体，Seed 池 + GLM-5.3 备选边界）、Minimax（M3.1-Flash high/xhigh + M3 verify，缓存读 4 倍差价备注）。每厂商：多变体（`variants`，`roles` 恒为默认变体的同一对象引用）、逐角色 effort token/可升级档/fallback/rationale、厂商 note、session 参考（`variant.session`）+ 常量 `PRESET_SESSION_NOTE`。
+- **session 范围结构性钉死**：`ALLOWED_OP_PATHS` = 恰好六个扁平子 agent 字段（task/verify/triage × model/effort），所有 apply-ops 构建器经 `filterAllowedOps` 过滤；推荐 prompt 明令「输出 JSON 只允许 task/verify/triage 三个键，禁止 session 键」；`parseRecommendation` 对万一直出的 session 键丢弃并置 `ignoredSession`；厂商 session 数据只存 `variant.session`，卡片常驻「session 由用户自行管理」提示——任何代码路径都触不到 session 配置。
+- **effort 全链路**：`SettingsOp` 扩展 `unset`（角色换模型时清掉旧档位回模型默认）；厂商方案按变体配置写入 effort token（异构：五档/thinking/默认），`recommendationApplyOps` 携带 AI 推荐的 effort；自动推荐的 effort 经 `validatePickEfforts` 软校验（`ctx.llm.resolveModelInfo`，不支持 → 丢档保模型 + 注明；调用面缺失/抛错 → 保留不阻断）。
+- **跨厂商通用原则注入推荐 prompt**（仅作用于 task/verify/triage）：verify 档位不低于 task；跨代际/跨家族独立（同家族时 verify 升高一档补偿）；verify 不能过度自信；省成本先压 task/triage、verify 最后动、成本不是降级 verify 的理由；triage 轻量。
+- **结果记录增润**：`PresetRecommendationRecord` 增加 `efforts`/`variant`/`otherVariants`/`notes`（session 范围声明 + 厂商 ⚠️ 备注 + effort 校验注记），卡片渲染逐角色「模型（effort X | 模型默认）」+ 变体 + 备注。
+- **顺手修复（本轮 typecheck 发现的既有缺口）**：Config 接口补齐 `presetPlan`/`presetRecommendModel`/`presetRecommendation` 三个字段（schema 有、接口漏）；`controller.ts` 的 `startRound`/`runRound` `parent: unknown` → `Agent`（`@deepseek-ai/dsh-workflow` 的 `WorkflowStartRequest.parent` 本就要求 Agent 类型，types 可解析时 strict 检查暴露）；`tsc --noEmit` 现已零错误（仅存代码库级 TS5097 风格噪声）。
+- **测试**：`test/v17-model-presets.mjs` 全量重写（接替占位版）——注册表完整性（9 id、8 家全 ready、变体数对表、roles===variants[0].roles 同一性、session 仅存 variant.session）、请求构建（session 禁令/原则/effort 契约/目录 200 行上限）、解析（fenced/裸模型/`{"task":42}` 形状容忍/session 键忽略/effort 形状丢弃）、effort 软校验三态、apply-ops 六字段围栏 + `filterAllowedOps`、全注册表变体应用（显式/未知 variantId 回退默认、effort set/unset、session 数据零泄漏）、`recommendModels` 端到端（ok 带 notes/全降级带原因与请求）、插件处理器 7 场景（one-shot、记录增润、降级、未知 id、启动种子不重放、清除零写入、新选择触发）、设置卡片（9+1 选项镜像服务端 id 序、session 提示、记录渲染含 effort 后缀/变体/备注、volatile 写路径、zh/en 26 个 locale key 完整）。复跑 `node test/v17-model-presets.mjs` 全过；v03（75 checks）/v09–v16 全绿。
+- **生效手段**：`src/` 改动宿主重载生效；`lib/client.js` 改动重启宿主 + 刷新浏览器；`workflows/round.js` 改动热生效。
+
 ## v0.16（2026-11-06）：智能选择 Agent 配置（`smartAgentModelSelection` 二元开关 + 首轮启发式自动选配）
 
 **需求**：v0.15 已打通 per-role 模型+档位全链路，但选择完全靠配置或 session agent 手工指定；希望每轮启动时按任务内容自动为 task/verify/triage 选配合适模型——简单任务（删文件、git 提交等）用轻量模型提速省资源，困难任务（不常见语言、复杂数学等）落顶配，写作类落写作特长模型；显式配置恒优先，选不到/分类失败静默回退继承并记审计。
