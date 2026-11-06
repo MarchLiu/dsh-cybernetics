@@ -5,3 +5,11 @@ node_modules/
 .diag/
 .fix-llm-pi-ai-*/
 docs/diag-session-*.md
+
+# 统计产物（用户裁定：统计产物可能含工作信息，永久忽略，不纳入版本库）
+# 覆盖周度分析报告、图表与各轮分析脚本/中间结果；文件保留在本地磁盘，仅供阅读使用。
+cybernetics-weekly-analysis.md
+figures/
+scripts/round*_analyze.py
+scripts/round*_stats.json
+scripts/round*_judgments.json
