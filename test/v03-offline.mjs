@@ -2689,8 +2689,8 @@ console.log(JSON.stringify({
   }
   const form57 = volatileForm57(Config)
   assert.deepEqual(Object.keys(form57.dict ?? {}).sort(),
-    ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'roundsPerSubgoal', 'taskAgentModel', 'taskAgentReasoningEffort', 'triageAgentModel', 'triageAgentReasoningEffort', 'verifyAgentModel', 'verifyAgentReasoningEffort'],
-    'the served settings form exposes exactly the twelve volatile fields (v0.15 adds the three reasoning-effort selects on top of v0.13 noticePolicy; roles still not served since v0.8.4)')
+    ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'presetPlan', 'presetRecommendModel', 'presetRecommendation', 'roundsPerSubgoal', 'smartAgentModelSelection', 'taskAgentModel', 'taskAgentReasoningEffort', 'triageAgentModel', 'triageAgentReasoningEffort', 'verifyAgentModel', 'verifyAgentReasoningEffort'],
+    'the served settings form exposes exactly the sixteen volatile fields (v0.17 adds the three preset-plan fields on top of v0.16 smartAgentModelSelection; roles still not served since v0.8.4)')
   assert.equal(isVolatilePath57(Config, ['roles']), false,
     'a roles write path is NOT volatile (v0.8.4): the panel neither serves nor writes it')
   // STALE-RUNTIME CONTROL: the pre-0.7.7 runtime face (only allGoalsMode
@@ -2726,10 +2726,10 @@ console.log(JSON.stringify({
     const hostForm = hostSchema.volatileForm(Config)
     assert.notEqual(hostForm, undefined, 'host volatileForm serves a form for the current schema')
     assert.deepEqual(Object.keys(hostForm.dict ?? {}).sort(),
-      ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'roundsPerSubgoal', 'taskAgentModel', 'taskAgentReasoningEffort', 'triageAgentModel', 'triageAgentReasoningEffort', 'verifyAgentModel', 'verifyAgentReasoningEffort'],
-      'the REAL host volatileForm serves exactly the twelve volatile fields (v0.15 adds the three reasoning-effort selects; roles is off the panel since v0.8.4)')
+      ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'presetPlan', 'presetRecommendModel', 'presetRecommendation', 'roundsPerSubgoal', 'smartAgentModelSelection', 'taskAgentModel', 'taskAgentReasoningEffort', 'triageAgentModel', 'triageAgentReasoningEffort', 'verifyAgentModel', 'verifyAgentReasoningEffort'],
+      'the REAL host volatileForm serves exactly the sixteen volatile fields (v0.17 adds the preset-plan fields; roles is off the panel since v0.8.4)')
     assert.equal(Object.hasOwn(hostForm.dict ?? {}, 'roles'), false, 'the host form does not serve roles any more')
-    for (const path of [['roundsPerSubgoal'], ['maxConcurrentRounds'], ['taskAgentModel'], ['verifyAgentModel'], ['triageAgentModel'], ['allGoalsMode'], ['hardGate'], ['inputPolicy'], ['noticePolicy'], ['taskAgentReasoningEffort'], ['verifyAgentReasoningEffort'], ['triageAgentReasoningEffort']]) {
+    for (const path of [['roundsPerSubgoal'], ['maxConcurrentRounds'], ['taskAgentModel'], ['verifyAgentModel'], ['triageAgentModel'], ['allGoalsMode'], ['hardGate'], ['inputPolicy'], ['noticePolicy'], ['taskAgentReasoningEffort'], ['verifyAgentReasoningEffort'], ['triageAgentReasoningEffort'], ['smartAgentModelSelection'], ['presetPlan'], ['presetRecommendModel'], ['presetRecommendation']]) {
       assert.equal(hostSchema.isVolatilePath(Config, path), true, `host write gate accepts ${path.join('.')}`)
     }
     for (const path of [['roles', 'default', 'model'], ['gateMode'], ['gateApprovalRelay'], ['toolName'], ['implicitTrigger']]) {
