@@ -33,6 +33,8 @@ import type {
   ControllerConfig, ControllerDecision, LoopState, ResumableReason, RoundResult, RolesConfig,
 } from './controller.ts'
 import { startTeamRound, teamExecutorAvailable, teamExecutorUnavailableError } from './executor.ts'
+import { computeSmartSelection, probeCatalogOptions, sessionRouteOf } from './modelSelection.ts'
+import type { SmartSelectionAudit } from './modelSelection.ts'
 import { linkRunToGoal, noteWorkflowAgent, setBoardSource, unlinkRun } from './agents.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setPublishDebugRoot, appendModeRecord } from './projection.ts'
 import {
@@ -85,6 +87,17 @@ export interface Config extends ControllerConfig {
   verifyAgentReasoningEffort?: string
   /** v0.15: flat triage-agent reasoning-effort id ('' = model default). Volatile. */
   triageAgentReasoningEffort?: string
+  /**
+   * v0.16 smart agent model selection (default false). When on, every round
+   * start classifies the work order (brief/subgoal/objective) and picks a
+   * provider/model per sub-agent role from the host's LIVE model catalog
+   * (`ctx.llm`), filling only roles WITHOUT an explicit provider/model
+   * override; trivial work lands on light models, hard work on the top tier,
+   * and any fallback (catalog unavailable, nothing suitable, classifier
+   * failure) keeps the session-agent inheritance and records WHY in the round
+   * audit (`smartSelection` on the round record). Volatile — next round.
+   */
+  smartAgentModelSelection?: boolean
   /**
    * Hard control gate (default false): hide execution tools from
    * TOP-LEVEL session agents at prompt-assembly time, so the session agent
@@ -237,6 +250,15 @@ export const Config = z.object({
   taskAgentReasoningEffort: z.string().default('').volatile().description('task agent 思考强度档位（留空 = 跟随模型默认）。档位列表随该 agent 所选模型动态给出；选择即保存，下一轮 goal 生效。'),
   verifyAgentReasoningEffort: z.string().default('').volatile().description('verify agent 思考强度档位（留空 = 跟随模型默认）。档位列表随该 agent 所选模型动态给出；选择即保存，下一轮 goal 生效。'),
   triageAgentReasoningEffort: z.string().default('').volatile().description('triage agent 思考强度档位（留空 = 跟随模型默认）。档位列表随该 agent 所选模型动态给出；选择即保存，下一轮 goal 生效。'),
+  /**
+   * v0.16: smart agent model selection. Volatile boolean — the settings card
+   * renders a toggle; the value is read live at every round launch, so a
+   * panel edit governs the next goal round. Classification and selection
+   * rules live in src/modelSelection.ts (see README「智能选择 Agent 配置」);
+   * explicit role config always wins and every decision lands in the round
+   * audit with its reason.
+   */
+  smartAgentModelSelection: z.boolean().default(false).volatile().description('智能选择 Agent 配置（v0.16，缺省关）：开启后每轮启动时按任务内容（委托书/子目标/目标）从当前系统可用模型列表为 task/verify/triage 自动选择合适模型——简单任务（删文件、git 提交等）用轻量模型提速省资源，困难任务（不常见语言、复杂数学等）用顶配模型。显式配置的角色模型始终优先；目录不可用或选不到合适模型时保持继承 session agent；每次决策（含保持继承的理由）写入轮审计（.cybernetics/round-*.json 的 smartSelection 字段）。保存后下一轮 goal 生效。'),
   /**
    * Max consecutive rounds per subgoal before the loop pauses for the user
    * (controller round-cap, default 3). Volatile: read per round start, so the
@@ -1340,7 +1362,11 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       'revise is the ONLY goal-change verb and it is append-only: it creates a NEW goal (parentGoalId = old ' +
       'goal, inherited depth/executor/role/objective unless overridden), starts that goal\'s first round, and ' +
       'marks the old goal superseded (supersededBy = new goal) — it never rewrites the objective in place. ' +
-      'Existing goal: pass its goalId. The controller never marks a goal complete — that is the user\'s act.',
+      'Existing goal: pass its goalId. The controller never marks a goal complete — that is the user\'s act. ' +
+      'When the deployment enables smartAgentModelSelection, every round auto-assigns each role (task/verify/' +
+      'triage) a model from the live system model catalog by task shape — trivial work on light models, hard ' +
+      'work on the top tier; explicitly configured role models always win, and the round result/audit carries ' +
+      'a smartSelection trail naming every decision (selected or kept-inherit, with the reason).',
     parameters: {
       type: 'object',
       properties: {
@@ -1623,6 +1649,10 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       if (verifyEffort) roleOverrides.verify = { ...roleOverrides.verify, reasoningEffort: verifyEffort }
       const triageEffort = sanitizeReasoningEffort(readConfigField(config.triageAgentReasoningEffort, ''))
       if (triageEffort) roleOverrides.triage = { ...roleOverrides.triage, reasoningEffort: triageEffort }
+
+      // The session's durable objective, as a classification-input fallback
+      // for targets that carry none (v0.16 smart selection reads it).
+      const objective = loop.objective ?? goalView?.objective ?? loop.title ?? ''
       const controllerConfig: ControllerConfig = {
         roundScriptPath: config.roundScriptPath ?? fileURLToPath(new URL('../workflows/round.js', import.meta.url)),
         // Volatile schema fields surface as live references — unwrap per round
@@ -1630,6 +1660,59 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         // falls back to the controller's built-in default).
         roundsPerSubgoal: Math.max(1, Math.floor(readConfigField(config.roundsPerSubgoal, 3))),
         roles: roleOverrides,
+      }
+      /**
+       * v0.16 smart agent model selection — per LAUNCH, not per call. A
+       * revise launches the successor goal, whose brief/objective/depth may
+       * differ from the call's target loop, so the classification runs against
+       * the target actually being started. When the volatile toggle is on:
+       * probe the host's live model catalog (`ctx.llm`), classify the work
+       * order (brief → subgoal → objective), and fill only the role rows that
+       * carry NO explicit provider/model; every decision (selected, kept
+       * explicit, kept inherit, skipped) lands in the returned config's
+       * `smartSelection` audit, which startRound/startTeamRound hand to the
+       * round script for the round record (.cybernetics/round-*.json).
+       * probeCatalogOptions + computeSmartSelection never throw and never
+       * block: any failure degrades to plain session-agent inheritance with
+       * the fallback recorded. Feature off → controllerConfig verbatim.
+       */
+      const roundConfigFor = async (target: LoopState): Promise<ControllerConfig> => {
+        if (readConfigField(config.smartAgentModelSelection, false) !== true) return controllerConfig
+        try {
+          const text = [
+            target.brief, target.subgoal, target.objective ?? objective,
+          ].filter((part) => typeof part === 'string' && part.trim().length > 0).join('\n')
+          const catalog = await probeCatalogOptions(ctx)
+          const { overrides, audit } = computeSmartSelection({
+            text,
+            depth: target.depth ?? 'full',
+            executor: target.executor ?? 'ephemeral',
+            taskRoleKey: target.role ?? 'default',
+            explicit: roleOverrides,
+            options: catalog.options,
+            session: sessionRouteOf(parent),
+          })
+          // The pure merge only produces rows for roles without explicit
+          // provider/model, so spreading them over the folded config cannot
+          // clobber an explicit value; a merged COPY keeps controllerConfig
+          // (and roleOverrides) untouched for the next launch.
+          const roles: RolesConfig = { ...roleOverrides }
+          for (const [roleKey, spec] of Object.entries(overrides)) {
+            if (spec) roles[roleKey] = { ...roles[roleKey], ...spec }
+          }
+          return { ...controllerConfig, roles, smartSelection: audit }
+        } catch (error) {
+          // Belt and braces (the pipeline is designed not to throw): record
+          // the fallback so the round log stays truthful, keep the round.
+          return {
+            ...controllerConfig,
+            smartSelection: {
+              enabled: true, taskClass: 'standard', inputChars: 0, inputPreview: '',
+              catalogSize: 0, catalogStatus: 'unavailable', roles: [],
+              classifyError: error instanceof Error ? error.message : String(error),
+            },
+          }
+        }
       }
       // Concurrent-round cap (0 = unlimited), read live at every launch.
       const maxConcurrentRounds = () => {
@@ -1656,7 +1739,8 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
                 '该 goal 没有工作委托书（brief）：task agent 只能看到 objective/title。' +
                 '复杂任务请用 cybernetics revise 补 brief（含背景、路径、验收标准）。',
             }
-      const objective = loop.objective ?? goalView?.objective ?? loop.title ?? ''
+      // (`objective` moved above the v0.16 smart-selection fold — it feeds the
+      // classification input; the value is identical.)
 
       /**
        * Start one round on the goal's chosen substrate. Ephemeral (default) is
@@ -1665,14 +1749,19 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
        * async/blocking/cancel paths below stay substrate-agnostic.
        */
       const startAnyRound = async (target: LoopState, signal?: AbortSignal): Promise<any> => {
+        // v0.16: the round config (roles + smart-selection audit) is derived
+        // per launch target; carried on the returned handle so the collect
+        // path folds with exactly what was launched.
+        const roundConfig = await roundConfigFor(target)
         if (target.executor === 'persistent') {
           // Soft probe: never read ctx.agentTeams directly here — Cordis throws
           // on an un-injected service property, which would surface as an
           // internal proxy error instead of "unsupported, use ephemeral".
           if (!teamExecutorAvailable(ctx)) throw teamExecutorUnavailableError()
-          return startTeamRound(ctx, parent, target, controllerConfig, signal)
+          const teamHandle = await startTeamRound(ctx, parent, target, roundConfig, signal)
+          return { ...teamHandle, config: roundConfig }
         }
-        const started = await startRound(engine, parent, root, target, controllerConfig, { objective: target.objective ?? '' }, signal)
+        const started = await startRound(engine, parent, root, target, roundConfig, { objective: target.objective ?? '' }, signal)
         // v0.14 goal-agent tracking: correlate this run with the goal so the
         // workflow/agent-start|end listeners record its children on the board.
         linkRunToGoal((started.run as { id?: unknown })?.id, parent.session, target.goalId)
@@ -1682,6 +1771,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           cancel: (reason?: string) => started.run.cancel(reason),
           dispose: () => started.run.dispose(),
           run: started.run,
+          config: roundConfig,
         }
       }
 
@@ -1700,7 +1790,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         }
         const started: any = await startAnyRound(target, controller.signal)
         const round = started.round as number
-        const handle: RunningRound = { goalId: target.goalId!, round, parent, root, loop: target, config: controllerConfig, run: started }
+        const handle: RunningRound = { goalId: target.goalId!, round, parent, root, loop: target, config: (started.config as ControllerConfig) ?? controllerConfig, run: started }
         running.set(target.goalId!, handle)
         started.result.then(async (settled: any) => {
           handle.settled = settled

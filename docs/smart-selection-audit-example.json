@@ -1,0 +1,125 @@
+{
+  "_comment": "Real smartSelection round-record audits produced by the v0.16 launch-side pipeline (fake host + fixture catalog, same chain as production: tool.execute → roundConfigFor → startRound args → round.js echo → collect → foldRound → round-*.json). Model names are fixture stand-ins; the pipeline NEVER hardcodes names — candidates come from the host llm catalog at every launch.",
+  "trivialRound": {
+    "round": 1,
+    "report": {
+      "summary": "s",
+      "done": true,
+      "artifacts": [],
+      "evidence": "e",
+      "nextStepThoughts": []
+    },
+    "verdict": {
+      "met": true,
+      "criteria": [],
+      "gaps": [],
+      "goalItselfQuestionable": false
+    },
+    "triage": {
+      "auto": [],
+      "defer": [],
+      "reject": [],
+      "human": []
+    },
+    "smartSelection": {
+      "enabled": true,
+      "inputChars": 59,
+      "inputPreview": "删除 build 目录并验证文件不存在 删除 build 目录并验证文件不存在 删除 build 目录并验证文件不存在",
+      "catalogSize": 2,
+      "catalogStatus": "ok",
+      "taskClass": "trivial",
+      "roles": [
+        {
+          "role": "default",
+          "decision": "selected",
+          "reason": "任务分类 trivial：为 task 角色选择 p-light/qwen-8b（light 档，目录 2 个模型中按执行档位规则选取）",
+          "picked": {
+            "provider": "p-light",
+            "model": "qwen-8b"
+          }
+        },
+        {
+          "role": "verify",
+          "decision": "selected",
+          "reason": "任务分类 trivial：为 verify 角色选择 p-light/qwen-8b（light 档，目录 2 个模型中按验证强度规则选取）",
+          "picked": {
+            "provider": "p-light",
+            "model": "qwen-8b"
+          }
+        },
+        {
+          "role": "triage",
+          "decision": "selected",
+          "reason": "任务分类 trivial：为 triage 角色选择 p-light/qwen-8b（light 档，目录 2 个模型中按分拣轻量规则选取）",
+          "picked": {
+            "provider": "p-light",
+            "model": "qwen-8b"
+          }
+        }
+      ]
+    },
+    "fallbacks": [],
+    "executor": "ephemeral"
+  },
+  "hardRound": {
+    "round": 1,
+    "report": {
+      "summary": "s",
+      "done": true,
+      "artifacts": [],
+      "evidence": "e",
+      "nextStepThoughts": []
+    },
+    "verdict": {
+      "met": true,
+      "criteria": [],
+      "gaps": [],
+      "goalItselfQuestionable": false
+    },
+    "triage": {
+      "auto": [],
+      "defer": [],
+      "reject": [],
+      "human": []
+    },
+    "smartSelection": {
+      "enabled": true,
+      "inputChars": 68,
+      "inputPreview": "用 Rust 实现一个并发运行时并验证正确性 用 Rust 实现一个并发运行时并验证正确性 用 Rust 实现一个并发运行时并验证正确性",
+      "catalogSize": 2,
+      "catalogStatus": "ok",
+      "taskClass": "hard",
+      "roles": [
+        {
+          "role": "default",
+          "decision": "selected",
+          "reason": "任务分类 hard：为 task 角色选择 p-top/ultra-72b（high 档，目录 2 个模型中按执行档位规则选取）",
+          "picked": {
+            "provider": "p-top",
+            "model": "ultra-72b"
+          }
+        },
+        {
+          "role": "verify",
+          "decision": "selected",
+          "reason": "任务分类 hard：为 verify 角色选择 p-top/ultra-72b（high 档，目录 2 个模型中按验证强度规则选取）",
+          "picked": {
+            "provider": "p-top",
+            "model": "ultra-72b"
+          }
+        },
+        {
+          "role": "triage",
+          "decision": "selected",
+          "reason": "任务分类 hard：为 triage 角色选择 p-light/qwen-8b（light 档，目录 2 个模型中按分拣轻量规则选取）",
+          "picked": {
+            "provider": "p-light",
+            "model": "qwen-8b"
+          }
+        }
+      ]
+    },
+    "fallbacks": [],
+    "executor": "ephemeral"
+  }
+}

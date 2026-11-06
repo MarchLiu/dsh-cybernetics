@@ -10,6 +10,11 @@
 //                                                   // primary work order (falls back to the objective)
 //   role:   string,                                 // task agent role key (default 'default')
 //   roles:  { [role]: { provider?, model? } },      // per-role LLM overrides (deployment config)
+//   smartSelection?: object,                        // v0.16 audit from the launch-side smart model
+//                                                   // selection (src/modelSelection.ts): task
+//                                                   // classification + per-role decision trail —
+//                                                   // echoed into the result verbatim so the round
+//                                                   // record shows WHY each role ran on its model
 //   taskReport?: object,                            // v0.6 TeamExecutor: the persistent teammate's
 //                                                   // report — when present the task agent is skipped
 //                                                   // and verify/triage run over it directly
@@ -20,7 +25,7 @@
 // }
 // Returns { round, report, verdict, triage } — the controller folds this into the decision.
 
-const { goal, state, subgoal, brief, role, roles, depth, taskReport } = args
+const { goal, state, subgoal, brief, role, roles, depth, taskReport, smartSelection } = args
 
 // One triaged step; shared by the four triage buckets (plain data, no $ref).
 const stepsItem = {
@@ -117,8 +122,12 @@ const callRoleAgent = async (roleKey, prompt, opts) => {
   }
 }
 
-/** 轮结果统一携带回退记录（空数组 = 未发生回退）。 */
-const withFallbacks = (out) => ({ ...out, fallbacks })
+/** 轮结果统一携带回退记录（空数组 = 未发生回退）+ v0.16 智能选择审计（关闭时缺省）。 */
+const withFallbacks = (out) => ({
+  ...(smartSelection && typeof smartSelection === 'object' ? { smartSelection } : {}),
+  ...out,
+  fallbacks,
+})
 
 // v0.6 TeamExecutor: the persistent teammate already did the task work; the
 // controller hands its report in as `taskReport`. Skip the task agent entirely

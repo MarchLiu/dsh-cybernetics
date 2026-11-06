@@ -364,6 +364,11 @@ export async function startTeamRound(
             goalItselfQuestionable: false,
           },
           triage: { auto: [], defer: [], reject: [], human: [] },
+          // v0.16: launch-side smart-selection audit rides the round record on
+          // the persistent-quick path too (the task row in it is 'skipped' —
+          // spawnTeammate takes no model overrides — so the audit never claims
+          // an override that did not happen).
+          ...(config.smartSelection !== undefined ? { smartSelection: config.smartSelection } : {}),
         }
         return { stopReason: 'completed', value: result }
       }
@@ -385,6 +390,10 @@ export async function startTeamRound(
           depth: 'full',
           role: state.role,
           roles: config.roles ?? {},
+          // v0.16 smart-selection audit: verify/triage still run as ephemeral
+          // round.js agents on persistent full rounds, so their rows in the
+          // audit are live decisions; the task row records the explicit skip.
+          ...(config.smartSelection !== undefined ? { smartSelection: config.smartSelection } : {}),
           taskReport: report,
         },
         parent,

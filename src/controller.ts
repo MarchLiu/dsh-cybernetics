@@ -11,6 +11,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { WorkflowEngine } from '@deepseek-ai/dsh-workflow'
+import type { SmartSelectionAudit } from './modelSelection.ts'
 
 /** Directory holding per-round audit logs, relative to the workspace root. */
 export const STATE_DIR = '.cybernetics'
@@ -51,6 +52,14 @@ export interface RoundResult {
   fallbacks?: RoleFallback[]
   /** Execution substrate used for this round (v0.6 audit). */
   executor?: 'ephemeral' | 'persistent'
+  /**
+   * v0.16 smart-selection audit (only when `smartAgentModelSelection` was on
+   * at launch): the round's task classification, input summary, catalog size
+   * and the per-role model decision trail. The round script echoes it from
+   * its workflow args verbatim — the decision is made at launch time (see
+   * src/modelSelection.ts), the script only carries it into the record.
+   */
+  smartSelection?: SmartSelectionAudit
 }
 
 /** LLM target overrides for one sub-agent role; workflow `agent()` opts subset. */
@@ -116,6 +125,16 @@ export interface ControllerConfig {
   roundScriptPath: string
   /** Per-role model/provider overrides handed to the round script. */
   roles?: RolesConfig
+  /**
+   * v0.16: this round's smart-selection audit (present only when the
+   * `smartAgentModelSelection` toggle was on and the selection ran). Passed
+   * through to the round script as a workflow arg so the round record
+   * (.cybernetics/round-*.json) carries WHY each role ran on its model —
+   * the same observability pattern as `fallbacks`. Per-round: the caller
+   * recomputes it at every launch, so a settings-panel toggle governs the
+   * very next round.
+   */
+  smartSelection?: SmartSelectionAudit
 }
 
 /** What the controller decided after folding one round. */
@@ -376,6 +395,9 @@ export async function startRound(
       depth: state.depth ?? 'full',
       role: state.role,
       roles: config.roles ?? {},
+      // v0.16 smart-selection audit: absent key when the feature is off (the
+      // binder rejects undefined values the same way it does for brief).
+      ...(config.smartSelection !== undefined ? { smartSelection: config.smartSelection } : {}),
     },
     parent,
     signal,

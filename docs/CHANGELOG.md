@@ -4,6 +4,22 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.16（2026-11-06）：智能选择 Agent 配置（`smartAgentModelSelection` 二元开关 + 首轮启发式自动选配）
+
+**需求**：v0.15 已打通 per-role 模型+档位全链路，但选择完全靠配置或 session agent 手工指定；希望每轮启动时按任务内容自动为 task/verify/triage 选配合适模型——简单任务（删文件、git 提交等）用轻量模型提速省资源，困难任务（不常见语言、复杂数学等）落顶配，写作类落写作特长模型；显式配置恒优先，选不到/分类失败静默回退继承并记审计。
+
+- **新模块 `src/modelSelection.ts`**（纯函数 + 宿主软探测）：`classifyTaskText` 规则启发式分类（trivial/writing/hard/standard，优先级 hard > writing > trivial > standard，standard 完全不介入）；`modelTier` generic 档位推导（参数量 token `8b/30b/70b` 优先于命名 token mini/flash/…/opus/ultra/…，session 路由 = 顶配参照，无信号 = mid）；`picksForClass`（trivial → 轻量×3；hard → 顶配 task+verify + 轻量 triage；writing → 写作特长模型 task + 继承 verify + 轻量 triage）；`computeSmartSelection` 合并/审计（显式 provider/model 恒优先、effort-only 行不换路由、named task 角色行、quick 只产 task 行、persistent task 行显式 skipped、selected/kept-explicit/kept-inherit/skipped 四态决策 + 理由，永不抛错）；`probeCatalogOptions`（宿主根级 `llm` 服务 `listProviders/listModels`，provider 级失败隔离，软探测永不抛）；`sessionRouteOf`（requestHeader 优先、options 兜底，与 dsh-subagent 继承解析一致）。
+- **模型目录真实获取**：候选只来自宿主实时目录（`buildModelCatalog` 同源），绝不硬编码模型名；目录不可用/为空 → 全角色 kept-inherit + `catalogStatus: 'unavailable'`。
+- **选择时机 = 每次 launch**：`src/index.ts` 新增 `roundConfigFor(target)`——revise 会启动 successor goal（brief/objective/depth 可能与调用目标不同），分类针对实际启动的 target；合并产出 per-launch 的 roles 副本 + 审计，`startAnyRound` 返回值携带 config，`launchBackground` 把实际生效配置存进 handle（collect 折叠所见即所发）。volatile 开关逐 launch 读取，面板保存下一轮即生效。
+- **下发与审计链**：`ControllerConfig.smartSelection` → `startRound` 注入 workflow args（关闭时缺省键，binder 拒绝 undefined）→ `workflows/round.js` 四种结果形态经 `withFallbacks` 原样回传 → `foldRound` 落盘 `.cybernetics/round-<goalId>-<N>.json`（仿 v0.8 fallbacks 先例）；persistent 路径经 `executor.ts` 同步携带（quick 结果 + full 的 round.js args）。
+- **persistent executor 显式跳过**：`spawnTeammate` 不接受模型覆盖——task 行审计 `skipped` + 理由，verify/triage（full 持久轮）照常可选；quick 持久轮审计只有 skipped 的 task 行。
+- **v0.16 不自动分配 reasoningEffort**（设计裁定）：档位 id 模型相关，自动分配需逐选中模型 `resolveModelInfo` 探测（每轮每角色适配器 I/O + 额外失败面）；本轮只选路由，档位留给模型默认或现有平面 effort 字段。
+- **为什么规则启发式而非廉价模型调用**（宿主能力核实结论）：宿主有裸补全面（`ctx.llm.prepareCall().stream()`，session-title-llm 模式）但要求引入 `@deepseek-ai/dsh-llm` 运行时依赖（本插件刻意零依赖）+ 每轮一次 provider 往返 + 第二失败面；确定性分类零成本、离线可测、误分类经审计可见且可被显式配置覆盖。
+- **设置卡片**（lib/client.js）：`smartAgentModelSelection` 布尔开关（硬门下方、三个 agent 分组上方——它重新解释下方分组行的语义）；zh/en locale 各 2 个新 key（含回退语义说明）。
+- **文档**：README.md / README.zh-CN.md 新增「Smart agent model selection / 智能选择 Agent 配置」小节（分类规则表 + 档位推导 + 合并优先级 + 回退 + 审计示例 JSON + 两项设计裁定），配置卡片/插件页配置清单同步；`cybernetics` 工具 description 补充自动选配与审计说明。
+- **测试**：`test/v16-smart-selection.mjs` 新增 10 组（分类规则+优先级、档位推导、逐类选择、合并优先级 4 例、回退 3 例、审计形态 + quick/persistent 语义、宿主软探测、startRound/round.js/executor 三层透传、插件端到端 8 例〔开关关闭 = 旧参逐字节一致、trivial/hard/显式优先/live-ref/无 llm 服务/revise 分类 successor brief/审计文件落盘〕、设置卡片开关渲染 + zh/en key + 写入路径）；`test/v03-offline.mjs` volatile 表单断言 12 → 13 字段（+`smartAgentModelSelection`）。复跑 `node test/v03-offline.mjs` → **ALL 75 CHECKS PASSED**，v09/v10/v12/v13/v14/v15/v16 全绿。
+- **生效手段**：`src/` 改动——宿主重载生效；`lib/client.js` 改动——重启宿主并刷新浏览器；`workflows/round.js` 改动热生效。
+
 ## v0.15（2026-11-06）：sub agent 思考强度（设置页档位选择 + round 透传与回退 + ptc 接缝补丁工具）
 
 **需求**：task/verify/triage 三类 sub agent 此前只能指定 provider/model，无法单独调思考强度；希望按 agent 选配 reasoning effort 档位（只钉档位、保留会话模型也有效），档位选项动态来自模型能力元数据而非硬编码，档位不被支持时安全回退并可审计。
