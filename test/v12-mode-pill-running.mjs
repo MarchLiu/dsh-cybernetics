@@ -3,8 +3,8 @@
 //   - countRunningGoals: the pure board-shape reducer (running count +
 //     highest round among running goals) across real / malformed shapes,
 //   - locale dictionaries carry the new bilingual tooltip key,
-//   - the pulse CSS (keyframes + prefers-reduced-motion fallback) injects
-//     once into document.head and never duplicates,
+//   - the running-ring CSS (spin keyframes + prefers-reduced-motion fallback)
+//     injects once into document.head and never duplicates,
 //   - client.js factory still evaluates and exports the reducer.
 // Run: node test/v12-mode-pill-running.mjs
 
@@ -86,18 +86,23 @@ await import('../lib/client.js')
   console.log(`✓ 2 locale: bilingual mode.tip.running key + zh/en mode.* key parity (${zhKeys.length} keys)`)
 }
 
-// --- 3. pulse CSS: injects once, honors prefers-reduced-motion ---------------
+// --- 3. ring CSS: injects once, honors prefers-reduced-motion ----------------
 {
   const source = (await import('node:fs')).readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
-  assert.ok(source.includes('@keyframes dsh-cybernetics-pill-pulse'), 'keyframes declared')
+  assert.ok(source.includes('@keyframes dsh-cybernetics-pill-spin'), 'spin keyframes declared')
+  assert.ok(source.includes('.dsh-cybernetics-pill-ring-running { animation: dsh-cybernetics-pill-spin 3s linear infinite'), 'ring rotates 3s linear infinite')
+  assert.ok(source.includes('strokeDasharray'), 'ring arc carries a visible gap (stroke-dasharray)')
   assert.ok(source.includes('@media (prefers-reduced-motion: reduce)'), 'reduced-motion fallback declared')
-  assert.ok(source.includes('animation: none'), 'reduced-motion degrades to static dot')
-  assert.ok(source.includes("document.getElementById(PILL_PULSE_STYLE_ID)"), 'injection guarded by style id')
-  // The pulse class only reaches the dot when mode on AND a goal runs — the
-  // className is computed from `pulsing`, itself gated on effective === true.
-  assert.ok(source.includes("className: pulsing ? 'dsh-cybernetics-pill-dot-running' : undefined"), 'pulse class gated on pulsing flag')
+  assert.ok(source.includes('animation: none'), 'reduced-motion degrades to static ring')
+  assert.ok(source.includes("document.getElementById(PILL_SPIN_STYLE_ID)"), 'injection guarded by style id')
+  // No zombie pulse CSS: the old dot-pulse id/class/keyframes must be gone.
+  assert.ok(!source.includes('dsh-cybernetics-pill-pulse {'), 'old pulse keyframes removed')
+  assert.ok(!source.includes('.dsh-cybernetics-pill-dot-running'), 'old pulse class removed')
+  // The ring only reaches the pill when mode on AND a goal runs — the
+  // element is computed from `pulsing`, itself gated on effective === true.
+  assert.ok(source.includes("pulsing\n\t\t\t\t\t\t? jsx.jsx('svg'"), 'ring element gated on pulsing flag')
   assert.ok(source.includes('const pulsing = state.ready && state.effective === true && running.count > 0'), 'pulsing = ready + on + running')
-  console.log('✓ 3 pulse CSS: single-injection guard, reduced-motion fallback, on+running gating')
+  console.log('✓ 3 ring CSS: single-injection guard, 3s linear spin, dasharray gap, reduced-motion fallback, on+running gating')
 }
 
 // --- 4. client.js factory: inject unchanged, exports intact -------------------

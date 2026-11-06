@@ -69,13 +69,21 @@ reasoningEffort 会以 UNSUPPORTED_OPTION 致命失败。补丁（共 7 处替�
 - 新增 `findCatalogModel`（与既有 isConfiguredModelAvailable 相同的匹配规则）与
   `effortRow`（kind: 'effort'，成对跟随每个模型字段）：
   - 选项 = 「跟随模型默认（不发送参数）」+ 该模型 reasoning.efforts（按目录顺序）；
-  - 模型不支持强度：下拉禁用 +「该模型不支持思考强度」，绝不出空下拉/报错；
+  - v0.17.3：模型无强度档位（reasoning 缺失 / efforts 为空）时**不再禁用、不再提示**
+    ——下拉保留且仅含「跟随模型默认」一项（该项本就不发送参数，恰是这类模型所需）；
+    无档位模型上存旧 token（off/high…）→ **无任何提示**，仍不改写配置
+    （只有模型确有档位、且值不在其中时才提示回退）；
+  - v0.17.3：纯 off 模型（所有档位的 id 或 name 均为 off/none，大小写不敏感）与
+    「跟随模型默认」语义相同 → 折叠为该项（存储的 off id 显示为默认，不报警、不写）；
+    含任一真实档位的模型（如 glm-5.3 的 off/minimal/…/max）完整保留 off，去重不扩大；
   - 未配置模型（继承 session agent）：禁用 + 提示先选模型；
   - 目录未就绪：禁用 + 加载提示；
-  - 配置的档位不在该模型支持列表（枚举变化/配置损坏）：显示实际生效值（模型默认）
-    + 回退说明，存储值仅在用户主动保存时被覆盖（与“一键清除”同策略，不静默改配置）；
+  - 模型有档位但配置的档位不在声明列表（枚举变化/配置损坏）：显示实际生效值
+    （模型默认）+ 回退说明，存储值仅在用户主动保存时被覆盖（与“一键清除”同策略，
+    不静默改配置）；无档位模型不进入该分支（零提示）；纯 off 模型上 off/none 之外的
+    存量 token 仍提示（真实不匹配）；
   - 选择即经共享 writeField 落 volatile 写（'' = unset 操作）。
-- zh/en 词典各加 9 个 key。
+- zh/en 词典各 8 个 key（v0.17.3 删除 `settings.effortUnsupported`）。
 
 ## 验证（R1 交付时，全部在 stage/ 副本上执行）
 
@@ -109,11 +117,24 @@ node effort-patch/apply-ptc.mjs verify      # 确认 live 含全部接缝锚点
 # 覆盖回同名文件即可。
 ```
 
+> **v0.17.3 幂等性修正**：`client:effort-row-renderer` 补丁条目新增显式 `done` 标记
+> （= `CLIENT_EFFORT_ROW` 逐字块）。此前该条目的“已应用”检测依赖整段 `replace`（含
+> fieldRow 尾部），v0.17 增补 preset 行后永不命中，`check` 会把它报为 ready、`apply`
+> 会重复插入 effortRow。现在对当前检出 `check` / `dry-run` 均为
+> **0/22 anchor ready, 0 failure（全部 SKIP）**，重打补丁不会回退也不会重复。
+
 ## 手动验证路径（应用并重启后）
 
 1. Web 设置 → 插件 → dsh-cybernetics：三个模型字段下方各出现「思考强度」下拉。
-2. 选 glm-5.3（reasoningEfforts: off/minimal/low/medium/high/max）→ 下拉出现全部档位；
-   选无强度模型（如 doubao-seed-2.1-pro）→ 禁用 +「该模型不支持思考强度」。
+2. 选 glm-5.3（reasoningEfforts: off/minimal/low/medium/high/max）→ 下拉出现全部档位
+   （含 off；有真实档位的模型不做 off 去重）；
+   选无强度模型（如 ollama/qwen3.8:latest、doubao-seed-2.1-pro）→ 下拉**仍可点击**，
+   仅一项「跟随模型默认」，**无黄色警告**；
+   若该模型上配置里存了旧档位 token（off/high…）→ 仍然**无任何提示**
+   （模型没声明任何档位，不存在可回退的声明列表）；
+   选纯 off 模型（档位只有 off / none）→ 同样只有「跟随模型默认」一项、无警告；
+   若此前存的是 off，下拉显示为「跟随模型默认」（同一选项，不报警、不改写配置）；
+   若此前存的是 high 等 off/none 之外的 token → 仍显示回退说明（它确实不在声明档位里）。
 3. 清空模型字段 → 强度下拉禁用并提示先选模型。
 4. 选择档位 → 即时保存（卡片顶部「保存中」→消失）；下一轮 goal 的子 agent 请求带
    reasoningEffort（可在会话日志/子 agent 描述符 agentReasoningEffort 处核对）。

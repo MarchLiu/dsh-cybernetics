@@ -11,12 +11,30 @@
 //   (1) the catalog store carries model.reasoning through to its options;
 //   (2) a reasoning-capable model (glm-5.3-flash shape) lists its levels and
 //       the select is enabled;
-//   (3) a model without reasoning renders disabled + the unsupported note —
-//       never an empty dropdown, never a throw;
+//   (3) v0.17.3: a model without reasoning levels — the user's REAL
+//       ollama/qwen3.8:latest (cordis.patch.yml declares it with no
+//       reasoningEfforts) plus the synthetic deepseek effort-less model —
+//       stays SELECTABLE with the single 「跟随模型默认」 option and renders NO
+//       unsupported warning — never an empty dropdown, never a throw; a stale
+//       stored level renders NO note either (v0.17.3 follow-up: the model
+//       declares no level, so there is nothing to fall back from — the user
+//       reported the old fallback note on ollama + stored 'off' as pure noise);
 //   (4) a stored level the model no longer offers shows the EFFECTIVE value
-//       ('' = model default) plus the fallback note, without rewriting config;
+//       ('' = model default) plus the fallback note, without rewriting config.
+//       The note is conditional on the model DECLARING levels: a pure-off model
+//       with a token outside off/none still warns (genuine mismatch), an
+//       effort-less model never does;
 //   (5) layout: each agent's model + effort pair sits under its own group
-//       header (Task → Verify → Triage), zh/en locale keys complete.
+//       header (Task → Verify → Triage), zh/en locale keys complete;
+//   (6) v0.17.3: a "pure off" model (every level is off/none — a SYNTHETIC
+//       shape under synthetic-off/off-only:latest; production currently has
+//       no pure-off model) collapses into that same single default option — a
+//       stored off id displays as the default, no warning, no write;
+//   (7) v0.17.3: a model offering any real level (glm-5.3) keeps its off entry
+//       and every other level — the dedupe never widens past the pure-off shape;
+//   (8) the effort-patch table stays byte-synced: every lib/client.js anchor and
+//       its applied-state marker (incl. the explicit `done` for the insertion
+//       patch) exists verbatim, so `patch-v2 check` keeps skipping idempotently.
 // No DSH runtime: lib/client.js is loaded verbatim like the ModuleLoader does,
 // with stubbed react / react-jsx-runtime (same harness as test 68 of
 // v03-offline.mjs).
@@ -32,11 +50,36 @@ const CATALOG_PAYLOAD = {
         id: 'zai-coding-cn', name: 'Zai Coding CN',
         models: [
           { id: 'glm-5.3-flash', name: 'GLM 5.3 Flash', reasoning: { efforts: [{ id: 'high', name: 'High' }, { id: 'default', name: 'Default' }], defaultEffort: 'default' } },
+          // v0.17.3: real levels + off — the off entry must be PRESERVED here.
+          { id: 'glm-5.3', name: 'GLM 5.3', reasoning: { efforts: [{ id: 'off', name: 'Off' }, { id: 'minimal', name: 'Minimal' }, { id: 'low', name: 'Low' }, { id: 'medium', name: 'Medium' }, { id: 'high', name: 'High' }, { id: 'max', name: 'Max' }], defaultEffort: 'medium' } },
         ],
       },
       {
         id: 'deepseek', name: 'DeepSeek',
         models: [{ id: 'no-effort-model', name: 'No Effort Model' }],
+      },
+      {
+        // synthetic pure-off shape — 生产当前没有纯 off 模型；纯 off 折叠逻辑是
+        // 本轮新增的防御分支。 Production has NO pure-off model (cordis.patch.yml
+        // declares reasoningEfforts only for other providers), so this collapse
+        // coverage lives under its own synthetic group/model ids and must never
+        // be re-pointed at a real model id. Mixed-case 'NONE' pins the
+        // case-insensitive off/none detection.
+        id: 'synthetic-off', name: 'Synthetic Off',
+        models: [
+          { id: 'off-only:latest', name: 'Off Only (latest)', reasoning: { efforts: [{ id: 'off', name: 'Off' }, { id: 'NONE', name: 'None' }], defaultEffort: 'off' } },
+        ],
+      },
+      {
+        // The user's ACTUAL shape: cordis.patch.yml:552 sets
+        // triageAgentModel: ollama/qwen3.8:latest while the ollama provider
+        // declares qwen3.8:latest with NO reasoning metadata at all — this hits
+        // the effort-less branch of (3)/(3b), never the pure-off branch.
+        id: 'ollama', name: 'Ollama',
+        models: [
+          { id: 'qwen3.8:latest', name: 'Qwen3.8 27B (Ollama)' },
+          { id: 'qwen3-vl:latest', name: 'Qwen3-VL 8B (Ollama)' },
+        ],
       },
     ],
     failures: [],
@@ -146,6 +189,11 @@ const formOf = (snap, hooks = {}) => ({
   assert.ok(bare && bare.reasoning, 'bare-name match resolves the same reasoning-bearing option')
   const noEffort = snap.options.find((o) => o.value === 'deepseek/no-effort-model')
   assert.equal(noEffort.reasoning, undefined, 'model without reasoning keeps reasoning undefined')
+  const qwen = snap.options.find((o) => o.value === 'ollama/qwen3.8:latest')
+  assert.ok(qwen, 'ollama/qwen3.8:latest option present (the real triageAgentModel from cordis.patch.yml:552)')
+  assert.equal(qwen.reasoning, undefined, 'real ollama/qwen3.8:latest keeps reasoning undefined — production declares no reasoningEfforts for ollama')
+  const qwenVl = snap.options.find((o) => o.value === 'ollama/qwen3-vl:latest')
+  assert.ok(qwenVl && qwenVl.reasoning === undefined, 'ollama/qwen3-vl:latest present and equally effort-less')
   console.log('✓ v15 (1) catalog store passes model.reasoning through (picker-shaped fixture)')
 }
 
@@ -165,16 +213,104 @@ const formOf = (snap, hooks = {}) => ({
   console.log('✓ v15 (2) glm-5.3-flash lists high/default levels, select enabled')
 }
 
-// (3) Model without reasoning: disabled + unsupported note, no throw.
+// (3) v0.17.3: model without reasoning levels — the select stays ENABLED with
+//     the single 「跟随模型默认」 option and renders NO unsupported warning.
+//     「跟随模型默认」 = send no strength parameter, which is exactly what such
+//     a model wants; disabling it or warning was the reported defect.
+//     Regression core: triageAgentModel='ollama/qwen3.8:latest' is the user's
+//     verbatim config (cordis.patch.yml:552); the synthetic deepseek
+//     effort-less model keeps the generic coverage alongside it.
 {
   const h = await loadHarness()
-  const face = { form: formOf(baseConfig({ triageAgentModel: 'deepseek/no-effort-model' })) }
+  for (const model of ['ollama/qwen3.8:latest', 'deepseek/no-effort-model']) {
+    const unsets = []
+    const sets = []
+    const face = {
+      form: formOf(baseConfig({ triageAgentModel: model }), {
+        unset: async (field) => { unsets.push(field); return true },
+        set: async (field, value) => { sets.push([field, value]); return true },
+      }),
+    }
+    const select = h.findSelect(face, 'settings.triageAgentEffort')
+    assert.ok(select, `triage effort select rendered (${model})`)
+    assert.equal(select.props.disabled, false, `select ENABLED without reasoning metadata (v0.17.3, ${model})`)
+    assert.equal(select.props.children.length, 1, `no phantom level options (default-only, ${model})`)
+    assert.equal(select.props.children[0].props.value, '', `the single option is 跟随模型默认 (value '', ${model})`)
+    const text = h.flatten(h.render(face)).join('\n')
+    assert.ok(!text.includes('该模型不支持思考强度'), `no unsupported warning for an effort-less model (${model})`)
+    assert.ok(!text.includes('不在当前模型支持列表'), `stored value is empty → no fallback note either (${model})`)
+    assert.equal(unsets.length, 0, `rendering performs no silent write (${model})`)
+    // The option is selectable: picking it is the shared volatile unset write.
+    select.props.onChange({ target: { value: '' } })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(unsets, ['triageAgentReasoningEffort'], `choosing 跟随模型默认 writes the volatile unset op (${model})`)
+    assert.equal(sets.length, 0, `no concrete level is written (${model})`)
+  }
+  console.log('✓ v15 (3) effort-less model → enabled single 跟随模型默认 option, no warning, write works')
+}
+
+// (3b) v0.17.3 follow-up (user ruling): a stale concrete token on an
+//      effort-less model renders NO note at all. The model sends no strength
+//      parameter for ANY token, so displaying "配置的档位 off 不在当前模型支持
+//      列表中" (the note the user saw on ollama/qwen3.8:latest + stored 'off')
+//      was pure noise. Covered for the real ollama/qwen3.8:latest and the
+//      synthetic deepseek model; the last case is the user's verbatim
+//      production combo (triageAgentReasoningEffort: 'off').
+{
+  const h = await loadHarness()
+  const cases = [
+    { model: 'ollama/qwen3.8:latest', stored: 'high' },
+    { model: 'deepseek/no-effort-model', stored: 'high' },
+    { model: 'ollama/qwen3.8:latest', stored: 'off' }, // cordis.patch.yml:552 + :555 verbatim
+  ]
+  for (const { model, stored } of cases) {
+    const unsets = []
+    const sets = []
+    const face = {
+      form: formOf(baseConfig({ triageAgentModel: model, triageAgentReasoningEffort: stored }), {
+        unset: async (field) => { unsets.push(field); return true },
+        set: async (field, value) => { sets.push([field, value]); return true },
+      }),
+    }
+    const select = h.findSelect(face, 'settings.triageAgentEffort')
+    assert.equal(select.props.disabled, false, `still enabled (${model}, stored=${stored})`)
+    assert.equal(select.props.children.length, 1, `still default-only (${model}, stored=${stored})`)
+    assert.equal(select.props.value, '', `effective selection is the model default (${model}, stored=${stored})`)
+    const text = h.flatten(h.render(face)).join('\n')
+    assert.ok(!text.includes('不在当前模型支持列表'), `no fallback note for an effort-less model (${model}, stored=${stored})`)
+    assert.ok(!text.includes(stored), `the unused stored token is not surfaced anywhere (${model}, stored=${stored})`)
+    assert.ok(!text.includes('该模型不支持思考强度'), `the removed unsupported warning never renders (${model}, stored=${stored})`)
+    assert.equal(unsets.length, 0, `no silent rewrite (${model}, stored=${stored})`)
+    assert.equal(sets.length, 0, `no concrete level written either (${model}, stored=${stored})`)
+  }
+  console.log('✓ v15 (3b) stale token on effort-less model → no note at all, no unsupported warning')
+}
+
+// (3c) v0.17.3 follow-up scenario 4: a pure-off model DOES declare levels
+//      (off/none) — just not 'high'. That stored token is a genuine mismatch,
+//      so the fallback note must still render (only effort-less models lose
+//      it). Same no-write policy; the effective selection stays the default.
+{
+  const h = await loadHarness()
+  const unsets = []
+  const sets = []
+  const face = {
+    form: formOf(baseConfig({ triageAgentModel: 'synthetic-off/off-only:latest', triageAgentReasoningEffort: 'high' }), {
+      unset: async (field) => { unsets.push(field); return true },
+      set: async (field, value) => { sets.push([field, value]); return true },
+    }),
+  }
   const select = h.findSelect(face, 'settings.triageAgentEffort')
-  assert.ok(select, 'triage effort select rendered')
-  assert.equal(select.props.disabled, true, 'select disabled without reasoning metadata')
-  assert.equal(select.props.children.length, 1, 'no phantom level options (default-only)')
-  assert.ok(h.flatten(h.render(face)).join('\n').includes('该模型不支持思考强度'), 'unsupported note shown')
-  console.log('✓ v15 (3) effort-less model → disabled select + 该模型不支持思考强度, no error')
+  assert.ok(select, 'triage effort select rendered (pure-off model, stored=high)')
+  assert.equal(select.props.disabled, false, 'still enabled (pure-off model is resolved)')
+  assert.equal(select.props.children.length, 1, 'pure-off levels still collapse into the single default option')
+  assert.equal(select.props.value, '', 'effective selection is the model default')
+  const text = h.flatten(h.render(face)).join('\n')
+  assert.ok(text.includes('不在当前模型支持列表') && text.includes('high'), 'fallback note survives for a token outside the declared off/none levels')
+  assert.ok(!text.includes('该模型不支持思考强度'), 'no removed unsupported warning')
+  assert.equal(unsets.length, 0, 'no silent unset rewrite')
+  assert.equal(sets.length, 0, 'no silent concrete write')
+  console.log('✓ v15 (3c) pure-off model + token outside off/none → fallback note still shown, config untouched')
 }
 
 // (4) Stored level the model no longer offers: effective value shown ('' =
@@ -206,6 +342,9 @@ const formOf = (snap, hooks = {}) => ({
     for (const key of ['settings.groupTask', 'settings.groupVerify', 'settings.groupTriage']) {
       assert.equal(typeof h.dicts[lang][key], 'string', `${lang} locale has ${key}`)
     }
+    // v0.17.3: the removed "unsupported" warning must not linger in either
+    // dictionary (it was the copy the user objected to).
+    assert.equal(h.dicts[lang]['settings.effortUnsupported'], undefined, `${lang} locale no longer ships settings.effortUnsupported`)
   }
   const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
   const order = [
@@ -227,7 +366,96 @@ const formOf = (snap, hooks = {}) => ({
     .map((key) => text.indexOf(h.t(key)))
   assert.ok(positions.every((i) => i >= 0), 'all group/model/effort labels render')
   assert.deepEqual(positions, [...positions].sort((a, b) => a - b), 'rendered order matches the grouped layout')
+  // v0.17.3: pre-existing disabling states are untouched. No model configured
+  // (inherit the session agent) still disables with the needs-model hint.
+  const noModelSelect = h.findSelect(face, 'settings.triageAgentEffort')
+  assert.equal(noModelSelect.props.disabled, true, 'no model configured → select still disabled')
+  assert.ok(text.includes(h.t('settings.effortNeedsModel')), 'no model configured → needs-model hint still rendered')
+  // Global readonly (writable:false) still disables a resolved effort-less model.
+  const readonlyFace = { form: formOf({ ...baseConfig({ triageAgentModel: 'deepseek/no-effort-model' }), writable: false }) }
+  assert.equal(h.findSelect(readonlyFace, 'settings.triageAgentEffort').props.disabled, true, 'readonly config → select disabled regardless of model levels')
+  const readonlyFaceQwen = { form: formOf({ ...baseConfig({ triageAgentModel: 'ollama/qwen3.8:latest' }), writable: false }) }
+  assert.equal(h.findSelect(readonlyFaceQwen, 'settings.triageAgentEffort').props.disabled, true, 'readonly config → ollama/qwen3.8:latest (real user shape) stays disabled too')
   console.log('✓ v15 (5) per-agent groups Task/Verify/Triage with adjacent model+effort, zh/en keys complete')
+}
+
+// (6) v0.17.3: pure-off model (every level is off/none — SYNTHETIC shape
+//     synthetic-off/off-only:latest; production currently has NO pure-off
+//     model, so this is the defensive branch added this round, NOT the user's
+//     qwen3.8 case — that one is effort-less and covered by (3)/(3b)). off IS
+//     跟随模型默认 (both send nothing), so the list collapses to that single
+//     option; a stored off/none id displays as the default with no warning and
+//     no rewrite. Detection is case-insensitive on id AND name.
+{
+  const h = await loadHarness()
+  for (const stored of ['', 'off', 'NONE']) {
+    const unsets = []
+    const face = {
+      form: formOf(baseConfig({ triageAgentModel: 'synthetic-off/off-only:latest', triageAgentReasoningEffort: stored }), {
+        unset: async (field) => { unsets.push(field); return true },
+      }),
+    }
+    const select = h.findSelect(face, 'settings.triageAgentEffort')
+    assert.ok(select, `triage effort select rendered (stored=${JSON.stringify(stored)})`)
+    assert.equal(select.props.disabled, false, 'enabled (pure-off model is resolved and selectable)')
+    assert.equal(select.props.children.length, 1, 'pure-off levels collapse into the single default option')
+    assert.equal(select.props.children[0].props.value, '', 'the collapsed option is 跟随模型默认 (value \'\')')
+    assert.equal(select.props.value, '', 'a stored off/none id is the SAME option → displays as the default')
+    const text = h.flatten(h.render(face)).join('\n')
+    assert.ok(!text.includes('该模型不支持思考强度'), 'no unsupported warning for a pure-off model')
+    assert.ok(!text.includes('不在当前模型支持列表'), 'no fallback note: the stored off id is the collapsed option')
+    assert.equal(unsets.length, 0, 'rendering performs no silent write for a stored off id')
+  }
+  console.log('✓ v15 (6) pure-off model → single 跟随模型默认 option, stored off/none reads as default, no warning')
+}
+
+// (7) v0.17.3 scope guard: a model with ANY real level (glm-5.3:
+//     off/minimal/low/medium/high/max) keeps its off entry and every other
+//     level, and a stored off stays a concrete selection. The dedupe must not
+//     widen beyond the pure-off shape (user-confirmed scope).
+{
+  const h = await loadHarness()
+  const face = { form: formOf(baseConfig({ taskAgentModel: 'zai-coding-cn/glm-5.3', taskAgentReasoningEffort: 'off' })) }
+  const select = h.findSelect(face, 'settings.taskAgentEffort')
+  assert.ok(select, 'task effort select rendered')
+  assert.equal(select.props.disabled, false, 'enabled')
+  const options = select.props.children
+  assert.equal(options.length, 7, 'default option + all six real levels')
+  assert.deepEqual(options.slice(1).map((o) => o.props.value), ['off', 'minimal', 'low', 'medium', 'high', 'max'], 'off is preserved alongside the real levels')
+  assert.equal(select.props.value, 'off', 'a stored off stays a concrete selection (not collapsed)')
+  const text = h.flatten(h.render(face)).join('\n')
+  assert.ok(!text.includes('不在当前模型支持列表'), 'off is a valid level here → no fallback note')
+  assert.ok(!text.includes('该模型不支持思考强度'), 'no unsupported warning')
+  console.log('✓ v15 (7) model with real levels keeps off + all levels; stored off is not collapsed')
+}
+
+// (8) v0.17.3 patch-table sync guard: the effort-patch table must stay a
+//     verbatim mirror of lib/client.js, otherwise a host upgrade re-patch would
+//     either revert this change (locale/effort blocks) or duplicate effortRow
+//     (the insertion patch reports ready when its `done` marker is missing).
+//     Mirrors patch-v2.mjs's applied-state detection exactly.
+{
+  const { PATCHES } = await import('../effort-patch/patches.mjs')
+  const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const effortPatches = PATCHES.filter((p) => p.file === 'lib/client.js'
+    && (p.id === 'client:locale-zh-effort-strings'
+      || p.id === 'client:locale-en-effort-strings'
+      || p.id === 'client:find-catalog-model-helper'
+      || p.id === 'client:effort-row-renderer'))
+  assert.equal(effortPatches.length, 4, 'all four effort patches present in the table')
+  for (const p of effortPatches) {
+    const anchorCount = client.split(p.find).length - 1
+    const doneText = p.done ?? (p.replace.startsWith(p.find) ? p.replace.slice(p.find.length) : p.replace)
+    const doneCount = doneText === '' ? (anchorCount === 0 ? 1 : 0) : client.split(doneText).length - 1
+    // Same tri-state as patch-v2.mjs: already-applied → SKIP; else the forward
+    // anchor must occur exactly once or the runner FAILs.
+    assert.ok(doneCount >= 1 || anchorCount === 1, `${p.id}: either applied-state marker present or exactly one forward anchor (never the runner's FAIL state)`)
+    assert.ok(!p.replace.includes('settings.effortUnsupported'), `${p.id}: re-patching cannot resurrect the removed warning key`)
+    assert.ok(!p.find.includes('settings.effortUnsupported'), `${p.id}: anchor contains no removed warning key`)
+  }
+  const effortRowPatch = PATCHES.find((p) => p.id === 'client:effort-row-renderer')
+  assert.equal(typeof effortRowPatch.done, 'string', 'effortRow insertion patch carries an explicit done marker')
+  console.log('✓ v15 (8) effort patch table is a verbatim mirror of lib/client.js (idempotent re-patch)')
 }
 
 console.log('✓ v15-effort-reasoning: all checks passed')

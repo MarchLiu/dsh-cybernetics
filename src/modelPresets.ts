@@ -5,15 +5,19 @@
  *
  *  - `auto` — 「根据现有配置自动推荐」: read the host's LIVE model catalog
  *    (`probeCatalogOptions`, the same directory the smart selection uses),
- *    build a recommendation REQUEST that embeds the catalog, the current
- *    role config, the cross-vendor principles AND every vendor preset below
- *    as reference context, run one guarded one-shot LLM call, parse the
- *    per-role picks and write them into the flat volatile model/effort fields
- *    (taskAgentModel / verifyAgentModel / triageAgentModel ± their
- *    ReasoningEffort pairs) through the settings service — the exact write
- *    path the panel's own fallback (directMutate → remote.settings.mutate →
- *    @deepseek-ai/dsh-settings SettingsForms.mutate → config editor user
- *    patch row) uses.
+ *    build a recommendation BRIEF that embeds the catalog, the current
+ *    role config and the cross-vendor principles, and HAND THE BRIEF to the
+ *    SESSION AGENT through the plugin-registered `preset_recommend` tool —
+ *    the session agent reads the live catalog in its OWN context, picks the
+ *    per-role answers itself, and submits them back through the same tool.
+ *    v0.18.2 (user ruling 2026-11-06): the previous design ran one guarded
+ *    one-shot LLM call (`ctx.llm.prepareCall().stream()`) on an explicit
+ *    route — that re-submits the whole context a second time (time and cost)
+ *    and spawns a parallel decision path, so the explicit-route config knob
+ *    and the one-shot call were removed entirely:
+ *    the plugin now only builds/validates/writes (parseRecommendation →
+ *    validatePickEfforts → recommendationApplyOps), it never calls an LLM
+ *    and never spawns an agent.
  *  - vendor entries (OpenAI / Claude / Gemini / DeepSeek / Kimi / Qwen /
  *    火山 Coding Plan / Minimax) — per-vendor recommended combinations with
  *    full data: per-role model + reasoning effort (heterogeneous tokens:
@@ -44,27 +48,27 @@
  * - Model names are NOT invented: vendor entries carry the vendor-published
  *   combination data verbatim (including Gemini's family-latest ids that the
  *   brief explicitly wants resolved at runtime, and Kimi's K2 avoidance
- *   note); the auto flow picks only models present in the live catalog.
- *   A vendor id missing from this deployment shows the settings card's
- *   model-unavailable warning and the round's availability fallback keeps the
- *   round alive — data-driven honesty over silent rewriting.
- * - The LLM call is a soft seam: the host exposes a raw one-shot completion
- *   face (`ctx.llm.prepareCall(...).stream()` — the dsh-session-title-llm
- *   pattern), but this plugin stays deliberately zero-dependency on
- *   @deepseek-ai packages, so the message and the chunk collector are built
- *   inline (a user message is `{role, id, content, source}`; visible text
- *   arrives as `text-delta` chunks). Any missing face / transport error /
- *   parse failure degrades to a written degraded-status record — the flow
- *   can never throw into the loader event path and never blocks a round.
+ *   note); the auto flow's brief lets the session agent pick only models
+ *   present in the live catalog, and the submit-side parser enforces the
+ *   same rule. A vendor id missing from this deployment shows the settings
+ *   card's model-unavailable warning and the round's availability fallback
+ *   keeps the round alive — data-driven honesty over silent rewriting.
+ * - The auto flow is plugin-side LLM-free: the plugin probes the catalog,
+ *   renders the brief and validates/submits picks. The only model inference
+ *   involved is the SESSION AGENT's own turn (the user's existing context) —
+ *   zero independent one-shot calls, zero spawned agents. A catalog that is
+ *   empty/unavailable degrades to a written degraded-status record; an
+ *   unusable submission degrades the same way — the flow can never throw
+ *   into the loader event path and never blocks a round.
  * - Effort ids are model-dependent. A vendor preset's effort token is applied
  *   as configured (the schema's sanitizeReasoningEffort drops an unsupported
  *   id at round time and the card shows the effective-default note); the AUTO
  *   picks' efforts are validated against `ctx.llm.resolveModelInfo` when that
  *   face is available and dropped (model kept, effort cleared) otherwise.
  * - Server → card visibility rides the volatile `presetRecommendation`
- *   field: the outcome (applied picks, degradation reason) is written as a
- *   compact JSON record the card renders. Same channel, same gate, same
- *   persistence as every settings write.
+ *   field: the outcome (handed-off pending, applied picks, degradation
+ *   reason) is written as a compact JSON record the card renders. Same
+ *   channel, same gate, same persistence as every settings write.
  * - The selection itself is the volatile `presetPlan` field; the apply is
  *   one-shot per selection change (a `loader/volatile-update` guard in
  *   apply() tracks the last handled value), so a re-fire caused by our own
@@ -84,6 +88,18 @@ import type { CatalogOption } from './modelSelection.ts'
 
 /** The auto-recommend selector id (not a vendor; computed from the live catalog). */
 export const PRESET_AUTO_ID = 'auto'
+
+/**
+ * v0.18.2: the model-facing tool the auto recommendation is handed off
+ * through. The plugin registers it via `ctx.tools.register` (the same face
+ * as the cybernetics tool); the SESSION AGENT calls it in its own context:
+ * first hop without `recommendation` → the tool returns the live catalog +
+ * assignment rules + current config; second hop with `recommendation` (the
+ * JSON answer) → the plugin validates and writes. The name is part of the
+ * hard-gate allowlist contract (src/index.ts keeps it alongside the
+ * cybernetics tool itself).
+ */
+export const PRESET_RECOMMEND_TOOL_NAME = 'preset_recommend'
 
 /** Stable option ids, in dropdown order. The client mirrors these ids. */
 export const PRESET_IDS = [
@@ -594,6 +610,47 @@ export function buildRecommendationPrompt(input: RecommendationRequestInput): Re
   return { system, user }
 }
 
+/** The brief handed to the session agent through the preset_recommend tool. */
+export interface RecommendationBrief {
+  /** false = the catalog was empty/unavailable — nothing to hand off. */
+  ok: boolean
+  /** Degradation reason when ok is false. */
+  reason?: string
+  /** Live catalog size at brief time. */
+  catalogSize: number
+  /** The complete tool-return text when ok (contract + material + protocol). */
+  text?: string
+}
+
+/** The two-hop protocol footer appended to every brief (how to answer). */
+const BRIEF_PROTOCOL = [
+  '## 你的任务（插件交办，请在本回合直接完成，不要新起任何 LLM 调用或子 agent）',
+  '请阅读上面的可用模型列表、通用原则、当前配置与厂商参考，在自己已有的上下文中直接判断，',
+  '然后再次调用本工具（' + PRESET_RECOMMEND_TOOL_NAME + '）并在 `recommendation` 参数中传入推荐 JSON。',
+  'JSON 只含 task/verify/triage 三个键；某角色维持现状输出 null；可选 reasoningEffort 字段遵循上文规则。',
+  '示例：{"task":{"provider":"<provider>","model":"<model>","reasoningEffort":"high"},"verify":null,"triage":null}',
+  '插件负责校验（逐字命中目录、effort 支持性）并把结果写入 task/verify/triage 配置；无需你写入任何配置。',
+].join('\n')
+
+/**
+ * Build the auto-recommendation BRIEF handed to the session agent
+ * (v0.18.2, replaces the old request+one-shot-call pair): the session
+ * agent's system-side contract (buildRecommendationPrompt's system prompt)
+ * plus the material (catalog/principles/config/vendor reference) plus the
+ * two-hop answer protocol. Pure and bounded — the catalog is capped at 200
+ * lines so a huge directory cannot blow the input budget. An empty or
+ * unavailable catalog returns ok:false (the caller degrades).
+ */
+export function buildRecommendationBrief(input: RecommendationRequestInput): RecommendationBrief {
+  const options = Array.isArray(input.options) ? input.options : []
+  const catalogSize = options.length
+  if (catalogSize === 0) {
+    return { ok: false, reason: '当前系统模型目录不可用或为空，无法推荐', catalogSize: 0 }
+  }
+  const request = buildRecommendationPrompt(input)
+  return { ok: true, catalogSize, text: [request.system, '', request.user, '', BRIEF_PROTOCOL].join('\n') }
+}
+
 // --- response parsing (pure) ---------------------------------------------------
 
 /** One recommended pick: the catalog-matched option plus an optional effort. */
@@ -859,16 +916,18 @@ export function vendorPresetApplyOps(
 
 /** The JSON record written into the volatile `presetRecommendation` field. */
 export interface PresetRecommendationRecord {
-  /** ok = applied (auto picks or a ready vendor); placeholder = noted, nothing changed; degraded = why. */
-  status: 'ok' | 'placeholder' | 'degraded'
+  /**
+   * ok = applied (auto picks or a ready vendor); pending = the auto request
+   * was handed to the session agent (v0.18.2, awaiting its tool submission);
+   * placeholder = noted, nothing changed; degraded = why.
+   */
+  status: 'ok' | 'pending' | 'placeholder' | 'degraded'
   /** The selector id this record belongs to ('auto' or a vendor id). */
   preset: string
   /** Display label at apply time. */
   label: string
   /** ISO time of the outcome. */
   at: string
-  /** Route that produced an auto recommendation ('provider/model'). */
-  route?: string
   /** Live catalog size at decision time. */
   catalogSize?: number
   /** Applied per-role routes ('provider/model') — ok only. */
@@ -883,7 +942,7 @@ export interface PresetRecommendationRecord {
   invalid?: string[]
   /** Effort-validation / session-scope notes (auto flow). */
   notes?: string[]
-  /** Degradation / placeholder note. */
+  /** Degradation / placeholder / pending note. */
   reason?: string
 }
 
@@ -899,7 +958,7 @@ export function parseRecommendationRecord(text: unknown): PresetRecommendationRe
     const parsed = JSON.parse(text) as unknown
     if (parsed === null || typeof parsed !== 'object') return undefined
     const record = parsed as Partial<PresetRecommendationRecord>
-    if (record.status !== 'ok' && record.status !== 'placeholder' && record.status !== 'degraded') return undefined
+    if (record.status !== 'ok' && record.status !== 'pending' && record.status !== 'placeholder' && record.status !== 'degraded') return undefined
     if (typeof record.preset !== 'string' || typeof record.label !== 'string') return undefined
     return record as PresetRecommendationRecord
   } catch {
@@ -907,170 +966,46 @@ export function parseRecommendationRecord(text: unknown): PresetRecommendationRe
   }
 }
 
-// --- host probes + the LLM call (soft, never throw) ------------------------------
-
-/** The route the one-shot recommendation call runs on. */
-export interface RecommendRoute {
-  provider?: string
-  model?: string
-}
+// --- submit side: validate the session agent's answer (pure + soft) --------------
 
 /**
- * Resolve the route for the auto call: an explicit `provider/model` (or bare
- * model) wins; otherwise the FIRST high-tier catalog option (the deployment's
- * strongest listed model — the same generic tiering the smart selection uses),
- * falling back to the first option. Pure; empty catalog → undefined.
+ * The outcome of one submitted recommendation (the session agent's answer
+ * routed back through the preset_recommend tool): applied ops or a fully
+ * explained degradation. Mirrors the old recommendModels failure semantics —
+ * unusable reply / zero picks degrade, every failure names its reason.
  */
-export function pickRecommendRoute(explicit: unknown, options: CatalogOption[]): RecommendRoute | undefined {
-  const spec = parseAgentModelSpec(typeof explicit === 'string' ? explicit : undefined)
-  if (spec && (spec.provider || spec.model)) {
-    const matched = matchOption({ provider: spec.provider, model: spec.model }, options)
-    if (matched) return { provider: matched.provider, model: matched.model }
-    // Explicit but off-catalog: still honored verbatim (the call will report
-    // its own transport error and the flow degrades with that reason).
-    return { ...(spec.provider ? { provider: spec.provider } : {}), ...(spec.model ? { model: spec.model } : {}) }
-  }
-  const high = options.find((o) => modelTier(o, {}) === 'high')
-  const chosen = high ?? options[0]
-  return chosen ? { provider: chosen.provider, model: chosen.model } : undefined
-}
-
-/** Build one inline user message (the dsh-session-title message shape, zero imports). */
-function buildUserMessage(text: string): Record<string, unknown> {
-  return {
-    role: 'user',
-    id: cryptoRandomUuid(),
-    content: [{ type: 'text', text }],
-    source: { kind: 'cybernetics-preset-recommend' },
-  }
-}
-
-/** randomUUID with a non-secure fallback (the offline harness may lack crypto). */
-function cryptoRandomUuid(): string {
-  try {
-    if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
-  } catch { /* fall through */ }
-  return `cyb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-}
-
-/** Collect the visible text of one prepared stream (text-delta chunks only). */
-async function collectStreamText(stream: AsyncIterable<unknown>): Promise<string> {
-  let text = ''
-  for await (const chunk of stream) {
-    if (chunk !== null && typeof chunk === 'object' && (chunk as { type?: unknown }).type === 'text-delta') {
-      const delta = (chunk as { text?: unknown }).text
-      if (typeof delta === 'string') text += delta
-    }
-  }
-  return text
-}
-
-/** The guard face read off `ctx.llm` (soft: any shape problem yields undefined). */
-function llmFaceOf(ctx: unknown): { prepareCall: (config: unknown, signal: unknown, configure?: unknown) => Promise<any> } | undefined {
-  try {
-    const llm = (ctx as { llm?: unknown } | null | undefined)?.llm
-    if (llm && typeof (llm as { prepareCall?: unknown }).prepareCall === 'function') {
-      return llm as { prepareCall: (config: unknown, signal: unknown, configure?: unknown) => Promise<any> }
-    }
-  } catch { /* Cordis proxy guard: service not injected */ }
-  return undefined
-}
-
-/**
- * One guarded one-shot LLM call (`ctx.llm.prepareCall().stream()` — the
- * dsh-session-title-llm pattern, imports inlined). NEVER throws: any missing
- * face, abort or transport error returns {ok:false, reason}.
- */
-export async function callLlmOneShot(
-  ctx: unknown,
-  route: RecommendRoute,
-  system: string,
-  user: string,
-  signal?: AbortSignal,
-): Promise<{ ok: boolean; text?: string; reason?: string }> {
-  const llm = llmFaceOf(ctx)
-  if (llm === undefined) return { ok: false, reason: '宿主未暴露 LLM 调用面（ctx.llm.prepareCall 不可用）' }
-  const routeLabel = [route.provider, route.model].filter(Boolean).join('/')
-  try {
-    const call = await llm.prepareCall({ ...route, maxTokens: 2048 }, signal ?? undefined, (controls: unknown) => controls)
-    const options = {
-      ...(call && typeof call === 'object' && call.config && typeof call.config === 'object' ? call.config : {}),
-      messages: [buildUserMessage(user)],
-      system,
-      purpose: 'cybernetics-preset-recommend',
-      ...(signal !== undefined ? { signal } : {}),
-    }
-    const text = await collectStreamText(call.stream(options))
-    if (text.trim() === '') return { ok: false, reason: `推荐模型 ${routeLabel} 返回了空回复` }
-    return { ok: true, text }
-  } catch (error) {
-    return { ok: false, reason: `推荐模型 ${routeLabel} 调用失败：${error instanceof Error ? error.message : String(error)}` }
-  }
-}
-
-/** Everything the orchestrator accepts; every field optional. */
-export interface RecommendModelsInput {
-  /** Catalog override (tests); default = probeCatalogOptions(ctx). */
-  options?: CatalogOption[]
-  /** The explicit `presetRecommendModel` field value. */
-  route?: unknown
-  /** Current role overrides for the prompt (default {}). */
-  currentOverrides?: RolesConfig
-  /** Vendor reference material (default allVendorPresets()). */
-  presets?: VendorPreset[]
-  /** Optional abort signal for the LLM call. */
-  signal?: AbortSignal
-}
-
-/** The orchestrator's outcome: applied picks or a fully-explained degradation. */
-export type RecommendationOutcome =
+export type SubmittedRecommendation =
   | {
-    status: 'ok'
-    route: RecommendRoute
-    catalogSize: number
+    ok: true
     picks: RecommendationPicks
+    ops: SettingsOp[]
     invalid: string[]
     notes: string[]
     ignoredSession: boolean
-    ops: SettingsOp[]
   }
   | {
-    status: 'degraded'
+    ok: false
     reason: string
-    catalogSize: number
-    route?: RecommendRoute
-    /** The request that WOULD have been sent (always built before any call). */
-    request: RecommendationRequest
   }
 
 /**
- * The full auto-recommend flow, always non-throwing: probe the live catalog →
- * build the request (catalog + principles + current config + vendor
- * reference) → resolve the route → one LLM call → strict parse (catalog +
- * session-scope guard) → soft effort validation → apply ops. Every failure
- * mode returns `degraded` with a concrete reason; the built request is always
- * attached so "能构造推荐请求" is verifiable even when the call face is
- * unreachable.
+ * Validate a session agent's submitted recommendation against the LIVE
+ * catalog and build the apply ops (v0.18.2 submit side — the plugin never
+ * calls an LLM itself, it only validates and writes): strict catalog parse
+ * (parseRecommendation — off-catalog models dropped and reported, a session
+ * key ignored with an explicit note) → soft effort validation
+ * (validatePickEfforts via ctx.llm.resolveModelInfo) → apply ops bounded to
+ * the six flat sub-agent fields. Never throws; a wholly unusable answer
+ * returns ok:false with the reason (the tool surfaces it back to the
+ * session agent so it can correct and re-submit).
  */
-export async function recommendModels(ctx: unknown, input: RecommendModelsInput = {}): Promise<RecommendationOutcome> {
-  let options = input.options
-  if (options === undefined) {
-    const probe = await probeCatalogOptions(ctx)
-    options = probe.options
-  }
-  const catalogSize = Array.isArray(options) ? options.length : 0
-  const safeOptions = Array.isArray(options) ? options : []
-  const currentOverrides = (input.currentOverrides && typeof input.currentOverrides === 'object' ? input.currentOverrides : {}) as RolesConfig
-  const request = buildRecommendationPrompt({ options: safeOptions, currentOverrides, presets: input.presets })
-  if (safeOptions.length === 0) {
-    return { status: 'degraded', reason: '当前系统模型目录不可用或为空，无法推荐', catalogSize: 0, request }
-  }
-  const route = pickRecommendRoute(input.route, safeOptions)
-  if (route === undefined) return { status: 'degraded', reason: '无法确定推荐调用路由（目录为空且未配置 presetRecommendModel）', catalogSize, request }
-  const answer = await callLlmOneShot(ctx, route, request.system, request.user, input.signal)
-  if (!answer.ok) return { status: 'degraded', reason: answer.reason ?? '推荐调用失败', catalogSize, route, request }
-  const parse = parseRecommendation(answer.text ?? '', safeOptions)
-  if (!parse.ok) return { status: 'degraded', reason: `推荐回复不可用：${parse.error}`, catalogSize, route, request }
+export async function applyRecommendationAnswer(
+  ctx: unknown,
+  answer: unknown,
+  options: CatalogOption[],
+): Promise<SubmittedRecommendation> {
+  const parse = parseRecommendation(typeof answer === 'string' ? answer : '', options)
+  if (!parse.ok) return { ok: false, reason: `推荐回复不可用：${parse.error}` }
   const validated = await validatePickEfforts(ctx, parse.picks)
   const picks = validated.picks
   const ops = recommendationApplyOps(picks)
@@ -1078,14 +1013,12 @@ export async function recommendModels(ctx: unknown, input: RecommendModelsInput 
   if (parse.ignoredSession) notes.push('推荐回复含 session 键，已忽略（session 由用户自行管理）')
   if (ops.length === 0) {
     return {
-      status: 'degraded',
+      ok: false,
       reason: parse.invalid.length > 0
         ? `推荐未命中目录内模型（${parse.invalid.join('；')}），未应用任何更改`
-        : '推荐结果为空（模型建议全部保持现状），未应用任何更改',
-      catalogSize,
-      route,
-      request,
+        : '推荐结果为空（建议全部保持现状），未应用任何更改',
     }
   }
-  return { status: 'ok', route, catalogSize, picks, invalid: parse.invalid, notes, ignoredSession: parse.ignoredSession, ops }
+  return { ok: true, picks, ops, invalid: parse.invalid, notes, ignoredSession: parse.ignoredSession }
 }
+

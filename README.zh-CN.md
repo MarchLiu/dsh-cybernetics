@@ -91,6 +91,8 @@ goal 一经存在不再原地修改。`revise` 是唯一的改目标动词（必
 同一 session 支持多个并发 goal（插件自有 goal 板；dsh-goal 的单槽降级为焦点 goal）。客户端 `lib/client.js` 提供两个会话页签，经插件自有 session 投影 `cyberneticsGoals` 实时推送、就地更新：
 
 - **「目标 / Goal」**：本会话全部 goal（标题 / 状态徽标 / 第 N 轮 / 当前 subgoal / depth、executor 小标签 / 被取代与修订来源标注），按「未完成在前、已完成在后」两段排序；空板回退 dsh-goal 单 goal 渲染。
+- **子智能体会话的「目标」（v0.18）**：workflow 的 task/verify/triage 子会话与 Agent Teams teammate 自身没有 goal 板，页签改为显示**整个 session 的目标页**——沿父链找到最近一个有非空 `cyberneticsGoals` 板的祖先会话（通常就是主会话）并渲染其卡片。父链来自实时的会话列表（`ctx.sessions.list`）：优先 `byId[id].parentId`，缺失时回退该会话所属 catalog 的 `subagentCatalog` 条目，带 visited 防环与 16 跳上限。该模式下还会标出「自己的目标项」——`agents` 包含本会话 id 的 goal（孙代则取最近的命中祖先）：左侧 accent 边框 +「当前」小徽标；首次打开时把它滚动到视野中央（`scrollIntoView({ block: 'center' })`，去重标记落在滚动容器上，板子实时更新不会反复滚动；根会话自板永不自动滚）。「关联智能体」chips 在祖先板下以**板会话**作为 `parentSessionId`（child 的真实父会话）并从该会话的 catalog 读活性，因此随时可跳转到该板会话的其它 agents。自板非空的会话渲染与旧版完全一致（无提示行、无滚动），老宿主没有会话列表存储时保持 v0.18 之前的空态回退。仅客户端改动：宿主重启 + 刷新浏览器后生效。
+- **「对话」主页入口（v0.18.1 引入，v0.18.3 起为回主页语义）**：「目标」「控制」两个页签内容的第一行都有一个页签样式的「对话」按钮。「回到主页」式导航：无论在哪个 agent 的「目标 / 控制」页签，点击都回到**主 agent（根会话）**的对话视图——而不是 v0.18.2 那样切到**当前子 agent** 自己的 chat。在根会话上一步直达（`openView('chat', 'cybernetics-home')`）；在子 agent 上是两段式 SPA 跳转，全部走宿主公开 seam：`uiWorkspace.openSession(rootId)` 选中根会话（target = `SessionId | SubagentAddress`），同时向根会话投一条一次性、约 4 s 有效的 home 请求；根会话自己的「目标 / 控制」视图挂载时消费该请求（读即删）并调用它自己的 `openView('chat', …)`。不刷新页面、不改 URL、不重开会话、不新增服务端 API，也不写 `dsh.conversation.*` 存储。宿主不给视图组件递 `openView` owner prop 时入口不渲染；没有 `uiWorkspace` 时点击降级为当前会话的视图切换。已知限制：若根会话当下显示的是别的视图（chat 本身或第三方页签），我们的消费点不会挂载、请求 4 s 后过期——你仍会被切到根会话，只是视图停在根原本的状态。仅客户端改动：宿主重启 + 刷新浏览器后生效。
 - **「控制 / Control」**：递归展示本会话全部 agent（主控 + subagent catalog）的运行状态与各自 goal 视图，顶部汇总运行中数量，并列出每个 goal 的执行者行（状态 + 标题 + executor 临时/持久 + 持久 teammate 名称 + 轮次），与「目标」页签同一数据源。
 
 ### 控制模式可视化指示（v0.10.0）
@@ -168,7 +170,7 @@ goal 一经存在不再原地修改。`revise` 是唯一的改目标动词（必
 **作用范围（用户裁定，最高优先）**：**session agent 不在本功能范围内**——session 模型由用户随时自行调整，因此选择方案与自动推荐只写三个子 agent 角色的配置：`src/modelPresets.ts` 的 `ALLOWED_OP_PATHS` 把可写字段结构性地钉死为六个扁平子 agent 字段（三个模型字段 + 三个思考强度字段）；推荐 prompt 明令输出只允许 task/verify/triage 三个键、禁止 session 键（解析器对模型万一直出的 session 键丢弃并显式注明）；各厂商的 session 推荐仅作参考数据保留在注册表（`variant.session`），卡片上常驻「session 由用户自行管理，方案不应用此项」提示，永远不会进入任何写入。
 
 - **厂商方案（数据驱动，`status: 'ready'`）**：每厂商含逐角色模型 + 思考强度 token（异构：OpenAI/Minimax 五档 low/medium/high/xhigh/max、DeepSeek thinking 开关、其余模型默认）、可升级档、可用性 fallback、逐角色 rationale、厂商备注（⚠️ 注意事项——如 Qwen 的「verify 绝不用 Turbo（幻觉共振）」、Kimi 的避开退役 K2、DeepSeek 的「成本不应成为降级 verify 的理由」）与**多变体**（Claude 常规/高要求，Qwen A/B/C，DeepSeek 仅本家/verify 外置，Kimi 长期组合/最高验收质量，火山 A/B）。选择方案应用其**默认变体**（第一个）；结果记录披露所应用变体并列出其余变体。厂商原生模型 id 逐字应用——部署目录中不存在的 id 会显示卡片不可用警告，轮内可用性 fallback（v0.8）保证轮次存活。
-- **自动推荐**：探测实时目录（`probeCatalogOptions`，与智能选择同源），构建推荐请求——内嵌目录（唯一可选来源）、跨厂商通用原则（verify 档位不低于 task；verify/task 跨代际跨家族保持独立；verify 不能过度自信；省成本先压 task/triage、verify 最后动且成本不是降级 verify 的理由；triage 轻量）、当前角色配置与全部厂商方案（仅作参考）——随后发起**一次受守卫的一次性 LLM 调用**（`ctx.llm.prepareCall().stream()`；消息与分块收集器内联实现，保持零 `@deepseek-ai` 依赖；路由 = `presetRecommendModel` 或目录首个顶配档）。回复严格解析（模型必须命中目录；逐角色 `reasoningEffort` 经 `ctx.llm.resolveModelInfo` 校验，不支持时降为模型默认并注明），经设置服务写入。任何失败（目录为空/调用失败/回复不可解析/零选择）都降级为带原因的 `degraded` 记录——不应用任何更改、不阻塞任何轮次。
+- **自动推荐（v0.18.2 起 = session agent 交办，用户裁定）**：选择 auto 时插件**不发起任何独立 LLM 调用、不新起任何子 agent**（v0.17.2 及之前的「一次一次性 LLM 调用 + 推荐所用模型配置项」已删除——另起一次调用等于把上下文重复提交一遍，时间与经济性都不合理）。现在的流程：插件探测实时目录（`probeCatalogOptions`，与智能选择同源），把推荐交办单——内嵌目录（唯一可选来源）、跨厂商通用原则（verify 档位不低于 task；verify/task 跨代际跨家族保持独立；verify 不能过度自信；省成本先压 task/triage、verify 最后动且成本不是降级 verify 的理由；triage 轻量）、当前角色配置与全部厂商方案（仅作参考）——经插件注册的 `preset_recommend` 工具交给 session agent，并在卡片写入 `pending` 记录、向在线 session agent 投递一条 steer/followup 提醒。session agent 在**自己的上下文中**读取目录、给出 task/verify/triage 的答案，再次调用该工具提交；插件只负责校验（逐字命中目录；逐角色 `reasoningEffort` 经 `ctx.llm.resolveModelInfo` 校验，不支持时降为模型默认并注明）与写入。session agent 未作答时卡片保持 pending；答案不可用（未命中目录/不可解析/零选择）时降级为带原因的 `degraded` 记录并回执给 session agent 修正重交——不应用任何更改、不阻塞任何轮次。该工具在硬门禁 allowlist 下与 cybernetics 工具一同保留。
 - **选择是一次性的**：重复选择同一项不会再次触发（处理器按最后处理值守卫；跨重启持久化的值不会在启动时重放）。要重复应用某项，先切「（未选择）」再选。
 
 ## 安装与使用
@@ -208,7 +210,7 @@ Web 编辑器「插件」页的本插件卡片上直接配置——v0.8.1 起卡
 - **roles 高级配置**（`roles`，非 volatile）：profile 配置 yaml 直接维护——见下方小节；
 - **硬控制门**（`hardGate`，v0.8.10 起 volatile）：卡片布尔开关——装配期从顶层 agent 摘除写/执行工具，所有变更经 goal 循环完成；保存即时生效（门禁监听热装卸），无需重启；
 - **智能选择 Agent 配置**（`smartAgentModelSelection`，v0.16 起 volatile）：卡片布尔开关——每轮启动时按任务内容从实时模型目录为 task/verify/triage 自动选模型（简单任务轻量模型、困难任务顶配）；显式配置的角色模型恒优先，选不到时保持继承并记审计；保存后下一轮 goal 生效——详见「Features → 智能选择 Agent 配置」小节的分类规则表；
-- **预置方案**（`presetPlan` / `presetRecommendModel` / `presetRecommendation`，v0.17 起 volatile）：卡片下拉（自动推荐 + 八家厂商方案）+ 推荐请求模型字段——选择方案应用其默认变体的 task/verify/triage 模型与思考强度；「自动推荐」经一次 AI 调用从实时目录产出三角色推荐并写入；作用范围仅三个子 agent 角色，session 配置永不被触碰——详见「Features → 预置方案」小节；
+- **预置方案**（`presetPlan` / `presetRecommendation`，v0.17 起 volatile；v0.18.2 起不再有推荐请求模型字段）：卡片下拉（自动推荐 + 八家厂商方案）+ 结果记录——选择方案应用其默认变体的 task/verify/triage 模型与思考强度；「自动推荐」由 session agent 在自己的上下文中经 `preset_recommend` 工具作答（插件零独立 LLM 调用，卡片先显示 pending），作用范围仅三个子 agent 角色，session 配置永不被触碰——详见「Features → 预置方案」小节；
 - **其余门字段**（`gateMode`/`gatedTools`/`gateAllowlist`/`gateAllowlistExtra`/`gateApprovalRelay`，非 volatile）：不进入卡片，请在 profile 配置文档中维护（保存触发插件重载）。`gateMode` 无默认值：未设置 + `hardGate: true` 按 `allowlist` 运行；显式 `denylist` 会被尊重，并带有上文记录的残留风险。
 
 ### roles 高级配置（profile yaml，agent 指导）

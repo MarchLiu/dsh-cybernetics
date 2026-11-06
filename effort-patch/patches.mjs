@@ -8,27 +8,28 @@
 
 const CLIENT_LOCALES_ZH = `			// v0.15: reasoning-effort selects — options resolve live from the same
 			// model catalog face (session.modelCatalog → model.reasoning) the
-			// conversation model picker reads; no model / unsupported model
-			// disables the select with a hint; an invalid stored id displays the
-			// effective (model default) selection with a fallback note.
+			// conversation model picker reads; v0.17.3: a model without levels
+			// keeps the select enabled with only 「跟随模型默认」 and no warning
+			// (pure off/none models collapse into that same option); no model /
+			// catalog loading disable with a hint; an invalid stored id displays
+			// the effective (model default) selection with a fallback note.
 			'settings.taskAgentEffort': 'Task agent 思考强度',
 			'settings.verifyAgentEffort': 'Verify agent 思考强度',
 			'settings.triageAgentEffort': 'Triage agent 思考强度',
 			'settings.effortFieldHint': '思考强度档位随该 sub agent 当前所选模型动态给出（与会话输入框 model picker 同一模型能力数据源）。「跟随模型默认」不发送该参数，由模型适配器按默认档位处理。选择即保存，下一轮 goal 生效。',
 			'settings.effortDefault': '跟随模型默认',
-			'settings.effortUnsupported': '该模型不支持思考强度。',
 			'settings.effortFallback': '配置的档位「{value}」不在当前模型支持列表中，实际按模型默认档位执行（选择一个受支持的档位并保存即可覆盖）。',
 			'settings.effortNeedsModel': '该 sub agent 未指定模型（继承 session agent 模型）——在上方模型字段选择具体模型后可选择思考强度。',
 			'settings.effortCatalogLoading': '模型目录加载中，档位暂不可选。',
 `
 
-const CLIENT_LOCALES_EN = `			// v0.15: reasoning-effort selects (English locale).
+const CLIENT_LOCALES_EN = `			// v0.15: reasoning-effort selects (English locale); v0.17.3: a model
+			// without levels stays selectable with only "Model default", no warning.
 			'settings.taskAgentEffort': 'Task agent reasoning effort',
 			'settings.verifyAgentEffort': 'Verify agent reasoning effort',
 			'settings.triageAgentEffort': 'Triage agent reasoning effort',
 			'settings.effortFieldHint': 'Effort levels resolve live from the model this sub agent uses (the same model-capability source the conversation model picker reads). "Model default" sends no effort parameter; the adapter applies its default. Saving takes effect on the next goal round.',
 			'settings.effortDefault': 'Model default',
-			'settings.effortUnsupported': 'This model provides no reasoning effort levels.',
 			'settings.effortFallback': 'The configured effort "{value}" is not offered by the current model; the model default applies (pick a supported level and save to overwrite).',
 			'settings.effortNeedsModel': 'No model configured for this sub agent (inheriting the session agent model) — pick a specific model above to choose an effort level.',
 			'settings.effortCatalogLoading': 'Model catalog loading — effort levels are temporarily unavailable.',
@@ -101,12 +102,22 @@ const CLIENT_EFFORT_ROW = `
 			//  - no model configured (inherit session agent): disabled + hint
 			//    (the inherited model's efforts are unknowable here — no guessing);
 			//  - catalog still loading: disabled + loading hint;
-			//  - model without reasoning efforts (reasoning absent or empty):
-			//    disabled + 「该模型不支持思考强度」 — never an empty dropdown, never an error;
-			//  - stored id not offered by the model (枚举变化/配置损坏): the select
-			//    shows the EFFECTIVE selection (model default) plus a fallback
-			//    note; the stored value is only replaced when the user saves a
-			//    change (deliberate write, same policy as the model-clear button).
+			//  - v0.17.3: a model without reasoning efforts (reasoning absent or
+			//    empty) is NOT an error: 跟随模型默认 sends no strength parameter,
+			//    which is exactly what such a model wants — the select stays
+			//    enabled with that single option and renders no warning, not even
+			//    for a stale stored token (no declared level to conflict with);
+			//  - v0.17.3: a "pure off" model (every offered level is off/none) is the
+			//    same choice as 跟随模型默认, so the list collapses to that single
+			//    option; a stored off id shows as the default, no warning, no write.
+			//    A model offering any real level (glm-5.3: off/minimal/…/max) keeps
+			//    its off entry — the dedupe never widens beyond the pure-off shape;
+			//  - stored id not offered by the DECLARED levels (枚举变化/配置损坏):
+			//    the select shows the EFFECTIVE selection (model default) plus a
+			//    fallback note. An effort-less model declares no levels, so it
+			//    never reaches this note (v0.17.3 follow-up, user ruling). The
+			//    stored value is only replaced when the user saves a change
+			//    (deliberate write, same policy as the model-clear button).
 			// Save path: the shared writeField — '' (跟随模型默认) writes an unset
 			// op, a concrete id writes the string. Volatile, next round live.
 			const effortRow = (spec) => {
@@ -121,19 +132,39 @@ const CLIENT_EFFORT_ROW = `
 					&& reasoning.defaultEffort !== undefined && reasoning.defaultEffort !== null
 					? String(reasoning.defaultEffort)
 					: undefined;
-				const storedValid = stored !== '' && efforts.some((lv) => lv !== undefined && lv !== null && String(lv.id) === stored);
+				// v0.17.3: conservative off-like test — the level id OR name equals
+				// off/none (case-insensitive, trimmed). Deliberately not a prefix match:
+				// minimal/low/medium/... are real levels and must never be collapsed.
+				const OFF_LIKE = /^(off|none)$/i;
+				const isOffLike = (lv) => lv !== undefined && lv !== null
+					&& (OFF_LIKE.test(String(lv.id).trim())
+					|| (lv.name !== undefined && lv.name !== null && OFF_LIKE.test(String(lv.name).trim())));
+				const pureOff = efforts.length > 0 && efforts.every(isOffLike);
+				// Pure-off levels ARE 跟随模型默认 (send nothing): hide them. Any real
+				// level keeps the full list, off included (user-confirmed scope).
+				const levels = pureOff ? [] : efforts;
+				const storedValid = stored !== '' && levels.some((lv) => lv !== undefined && lv !== null && String(lv.id) === stored);
 				const effective = storedValid ? stored : '';
-				const unsupported = catalogReady && opt !== undefined && efforts.length === 0;
-				const selectDisabled = disabled || !catalogReady || opt === undefined || efforts.length === 0;
-				const note = unsupported
-					? t('settings.effortUnsupported')
-					: stored !== '' && !storedValid && efforts.length > 0
-						? t('settings.effortFallback', { value: stored })
-						: !catalogReady
-							? t('settings.effortCatalogLoading')
-							: modelText === ''
-								? t('settings.effortNeedsModel')
-								: null;
+				// v0.17.3: a resolved model is always selectable — dropping efforts from
+				// the gates leaves only the three pre-existing ones (global disabled,
+				// catalog not ready, no/unresolved model). "No strength levels" is a
+				// valid state, not a reason to block the only (default) option.
+				const selectDisabled = disabled || !catalogReady || opt === undefined;
+				// v0.17.3 follow-up: the fallback note only applies when the model
+				// DECLARES levels and the stored one is not among them. A model
+				// with no levels sends no parameter for ANY stored token, so the
+				// stale token is not worth a note (it would be pure noise).
+				// A stored off/none id of a pure-off model IS declared (and is the
+				// collapsed 跟随模型默认 option): display it as the default, never
+				// warn, never write.
+				const declaredLevel = efforts.some((lv) => lv !== undefined && lv !== null && String(lv.id) === stored);
+				const note = opt !== undefined && efforts.length > 0 && stored !== '' && !declaredLevel
+					? t('settings.effortFallback', { value: stored })
+					: !catalogReady
+						? t('settings.effortCatalogLoading')
+						: modelText === ''
+							? t('settings.effortNeedsModel')
+							: null;
 				return jsx.jsxs('div', { style: settingsStyles.field, children: [
 					jsx.jsx('div', { style: settingsStyles.title, children: t(spec.labelKey) }),
 					jsx.jsx('div', { style: settingsStyles.desc, children: t(spec.hintKey) }),
@@ -151,7 +182,7 @@ const CLIENT_EFFORT_ROW = `
 							style: settingsStyles.input,
 							children: [
 								jsx.jsx('option', { value: '', children: defaultEffort !== undefined ? t('settings.effortDefault') + ' (' + defaultEffort + ')' : t('settings.effortDefault') }, 'default'),
-								...efforts.map((lv) => {
+								...levels.map((lv) => {
 									const id = String(lv.id);
 									const name = lv.name === undefined || lv.name === null ? '' : String(lv.name);
 									return jsx.jsx('option', { value: id, children: name !== '' && name !== id ? id + ' · ' + name : id }, id);
@@ -369,6 +400,7 @@ export function sanitizeReasoningEffort(value: unknown): string | undefined {
   {
     file: 'lib/client.js',
     id: 'client:effort-row-renderer',
+    done: CLIENT_EFFORT_ROW,
     find: `			const fieldRow = (spec) => {
 				if (spec.kind === 'boolean') return booleanRow(spec);`,
     replace: CLIENT_EFFORT_ROW + `

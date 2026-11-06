@@ -36,8 +36,8 @@ import { startTeamRound, teamExecutorAvailable, teamExecutorUnavailableError } f
 import { computeSmartSelection, probeCatalogOptions, sessionRouteOf } from './modelSelection.ts'
 import type { SmartSelectionAudit } from './modelSelection.ts'
 import {
-  PRESET_AUTO_ID, PRESET_IDS, formatRecommendationRecord, presetById, presetChoiceLabel, recommendModels,
-  vendorPresetApplyOps,
+  PRESET_AUTO_ID, PRESET_IDS, PRESET_RECOMMEND_TOOL_NAME, applyRecommendationAnswer, buildRecommendationBrief,
+  formatRecommendationRecord, presetById, presetChoiceLabel, vendorPresetApplyOps,
 } from './modelPresets.ts'
 import type { PresetRecommendationRecord, SettingsOp } from './modelPresets.ts'
 import { linkRunToGoal, noteWorkflowAgent, setBoardSource, unlinkRun } from './agents.ts'
@@ -105,16 +105,15 @@ export interface Config extends ControllerConfig {
   smartAgentModelSelection?: boolean
   /**
    * v0.17 preset plans (预置方案): the settings card's selector ('' = none,
-   * 'auto' = AI auto-recommend over the live catalog, otherwise a vendor
-   * registry id). Selecting writes this volatile field; the
+   * 'auto' = 根据现有配置自动推荐 (v0.18.2: handed to the session agent
+   * through the preset_recommend tool — no independent LLM call), otherwise
+   * a vendor registry id). Selecting writes this volatile field; the
    * loader/volatile-update handler resolves each change ONE-SHOT and applies
    * the result to the flat task/verify/triage model+effort fields only — the
    * session agent's configuration is user-managed and structurally out of
    * scope (src/modelPresets.ts ALLOWED_OP_PATHS).
    */
   presetPlan?: string
-  /** v0.17: explicit route ('provider/model' or bare model) for the auto-recommend one-shot call; '' = first high-tier catalog entry. Volatile. */
-  presetRecommendModel?: string
   /** v0.17: the card-visible JSON record of the last preset selection outcome ({status, preset, label, at, picks?, efforts?, variant?, notes?, reason?...}). Volatile. */
   presetRecommendation?: string
   /**
@@ -280,34 +279,30 @@ export const Config = z.object({
   smartAgentModelSelection: z.boolean().default(false).volatile().description('智能选择 Agent 配置（v0.16，缺省关）：开启后每轮启动时按任务内容（委托书/子目标/目标）从当前系统可用模型列表为 task/verify/triage 自动选择合适模型——简单任务（删文件、git 提交等）用轻量模型提速省资源，困难任务（不常见语言、复杂数学等）用顶配模型。显式配置的角色模型始终优先；目录不可用或选不到合适模型时保持继承 session agent；每次决策（含保持继承的理由）写入轮审计（.cybernetics/round-*.json 的 smartSelection 字段）。保存后下一轮 goal 生效。'),
   /**
    * v0.17 preset plans (预置方案) — the settings card's selector. '' = none;
-   * 'auto' = 根据现有配置自动推荐 (recommend via one guarded LLM call over
-   * the live catalog, vendor presets injected as reference); the other ids
+   * 'auto' = 根据现有配置自动推荐 (v0.18.2: the plugin hands the live
+   * catalog + principles + current config to the SESSION AGENT through the
+   * preset_recommend tool and the session agent answers in its own context —
+   * no independent one-shot LLM call, no spawned agent); the other ids
    * name the vendor registry entries (src/modelPresets.ts, placeholder this
    * round). Selecting writes this volatile field; the loader/volatile-update
-   * handler below resolves it ONE-SHOT: 'auto' runs the recommendation and
-   * writes the winning routes into the three flat model fields; a READY
-   * vendor preset applies its roles the same way; a PLACEHOLDER one only
+   * handler below resolves it ONE-SHOT: 'auto' writes the pending handoff
+   * record and notifies the live session agent(s); a READY vendor preset
+   * applies its roles to the three flat model fields; a PLACEHOLDER one only
    * records the status note. The applied values live in the standard flat
    * fields, so persistence, display and the round-start fold are all the
    * existing paths — this field is the trigger, not a parallel config.
    */
-  presetPlan: z.union(['', ...PRESET_IDS] as const).default('').volatile().description('预置方案选择（v0.17，缺省空）：设置卡片下拉框的当前选择。选「根据现有配置自动推荐」(auto) 会读取当前系统可用模型列表、经 AI 推荐后把 task/verify/triage 的模型与思考强度写入下方各角色字段（已显式配置的角色会被覆盖，请以推荐结果为准复核）；选某厂商方案时应用其默认变体的组合（OpenAI/Claude/Gemini/DeepSeek/Kimi/Qwen/火山 Coding Plan/Minimax，数据见 src/modelPresets.ts）。作用范围仅 task/verify/triage 三个子 agent 角色——session agent 由用户自行管理，方案与自动推荐都不应用 session 项（厂商 session 推荐仅作参考展示）。每次选择的结果记录在 presetRecommendation 字段。'),
-  /**
-   * v0.17: the route the auto-recommendation one-shot call runs on
-   * ('provider/model' or a bare model name; '' = the first high-tier entry of
-   * the live catalog, i.e. the strongest listed model). Volatile: an edit
-   * governs the very next selection.
-   */
-  presetRecommendModel: z.string().default('').volatile().description('自动推荐请求所用模型（「provider/model」或裸模型名；留空 = 目录中最高档的首个模型）：该模型仅负责产出推荐 JSON，不参与 goal 轮执行。保存后下次选择「根据现有配置自动推荐」即生效。'),
+  presetPlan: z.union(['', ...PRESET_IDS] as const).default('').volatile().description('预置方案选择（v0.17，缺省空）：设置卡片下拉框的当前选择。选「根据现有配置自动推荐」(auto) 时，插件把实时模型目录、分配原则与当前角色配置直接交给 session agent（通过 preset_recommend 工具，不发起任何独立 LLM 调用、不新起子 agent），由 session agent 在自己的上下文中给出 task/verify/triage 推荐并回传，插件校验后写入下方各角色字段（已显式配置的角色会被覆盖，请以推荐结果为准复核）；选某厂商方案时应用其默认变体的组合（OpenAI/Claude/Gemini/DeepSeek/Kimi/Qwen/火山 Coding Plan/Minimax，数据见 src/modelPresets.ts）。作用范围仅 task/verify/triage 三个子 agent 角色——session agent 由用户自行管理，方案与自动推荐都不应用 session 项（厂商 session 推荐仅作参考展示）。每次选择的结果记录在 presetRecommendation 字段（pending=已交办 session agent 等待作答）。'),
   /**
    * v0.17: the card-visible outcome of the last preset selection. The server
-   * writes a compact JSON record ({status: ok|placeholder|degraded, preset,
-   * label, at, picks?, reason?...}) through the settings service — the exact
-   * write path the panel uses — and the card renders it under the dropdown.
-   * Volatile both so the card can render it and so the record is transient
-   * state (the applied models themselves live in the three flat fields).
+   * writes a compact JSON record ({status: ok|pending|placeholder|degraded,
+   * preset, label, at, picks?, reason?...}) through the settings service —
+   * the exact write path the panel uses — and the card renders it under the
+   * dropdown. Volatile both so the card can render it and so the record is
+   * transient state (the applied models themselves live in the three flat
+   * fields).
    */
-  presetRecommendation: z.string().default('').volatile().description('最近一次预置方案应用/自动推荐的结果记录（JSON）：ok=已应用（picks 列出各角色写入的模型）；placeholder=厂商方案占位待填充（未更改配置）；degraded=降级原因（目录不可用/调用失败/回复不可解析）。设置卡片在下拉框下方渲染该记录。'),
+  presetRecommendation: z.string().default('').volatile().description('最近一次预置方案应用/自动推荐的结果记录（JSON）：ok=已应用（picks 列出各角色写入的模型）；pending=自动推荐已交办 session agent，等待其经 preset_recommend 工具作答；placeholder=厂商方案占位待填充（未更改配置）；degraded=降级原因（目录不可用/回复不可用/未命中目录）。设置卡片在下拉框下方渲染该记录。'),
   /**
    * Max consecutive rounds per subgoal before the loop pauses for the user
    * (controller round-cap, default 3). Volatile: read per round start, so the
@@ -912,6 +907,10 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       ...(config.gateAllowlist?.length ? config.gateAllowlist : DEFAULT_GATE_ALLOWLIST),
       ...(config.gateAllowlistExtra ?? []),
       toolName,
+      // v0.18.2: the preset_recommend tool is a conversation/decision seam of
+      // THIS plugin (the auto recommendation is answered through it), so it
+      // survives the allowlist exactly like the cybernetics tool itself.
+      PRESET_RECOMMEND_TOOL_NAME,
     ])
     const gated = new Set(config.gatedTools?.length ? config.gatedTools : DEFAULT_GATED_TOOLS)
     // The hard gate: a system-prompt/assemble waterfall listener that strips
@@ -1262,18 +1261,25 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
   // --- v0.17.0 preset plans (预置方案): one-shot selection handler ----------
   // The settings card writes `presetPlan` (volatile selector); this handler
   // resolves each CHANGE of that value exactly once:
-  //   'auto'   → recommendModels(): probe the live catalog, build the request
-  //              (catalog + current role fields + vendor presets as reference),
-  //              one guarded LLM call, strict catalog-validated parse, then
-  //              WRITE the winning routes into the three flat volatile model
-  //              fields via the settings service (ctx.get('settings').mutate —
-  //              the same face remote.settings.mutate exposes to the panel's
-  //              fallback write; unconditional expectedRevision, which the
-  //              settings controller documents as an unconditional write).
-  //   vendor   → READY preset: apply its roles the same way; PLACEHOLDER: only
-  //              record the status note (no model field is touched).
-  // The outcome (picks / placeholder note / degradation reason) is always
-  // written into `presetRecommendation` (same write path), which the card
+  //   'auto'   → (v0.18.2, user ruling) NO independent LLM call and NO
+  //              spawned agent: probe the live catalog, build the
+  //              recommendation brief (catalog + principles + current role
+  //              fields + vendor presets as reference), write a `pending`
+  //              record to `presetRecommendation` (the same settings-service
+  //              write path, ctx.get('settings').mutate) and HAND THE BRIEF
+  //              to the live session agent(s): a steer/followup message asks
+  //              the session agent to call the plugin-registered
+  //              preset_recommend tool, which returns the brief (first hop)
+  //              and validates + applies the session agent's own answer
+  //              (second hop — applyRecommendationAnswer, then the write).
+  //              The recommendation therefore comes from the session agent's
+  //              OWN context, exactly once, without re-submitting it to a
+  //              separate model call.
+  //   vendor   → READY preset: apply its roles via the settings service;
+  //              PLACEHOLDER: only record the status note (no model field is
+  //              touched).
+  // The outcome (pending handoff / picks / placeholder note / degradation
+  // reason) is always written into `presetRecommendation`, which the card
   // renders under the dropdown. Guarded by `lastHandledPresetPlan` so:
   //  - the handler's own writes (which re-enter loader/volatile-update) are
   //    no-ops (they never change presetPlan);
@@ -1368,12 +1374,15 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
    * v0.17.2: the live auto-recommend returned degraded on its first firing
    * (write-refused status:'degraded' — the v0.17.1 build has no reason-level
    * diag). Prime suspect: `ctx.llm` is read as a CONTEXT PROPERTY by
-   * probeCatalogOptions/callLlmOneShot, and the entry-scoped ctx handed to
-   * loader/volatile-update may not carry the host's llm service — the same
-   * composition-layer class as the v0.17.1 settings gap. Probe both scopes
-   * into the boot diag and resolve a face for the recommend call with a root
-   * fallback; recommendModels only ever touches `ctx.llm`, so a wrapper
+   * probeCatalogOptions (still the catalog source in v0.18.2, and
+   * validatePickEfforts' resolveModelInfo seam), and the entry-scoped ctx
+   * handed to loader/volatile-update may not carry the host's llm service —
+   * the same composition-layer class as the v0.17.1 settings gap. Probe both
+   * scopes into the boot diag and resolve a face for the catalog probe with
+   * a root fallback; the probe only ever touches `ctx.llm`, so a wrapper
    * context `{ llm }` is a complete substitute when the entry scope is bare.
+   * v0.18.2: no one-shot LLM call remains anywhere in the auto flow — the
+   * face is used to LIST models only, never to run a completion.
    */
   const probeLlm = (scope: string): Record<string, unknown> => {
     try {
@@ -1485,63 +1494,87 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
    * six flat sub-agent fields; src/modelPresets.ts ALLOWED_OP_PATHS).
    */
   const SESSION_SCOPE_NOTE = 'session 由用户自行管理，方案不应用此项'
+  /** The handoff note carried by the pending record + the session message (v0.18.2). */
+  const PRESET_HANDOFF_NOTE = '已交办 session agent：请在本会话中让 session agent 调用 preset_recommend 工具完成推荐（第一跳取目录与要求，第二跳提交推荐 JSON）；插件不再发起任何独立 LLM 调用。'
+  /**
+   * v0.18.2: the message delivered into a live session agent's inbox when
+   * the user selects auto. Same zero-dependency message shape and
+   * steer/followup split as notifyRoundSettled (running → next-step steer,
+   * idle → next-turn followup wake). Source kind 'cybernetics' — the
+   * inbox-inserted relay treats it as plugin traffic (never relocated as
+   * user input).
+   */
+  const deliverPresetHandoff = (): number => {
+    let roots: any[] = []
+    try { roots = ((ctx as { agents?: { roots?: () => unknown[] } }).agents?.roots?.() ?? []) as any[] } catch { roots = [] }
+    let delivered = 0
+    const message = () => ({
+      id: randomUUID(),
+      role: 'user',
+      content: [{
+        type: 'text',
+        text:
+          '<cybernetics_preset>\n用户在设置卡片选择了「根据现有配置自动推荐」（预置方案）。\n' +
+          '请不要为此发起任何独立 LLM 调用，也不要新起任何子 agent：直接调用 preset_recommend 工具（不带 recommendation 参数）获取实时模型目录、分配原则与当前角色配置，' +
+          '在自己的上下文中给出 task/verify/triage 的选择，然后再次调用 preset_recommend 并把推荐 JSON 传入 recommendation 参数提交。\n' +
+          '插件会校验（逐字命中目录、effort 支持性）并写入 task/verify/triage 的模型与思考强度字段。\n</cybernetics_preset>',
+      }],
+      source: { kind: 'cybernetics', preset: 'auto' },
+    })
+    for (const agent of roots) {
+      try {
+        // Delegated children are out of scope (defensive: roots() should
+        // already exclude them) — only top-level session agents answer.
+        if (agent?.session?.header?.parentSession !== undefined) continue
+        if (agent?.status === 'running' && typeof agent.steer === 'function') agent.steer(message())
+        else if (typeof agent.followup === 'function') agent.followup(message())
+        else continue
+        delivered++
+      } catch { /* best-effort delivery: the pending record + the tool stay usable */ }
+    }
+    presetDiag({ event: 'preset-handoff', roots: roots.length, delivered })
+    return delivered
+  }
   const handlePresetSelection = async (plan: string): Promise<void> => {
     try {
       if (plan === PRESET_AUTO_ID) {
-        // v0.17.2: prefer the entry-scoped llm face, fall back to the root
-        // scope when the entry ctx is bare (recommendModels only touches
-        // `ctx.llm`, so `{ llm }` is a complete substitute context).
+        // v0.18.2 handoff flow (user ruling 2026-11-06: no independent LLM
+        // call, no spawned agent — the session agent answers in its own
+        // context). Prefer the entry-scoped llm face, fall back to the root
+        // scope when the entry ctx is bare (probeCatalogOptions/
+        // validatePickEfforts only touch `ctx.llm`, so `{ llm }` is a
+        // complete substitute context).
         const llmFace = resolveLlmFace()
-        const outcome = await recommendModels(llmFace !== undefined ? { llm: llmFace } : ctx, {
-          route: readConfigField(config.presetRecommendModel, ''),
-          currentOverrides: readCurrentOverrides(),
-        })
-        // v0.17.2: land the recommendation's own decision points in the diag —
-        // the write below may be refused, but the LLM pipeline's result (live
-        // catalog size, resolved route, picks, or the concrete degradation
-        // reason + the shape of the request that WAS built) must stay
-        // observable either way.
-        presetDiag(outcome.status === 'ok' ? {
+        const llmCtx = llmFace !== undefined ? { llm: llmFace } : ctx
+        const currentOverrides = readCurrentOverrides()
+        const probe = await probeCatalogOptions(llmCtx)
+        const brief = buildRecommendationBrief({ options: probe.options, currentOverrides })
+        presetDiag({
           event: 'recommend-outcome',
-          status: 'ok',
-          route: [outcome.route.provider, outcome.route.model].filter(Boolean).join('/'),
-          catalogSize: outcome.catalogSize,
-          picks: Object.fromEntries((['task', 'verify', 'triage'] as const).filter((k) => outcome.picks[k] !== undefined).map((k) => [k, `${outcome.picks[k]!.provider}/${outcome.picks[k]!.model}`])),
-          ignoredSession: outcome.ignoredSession,
-          notes: outcome.notes,
-        } : {
-          event: 'recommend-outcome',
-          status: 'degraded',
-          ...(outcome.route !== undefined ? { route: [outcome.route.provider, outcome.route.model].filter(Boolean).join('/') } : {}),
-          catalogSize: outcome.catalogSize,
-          reason: outcome.reason,
-          request: { systemChars: outcome.request.system.length, userChars: outcome.request.user.length, hasPrinciples: /跨厂商|通用原则/.test(outcome.request.system) },
+          status: brief.ok ? 'pending' : 'degraded',
+          catalogSize: brief.catalogSize,
+          ...(brief.ok ? {} : { reason: brief.reason }),
+          briefChars: brief.text?.length ?? 0,
         })
-        if (outcome.status === 'ok') {
-          const picks: Record<string, string> = {}
-          const efforts: Record<string, string> = {}
-          for (const roleKey of ['task', 'verify', 'triage'] as const) {
-            const pick = outcome.picks[roleKey]
-            if (!pick) continue
-            picks[roleKey] = `${pick.provider}/${pick.model}`
-            efforts[roleKey] = pick.reasoningEffort ?? ''
-          }
-          await writePresetRecord(outcome.ops, recordOf(PRESET_AUTO_ID, {
-            route: [outcome.route.provider, outcome.route.model].filter(Boolean).join('/'),
-            catalogSize: outcome.catalogSize,
-            picks,
-            efforts,
-            notes: [SESSION_SCOPE_NOTE, ...outcome.notes],
-            ...(outcome.invalid.length > 0 ? { invalid: outcome.invalid } : {}),
+        if (!brief.ok) {
+          // Empty/unavailable catalog: degrade exactly like the old flow —
+          // a written record, no model field touched, nothing pending.
+          await writePresetRecord([], recordOf(PRESET_AUTO_ID, {
+            status: 'degraded',
+            catalogSize: 0,
+            reason: brief.reason,
           }))
           return
         }
+        // The pending record is the card-visible state; the handoff message
+        // tells the live session agent(s) to answer through the tool. Both
+        // are best-effort: the tool remains usable even if either fails.
         await writePresetRecord([], recordOf(PRESET_AUTO_ID, {
-          status: 'degraded',
-          ...(outcome.route !== undefined ? { route: [outcome.route.provider, outcome.route.model].filter(Boolean).join('/') } : {}),
-          catalogSize: outcome.catalogSize,
-          reason: outcome.reason,
+          status: 'pending',
+          catalogSize: brief.catalogSize,
+          reason: PRESET_HANDOFF_NOTE,
         }))
+        deliverPresetHandoff()
         return
       }
       const preset = presetById(plan)
@@ -1588,7 +1621,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         ],
       }))
     } catch (error) {
-      // Belt and braces (recommendModels is designed not to throw): record
+      // Belt and braces (the handoff flow is designed not to throw): record
       // the degradation so the card shows WHY nothing was applied.
       await writePresetRecord([], recordOf(plan, {
         status: 'degraded',
@@ -1608,6 +1641,8 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
     if (plan === '') return
     void handlePresetSelection(plan)
   })
+
+
 
   // --- v0.9.0 input-policy relay (outer-loop control insertion) -------------
   // DSH native behavior (researched in @deepseek-ai/dsh-api-session-controller
@@ -2358,6 +2393,135 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       return { goalId: loop.goalId, round: result.round, decision, result, ...briefWarning(loop) }
     },
   })
+
+  // --- v0.18.2 preset_recommend tool: the auto-recommendation handoff -------
+  // User ruling 2026-11-06: selecting auto must NOT run a separate one-shot
+  // LLM call nor spawn a sub agent — the SESSION AGENT answers in its own
+  // context. This tool is the seam: registered via ctx.tools.register (the
+  // same face as the cybernetics tool), kept alive under the hard-gate
+  // allowlist next to the cybernetics tool itself. Two hops, one tool:
+  //   hop 1 (no `recommendation`): the tool probes the live catalog, builds
+  //          the brief (catalog + principles + current config + vendor
+  //          reference + the answer protocol — buildRecommendationBrief) and
+  //          returns it as the tool result, i.e. the material lands in the
+  //          session agent's OWN context.
+  //   hop 2 (`recommendation` = the session agent's JSON answer): the plugin
+  //          validates (applyRecommendationAnswer: strict catalog parse +
+  //          soft effort validation + ALLOWED_OP_PATHS-bounded ops), writes
+  //          the applied picks through the settings service together with the
+  //          outcome record, and returns the summary. An unusable answer is
+  //          rejected with the concrete reason so the caller can correct and
+  //          re-submit — nothing is written in that case.
+  // The tool works standalone (a user may simply ask the session agent to
+  // auto-recommend in conversation, no card selection involved); the card's
+  // pending record is visibility, not a precondition. Every failure is
+  // contained: probeCatalogOptions and applyRecommendationAnswer never
+  // throw; a write refusal is reported in the result text AND the diag.
+  const presetRecommendToolDisposer = (ctx.tools as { register: (d: unknown) => () => void }).register({
+    name: PRESET_RECOMMEND_TOOL_NAME,
+    description:
+      'Preset-plan auto recommendation for THIS session (预置方案「根据现有配置自动推荐」), answered by the SESSION AGENT ' +
+      'itself — the plugin never runs its own LLM call for this. Two hops on the same tool: ' +
+      'call WITHOUT `recommendation` to receive the live model catalog, the cross-vendor assignment principles, the current ' +
+      'task/verify/triage config and the output contract; then answer IN YOUR OWN CONTEXT and call the tool AGAIN with ' +
+      '`recommendation` set to the JSON (only task/verify/triage keys; null = keep current; optional reasoningEffort). ' +
+      'The plugin validates the answer against the live catalog, writes the winning model/effort fields and reports the outcome.',
+    parameters: {
+      type: 'object',
+      properties: {
+        recommendation: {
+          type: 'string',
+          description:
+            '第二跳：你的推荐 JSON（只含 task/verify/triage 三个键；null=维持现状；可选 reasoningEffort）。' +
+            '省略本参数 = 第一跳：返回实时模型目录与推荐要求，请阅读后作答并再次调用。',
+        },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          status: { type: 'string', enum: ['brief', 'applied', 'rejected', 'degraded'] },
+          catalogSize: { type: 'number' },
+          picks: { type: 'object' },
+          reason: { type: 'string' },
+          brief: { type: 'string' },
+        },
+      },
+      render: (_args: unknown, value: any) => {
+        if (value?.status === 'brief') return [{ type: 'text', text: String(value.brief ?? '') }]
+        if (value?.status === 'applied') {
+          const picks = value.picks && typeof value.picks === 'object'
+            ? Object.entries(value.picks).map(([k, v]) => `${k}=${String(v)}`).join(', ')
+            : ''
+          return [{ type: 'text', text: `推荐已应用：${picks}${value.notes?.length ? `（${value.notes.join('；')}）` : ''}` }]
+        }
+        return [{ type: 'text', text: `推荐未应用（${value?.status}）：${String(value?.reason ?? 'unknown')}` }]
+      },
+    },
+    async execute(args: { recommendation?: string }, _exec: any) {
+      const llmFace = resolveLlmFace()
+      const llmCtx = llmFace !== undefined ? { llm: llmFace } : ctx
+      const answer = typeof args?.recommendation === 'string' ? args.recommendation.trim() : ''
+      if (answer === '') {
+        // Hop 1: hand the material over (pure probe + render, zero LLM calls).
+        const probe = await probeCatalogOptions(llmCtx)
+        const brief = buildRecommendationBrief({ options: probe.options, currentOverrides: readCurrentOverrides() })
+        presetDiag({ event: 'preset-tool-brief', catalogSize: brief.catalogSize, ok: brief.ok })
+        if (!brief.ok) return { status: 'degraded', catalogSize: 0, reason: brief.reason }
+        return { status: 'brief', catalogSize: brief.catalogSize, brief: brief.text }
+      }
+      // Hop 2: validate + apply the session agent's own answer.
+      const probe = await probeCatalogOptions(llmCtx)
+      if (!Array.isArray(probe.options) || probe.options.length === 0) {
+        const reason = '当前系统模型目录不可用或为空，无法校验推荐'
+        await writePresetRecord([], recordOf(PRESET_AUTO_ID, { status: 'degraded', catalogSize: 0, reason }))
+        return { status: 'degraded', catalogSize: 0, reason }
+      }
+      const outcome = await applyRecommendationAnswer(llmCtx, answer, probe.options)
+      presetDiag(outcome.ok ? {
+        event: 'preset-tool-apply',
+        status: 'applied',
+        catalogSize: probe.options.length,
+        picks: Object.fromEntries((['task', 'verify', 'triage'] as const).filter((k) => outcome.picks[k] !== undefined).map((k) => [k, `${outcome.picks[k]!.provider}/${outcome.picks[k]!.model}`])),
+        ignoredSession: outcome.ignoredSession,
+        notes: outcome.notes,
+      } : {
+        event: 'preset-tool-apply',
+        status: 'rejected',
+        catalogSize: probe.options.length,
+        reason: outcome.reason,
+      })
+      if (!outcome.ok) {
+        // Rejected: the card learns why, the caller gets a correctable error.
+        await writePresetRecord([], recordOf(PRESET_AUTO_ID, { status: 'degraded', catalogSize: probe.options.length, reason: outcome.reason }))
+        return { status: 'rejected', catalogSize: probe.options.length, reason: outcome.reason }
+      }
+      const picks: Record<string, string> = {}
+      const efforts: Record<string, string> = {}
+      for (const roleKey of ['task', 'verify', 'triage'] as const) {
+        const pick = outcome.picks[roleKey]
+        if (!pick) continue
+        picks[roleKey] = `${pick.provider}/${pick.model}`
+        efforts[roleKey] = pick.reasoningEffort ?? ''
+      }
+      const written = await writePresetRecord(outcome.ops, recordOf(PRESET_AUTO_ID, {
+        catalogSize: probe.options.length,
+        picks,
+        efforts,
+        notes: [SESSION_SCOPE_NOTE, ...outcome.notes],
+        ...(outcome.invalid.length > 0 ? { invalid: outcome.invalid } : {}),
+      }))
+      return {
+        status: 'applied',
+        catalogSize: probe.options.length,
+        picks,
+        ...(outcome.notes.length > 0 ? { notes: outcome.notes } : {}),
+        ...(written ? {} : { reason: '配置写入被设置服务拒绝，详见服务端诊断日志' }),
+      }
+    },
+  })
+  disposers.push(presetRecommendToolDisposer)
 
   return () => { disposer(); disposers.forEach((d) => d()) }
 }

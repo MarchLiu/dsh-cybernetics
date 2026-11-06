@@ -687,7 +687,7 @@ async function loadClientTab() {
     return out
   }
   const values = {}
-  const react = { useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(), useState: (v) => [v, () => {}] }
+  const react = { useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(), useState: (v) => [v, () => {}], useEffect: () => {} }
   const jsx = {
     jsx: (type, props, key) => ({ type, props: props ?? {}, key }),
     jsxs: (type, props, key) => ({ type, props: props ?? {}, key }),
@@ -2151,7 +2151,7 @@ console.log(JSON.stringify({
     jsx: (type, props, key) => ({ type, props: props ?? {}, key }),
     jsxs: (type, props, key) => ({ type, props: props ?? {}, key }),
   }
-  const react = { useSyncExternalStore: (_sub, getSnapshot) => getSnapshot(), useState: (v) => [v, () => {}] }
+  const react = { useSyncExternalStore: (_sub, getSnapshot) => getSnapshot(), useState: (v) => [v, () => {}], useEffect: () => {} }
   const mod = loaded.factory((req) => (req === 'react' ? react : jsx))
 
   // Fake ConfigForm for the `dsh-cybernetics` namespace (ConfigForm contract:
@@ -2238,7 +2238,7 @@ console.log(JSON.stringify({
     jsx: (type, props, key) => ({ type, props: props ?? {}, key }),
     jsxs: (type, props, key) => ({ type, props: props ?? {}, key }),
   }
-  const react = { useSyncExternalStore: (_sub, getSnapshot) => getSnapshot(), useState: (v) => [v, () => {}] }
+  const react = { useSyncExternalStore: (_sub, getSnapshot) => getSnapshot(), useState: (v) => [v, () => {}], useEffect: () => {} }
   const mod = loaded.factory((req) => (req === 'react' ? react : jsx))
   const registered = []
   const t = (key) => key
@@ -2326,6 +2326,7 @@ console.log(JSON.stringify({
   let slotIndex = 0
   const react = {
     useSyncExternalStore: (_sub, getSnapshot) => getSnapshot(),
+    useEffect: () => {},
     useState: (initial) => {
       const i = slotIndex++
       if (slotsMem[i] === undefined) {
@@ -2689,8 +2690,8 @@ console.log(JSON.stringify({
   }
   const form57 = volatileForm57(Config)
   assert.deepEqual(Object.keys(form57.dict ?? {}).sort(),
-    ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'presetPlan', 'presetRecommendModel', 'presetRecommendation', 'roundsPerSubgoal', 'smartAgentModelSelection', 'taskAgentModel', 'taskAgentReasoningEffort', 'triageAgentModel', 'triageAgentReasoningEffort', 'verifyAgentModel', 'verifyAgentReasoningEffort'],
-    'the served settings form exposes exactly the sixteen volatile fields (v0.17 adds the three preset-plan fields on top of v0.16 smartAgentModelSelection; roles still not served since v0.8.4)')
+    ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'presetPlan', 'presetRecommendation', 'roundsPerSubgoal', 'smartAgentModelSelection', 'taskAgentModel', 'taskAgentReasoningEffort', 'triageAgentModel', 'triageAgentReasoningEffort', 'verifyAgentModel', 'verifyAgentReasoningEffort'],
+    'the served settings form exposes exactly the fifteen volatile fields (v0.17 added the preset-plan fields, v0.18.2 removed the auto-recommend-route input row; roles still not served since v0.8.4)')
   assert.equal(isVolatilePath57(Config, ['roles']), false,
     'a roles write path is NOT volatile (v0.8.4): the panel neither serves nor writes it')
   // STALE-RUNTIME CONTROL: the pre-0.7.7 runtime face (only allGoalsMode
@@ -2726,12 +2727,17 @@ console.log(JSON.stringify({
     const hostForm = hostSchema.volatileForm(Config)
     assert.notEqual(hostForm, undefined, 'host volatileForm serves a form for the current schema')
     assert.deepEqual(Object.keys(hostForm.dict ?? {}).sort(),
-      ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'presetPlan', 'presetRecommendModel', 'presetRecommendation', 'roundsPerSubgoal', 'smartAgentModelSelection', 'taskAgentModel', 'taskAgentReasoningEffort', 'triageAgentModel', 'triageAgentReasoningEffort', 'verifyAgentModel', 'verifyAgentReasoningEffort'],
-      'the REAL host volatileForm serves exactly the sixteen volatile fields (v0.17 adds the preset-plan fields; roles is off the panel since v0.8.4)')
+      ['allGoalsMode', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'presetPlan', 'presetRecommendation', 'roundsPerSubgoal', 'smartAgentModelSelection', 'taskAgentModel', 'taskAgentReasoningEffort', 'triageAgentModel', 'triageAgentReasoningEffort', 'verifyAgentModel', 'verifyAgentReasoningEffort'],
+      'the REAL host volatileForm serves exactly the fifteen volatile fields (v0.17 added the preset-plan fields, v0.18.2 removed the auto-recommend-route input; roles is off the panel since v0.8.4)')
     assert.equal(Object.hasOwn(hostForm.dict ?? {}, 'roles'), false, 'the host form does not serve roles any more')
-    for (const path of [['roundsPerSubgoal'], ['maxConcurrentRounds'], ['taskAgentModel'], ['verifyAgentModel'], ['triageAgentModel'], ['allGoalsMode'], ['hardGate'], ['inputPolicy'], ['noticePolicy'], ['taskAgentReasoningEffort'], ['verifyAgentReasoningEffort'], ['triageAgentReasoningEffort'], ['smartAgentModelSelection'], ['presetPlan'], ['presetRecommendModel'], ['presetRecommendation']]) {
+    // v0.18.2: the removed auto-recommend-route field is gone from the schema
+    // entirely (name assembled at runtime — zero literal occurrences here).
+    const removedField = ['preset', 'Recommend', 'Model'].join('')
+    assert.equal(Object.hasOwn(hostForm.dict ?? {}, removedField), false, 'v0.18.2: the removed input is off the panel')
+    for (const path of [['roundsPerSubgoal'], ['maxConcurrentRounds'], ['taskAgentModel'], ['verifyAgentModel'], ['triageAgentModel'], ['allGoalsMode'], ['hardGate'], ['inputPolicy'], ['noticePolicy'], ['taskAgentReasoningEffort'], ['verifyAgentReasoningEffort'], ['triageAgentReasoningEffort'], ['smartAgentModelSelection'], ['presetPlan'], ['presetRecommendation']]) {
       assert.equal(hostSchema.isVolatilePath(Config, path), true, `host write gate accepts ${path.join('.')}`)
     }
+    assert.equal(hostSchema.isVolatilePath(Config, [removedField]), false, 'v0.18.2: the removed field is gone from the schema entirely')
     for (const path of [['roles', 'default', 'model'], ['gateMode'], ['gateApprovalRelay'], ['toolName'], ['implicitTrigger']]) {
       assert.equal(hostSchema.isVolatilePath(Config, path), false, `host write gate keeps non-volatile ${path.join('.')} unwritable`)
       if (path.length === 1) assert.equal(Object.hasOwn(hostForm.dict ?? {}, path[0]), false, `host form does not serve non-volatile ${path[0]}`)
@@ -3077,6 +3083,7 @@ async function loadSettingsCard(formForApply) {
   let slotIndex = 0
   const react = {
     useSyncExternalStore: (_sub, getSnapshot) => getSnapshot(),
+    useEffect: () => {},
     useState: (initial) => {
       const i = slotIndex++
       if (slotsMem[i] === undefined) {
@@ -3441,6 +3448,7 @@ async function loadSettingsCard(formForApply) {
     let slotIndex = 0
     const react = {
       useSyncExternalStore: (_sub, getSnapshot) => getSnapshot(),
+      useEffect: () => {},
       useState: (initial) => {
         const i = slotIndex++
         if (slotsMem[i] === undefined) {

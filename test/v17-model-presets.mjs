@@ -1,5 +1,5 @@
 // v0.17 offline tests: preset plans (预置方案) — the settings-card dropdown
-// (auto-recommend + 8 vendor registries), the AI recommendation request/
+// (auto-recommend + 8 vendor registries), the recommendation brief/
 // parse/apply pipeline, and the SESSION-SCOPE ruling (user, 2026-11-06):
 // the session agent is OUT of scope — vendor session suggestions are
 // reference data only, preset selection and auto-recommend write ONLY the
@@ -10,13 +10,19 @@
 // pins the FILLED registry (collected 2026-11-06) and supersedes the
 // placeholder-era assertions.
 //
-// Layers pinned here, all offline:
+// v0.18.2 (user ruling 2026-11-06, this suite's biggest rewrite): the auto
+// recommendation NO LONGER runs any independent one-shot LLM call and no
+// longer spawns any agent — the plugin hands the brief (live catalog +
+// principles + current config) to the SESSION AGENT through the
+// `preset_recommend` tool and the session agent answers in its own context.
+// The suite pins:
 //   (1) registry completeness: 9 ids, 8 READY vendors, ≥1 variant each,
 //       task/verify/triage filled, session entries ONLY under variant.session,
 //       note/sessionNote/rationale data present;
-//   (2) the recommendation REQUEST: catalog + principles + current config +
+//   (2) the recommendation BRIEF: catalog + principles + current config +
 //       vendor reference (variants/session labeled non-selectable), the
-//       session-exclusion rule and the reasoningEffort contract in the prompt;
+//       session-exclusion rule and the reasoningEffort contract in the
+//       system prompt, plus the two-hop answer protocol footer;
 //   (3) response parsing: fenced/raw JSON, efforts carried, off-catalog
 //       dropped to `invalid`, a `session` key IGNORED (ignoredSession, never
 //       a pick), shape-invalid efforts dropped, unusable replies → ok:false;
@@ -29,28 +35,38 @@
 //   (6) vendor preset application across the WHOLE registry: default variant,
 //       explicit variantId, unknown variantId → default, placeholder stance,
 //       efforts incl. unset, and per-vendor session data never producing ops;
-//   (7) recommendModels end-to-end on a fake ctx.llm: ok (with notes: session
-//       ignore + effort drop), degraded (call failure, empty catalog) with
-//       the request always attached;
+//   (7) brief + submit end-to-end with a SPY llm face: the whole auto
+//       pipeline (brief build + answer validation) NEVER touches
+//       prepareCall/stream — zero independent LLM calls — and the submit
+//       side carries the same degradation semantics the old recommendModels
+//       had (unusable reply / zero picks / off-catalog all explained);
 //   (8) the plugin handler (apply()): a presetPlan change triggers exactly
 //       one resolve; a READY vendor writes the default-variant ops + the
 //       outcome record through the settings service; the record carries
 //       variant/efforts/notes (session scope) and NEVER a session op; the
-//       auto path degrades gracefully without ctx.llm; re-firing the same
-//       value is a no-op; unknown id ignored; boot seeding and clearing;
-//   (9) the settings card (lib/client.js): the select renders (none) + the 9
-//       registry ids in order, ids mirror the server registry, the session
-//       callout renders, an applied record renders picks+effort+variant+
-//       notes, selecting writes the volatile presetPlan field, zh/en locale
-//       keys complete.
+//       auto path writes ONLY a pending record (no model field touched) with
+//       a THROWING prepareCall face — an attempted LLM call would fail
+//       loudly, so pending proves none happened; empty catalog degrades;
+//       re-firing the same value is a no-op; unknown id ignored; boot
+//       seeding and clearing;
+//   (9) the preset_recommend tool: hop 1 (no recommendation) returns the
+//       brief, hop 2 (recommendation JSON) validates + applies + writes the
+//       ok record, a garbage answer is rejected with the reason and a
+//       degraded record, an empty catalog degrades; the tool survives the
+//       hard-gate allowlist next to the cybernetics tool itself;
 //   (10) v0.17.2 HMR-transaction escape: the handler's settings.mutate runs
 //       with the enclosing transaction's AsyncLocalStorage store cleared via
 //       hmr.executing.exit (the live host refuses nested transactions —
 //       "HMR transactions cannot be nested"); plain-path fallbacks intact.
-//   (11) v0.17.2 root-llm fallback: probeCatalogOptions/callLlmOneShot read
-//       `ctx.llm` as a context property; when the entry ctx is bare but the
-//       root carries the service, the recommend call wraps `{ llm }` and
-//       still resolves ok (the live host's first auto firing degraded).
+//   (11) v0.17.2 root-llm fallback: probeCatalogOptions reads `ctx.llm` as a
+//       context property; when the entry ctx is bare but the root carries
+//       the service, the auto handoff still probes the catalog through it.
+//   (12) the settings card (lib/client.js): the select renders (none) + the 9
+//       registry ids in order, ids mirror the server registry, the session
+//       callout renders, an applied record renders picks+effort+variant+
+//       notes, the pending record renders the handoff note, selecting writes
+//       the volatile presetPlan field, zh/en locale keys complete, and the
+//       client source no longer contains the removed input row.
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -59,9 +75,9 @@ import { fileURLToPath } from 'node:url'
 
 import { apply } from '../src/index.ts'
 import {
-  ALLOWED_OP_PATHS, CROSS_VENDOR_PRINCIPLES, PRESET_AUTO_ID, PRESET_IDS, PRESET_SESSION_NOTE,
-  buildRecommendationPrompt, callLlmOneShot, extractJsonBlock, filterAllowedOps, formatRecommendationRecord,
-  parseRecommendation, parseRecommendationRecord, pickRecommendRoute, recommendationApplyOps, recommendModels,
+  ALLOWED_OP_PATHS, CROSS_VENDOR_PRINCIPLES, PRESET_AUTO_ID, PRESET_IDS, PRESET_RECOMMEND_TOOL_NAME, PRESET_SESSION_NOTE,
+  applyRecommendationAnswer, buildRecommendationBrief, buildRecommendationPrompt, extractJsonBlock, filterAllowedOps,
+  formatRecommendationRecord, parseRecommendation, parseRecommendationRecord, recommendationApplyOps,
   validatePickEfforts, vendorPresetApplyOps, presetById, presetChoiceLabel, presetVariant, allVendorPresets,
 } from '../src/modelPresets.ts'
 
@@ -131,17 +147,27 @@ section('(1) registry: 9 options, 8 READY vendors, full data, session reference-
   console.log('✓ v17 (1) registry complete: 8 READY vendors, variants/efforts/notes/rationale filled, session reference-only')
 }
 
-// (2) recommendation request -----------------------------------------------------
-section('(2) request: session exclusion + principles + effort contract injected')
+// (2) recommendation brief --------------------------------------------------------
+section('(2) brief: session exclusion + principles + effort contract + two-hop protocol')
 {
   const options = [
     { provider: 'p-a', model: 'big-72b', name: 'Big', description: 'flagship' },
     { provider: 'p-b', model: 'small-8b', name: 'Small', description: 'light' },
   ]
+  const brief = buildRecommendationBrief({
+    options,
+    currentOverrides: { default: { provider: 'p-a', model: 'big-72b' }, verify: { provider: 'p-b', model: 'small-8b', reasoningEffort: 'high' } },
+  })
+  assert.equal(brief.ok, true, 'brief built for a non-empty catalog')
+  assert.equal(brief.catalogSize, 2, 'brief discloses the catalog size')
+  const text = brief.text ?? ''
   const { system, user } = buildRecommendationPrompt({
     options,
     currentOverrides: { default: { provider: 'p-a', model: 'big-72b' }, verify: { provider: 'p-b', model: 'small-8b', reasoningEffort: 'high' } },
   })
+  // The brief embeds the full request material…
+  assert.ok(text.includes(system), 'brief embeds the system contract')
+  assert.ok(text.includes(user), 'brief embeds the material (catalog/principles/config/vendors)')
   // Session exclusion (highest-priority ruling) in the system prompt…
   assert.match(system, /session/, 'system mentions the session agent')
   assert.match(system, /禁止输出 session 键|只允许 task\/verify\/triage/, 'system forbids a session key')
@@ -167,11 +193,22 @@ section('(2) request: session exclusion + principles + effort contract injected'
   assert.ok(withPresets.user.includes('变体「高要求」'), 'variant labeled in the vendor block')
   assert.ok(withPresets.user.includes('session 参考（不在推荐范围，勿输出）'), 'vendor session suggestion labeled out of scope')
   assert.ok(withPresets.user.includes('非可选来源'), 'vendor presets framed as reference, not selectable')
+  // The two-hop protocol: the session agent answers by calling the tool AGAIN
+  // with its recommendation JSON — no independent LLM call is ever implied.
+  assert.ok(text.includes(PRESET_RECOMMEND_TOOL_NAME), 'brief names the preset_recommend tool')
+  assert.match(text, /recommendation.*参数|recommendation 参数/, 'brief instructs the second hop via the recommendation argument')
+  assert.match(text, /不要新起任何 LLM 调用|不要新起任何子 agent/, 'brief forbids spawning calls/agents')
+  assert.match(text, /session 由用户自行管理|禁止输出 session/, 'brief carries the session scope rule')
   // Bounded catalog (cap 200).
   const huge = Array.from({ length: 500 }, (_, i) => ({ provider: 'p', model: `m${i}` }))
-  const bounded = buildRecommendationPrompt({ options: huge, currentOverrides: {} })
-  assert.equal((bounded.user.match(/^- p\/m\d+$/gm) ?? []).length, 200, 'catalog capped at 200 lines')
-  console.log('✓ v17 (2) request built: session exclusion, principles, effort contract, catalog, vendor reference')
+  const bounded = buildRecommendationBrief({ options: huge, currentOverrides: {} })
+  assert.equal(((bounded.text ?? '').match(/^- p\/m\d+$/gm) ?? []).length, 200, 'catalog capped at 200 lines')
+  // Empty catalog → degradation, no text.
+  const empty = buildRecommendationBrief({ options: [], currentOverrides: {} })
+  assert.equal(empty.ok, false, 'empty catalog refuses the brief')
+  assert.match(empty.reason ?? '', /目录不可用或为空/)
+  assert.equal(empty.text, undefined, 'no brief text on degradation')
+  console.log('✓ v17 (2) brief built: session exclusion, principles, effort contract, catalog, vendor reference, two-hop protocol')
 }
 
 // (3) response parsing -----------------------------------------------------------
@@ -361,77 +398,79 @@ section('(6) vendorPresetApplyOps: default/explicit/unknown variant, efforts, se
   console.log('✓ v17 (6) every vendor applies its default variant within the six fields; session data never reaches ops')
 }
 
-// (7) recommendModels end-to-end on a fake ctx.llm ------------------------------------
-section('(7) recommendModels: ok with notes / degraded with the request attached')
+// (7) brief + submit end-to-end on a SPY llm face -------------------------------------
+section('(7) auto pipeline: zero independent LLM calls; submit-side degradations explained')
 {
   const options = [
     { provider: 'p-a', model: 'big-72b', name: 'Big' },
     { provider: 'p-b', model: 'small-8b', name: 'Small' },
   ]
   const reply = '推荐如下：\n```json\n{"task":{"provider":"p-a","model":"big-72b","reasoningEffort":"high"},"verify":{"provider":"p-b","model":"small-8b","reasoningEffort":"xhigh"},"triage":{"provider":"p-b","model":"small-8b"},"session":{"provider":"p-a","model":"big-72b"}}\n```\n说明文字'
-  const llm = {
-    prepareCall: async () => ({
-      config: { provider: 'p-a', model: 'big-72b' },
-      stream: async function* () { yield { type: 'text-delta', index: 0, text: reply } },
-    }),
-    resolveModelInfo: async (_p, model) => ({ reasoning: { efforts: model === 'big-72b' ? [{ id: 'high' }, { id: 'xhigh' }] : [{ id: 'low' }] } }),
+  // THE EVIDENCE for acceptance criterion (3): a spy face that records every
+  // completion attempt. The whole auto pipeline — brief build, answer
+  // validation, op building — must leave the counter at ZERO. Any hidden
+  // one-shot call (the removed recommendModels/callLlmOneShot path) would
+  // show up here; resolveModelInfo is metadata lookup, NOT a completion.
+  let prepareCallCalls = 0
+  let streamCalls = 0
+  const spyCtx = {
+    llm: {
+      prepareCall: async () => { prepareCallCalls++; throw new Error(' SpyFace: no one-shot call is allowed in the auto flow') },
+      resolveModelInfo: async (_p, model) => ({ reasoning: { efforts: model === 'big-72b' ? [{ id: 'high' }, { id: 'xhigh' }] : [{ id: 'low' }] } }),
+    },
   }
-  const ok = await recommendModels({ llm }, { options, currentOverrides: {} })
-  assert.equal(ok.status, 'ok', 'ai recommendation succeeds')
-  assert.equal(ok.ignoredSession, true, 'session key in the reply noted')
-  assert.ok(ok.notes.some((n) => /session/.test(n)), 'session-ignore note present')
-  assert.ok(ok.notes.some((n) => /verify.*xhigh.*已改为模型默认/.test(n)), 'effort-drop note present (small-8b lacks xhigh)')
-  const ops = ok.ops
+  const brief = buildRecommendationBrief({ options, currentOverrides: {} })
+  assert.equal(brief.ok, true, 'brief built without any LLM call')
+  const submitted = await applyRecommendationAnswer(spyCtx, reply, options)
+  assert.equal(submitted.ok, true, 'session-agent answer accepted')
+  assert.equal(prepareCallCalls, 0, 'ZERO prepareCall attempts across brief + submit (no independent LLM call)')
+  assert.equal(streamCalls, 0, 'ZERO stream attempts (nothing streams anything)')
+  assert.equal(submitted.ignoredSession, true, 'session key in the answer noted')
+  assert.ok(submitted.notes.some((n) => /session/.test(n)), 'session-ignore note present')
+  assert.ok(submitted.notes.some((n) => /verify.*xhigh.*已改为模型默认/.test(n)), 'effort-drop note present (small-8b lacks xhigh)')
+  const ops = submitted.ops
   assert.ok(ops.some((op) => op.path[0] === 'taskAgentModel' && op.value === 'p-a/big-72b'), 'task model op')
   const verifyEffort = ops.find((op) => op.path[0] === 'verifyAgentReasoningEffort')
   assert.equal(verifyEffort.op, 'unset', 'dropped verify effort becomes an unset (model default)')
   for (const op of ops) assert.ok(ALLOWED_OP_PATHS.has(op.path[0]), 'every op within the six fields')
-  // Call failure degrades with the reason AND the request attached.
-  const failing = await recommendModels({ llm: { prepareCall: async () => { throw new Error('provider down') } } }, { options })
-  assert.equal(failing.status, 'degraded')
-  assert.match(failing.reason, /调用失败|provider down/)
-  assert.ok(failing.request.system.length > 0 && failing.request.user.length > 0, 'the built request is attached even on degradation')
-  // Missing face → degraded.
-  const noFace = await recommendModels({}, { options })
-  assert.equal(noFace.status, 'degraded')
-  assert.match(noFace.reason, /LLM 调用面/)
-  // Empty catalog → degraded before any call.
-  const empty = await recommendModels({ llm }, { options: [] })
-  assert.equal(empty.status, 'degraded')
-  assert.match(empty.reason, /目录不可用或为空/)
-  // Unparseable reply → degraded.
-  const garbage = await recommendModels({ llm: { prepareCall: async () => ({ config: {}, stream: async function* () { yield { type: 'text-delta', index: 0, text: '不会输出JSON' } } }) } }, { options })
-  assert.equal(garbage.status, 'degraded')
-  assert.match(garbage.reason, /推荐回复不可用|没有找到 JSON/)
-  // One-shot call seam: empty reply and throwing stream degrade softly.
-  assert.deepEqual(await callLlmOneShot({}, { provider: 'p', model: 'm' }, 's', 'u'), { ok: false, reason: '宿主未暴露 LLM 调用面（ctx.llm.prepareCall 不可用）' }, 'missing face refused')
-  const emptyReply = await callLlmOneShot({ llm: { prepareCall: async () => ({ config: {}, stream: async function* () { /* nothing */ } }) } }, { provider: 'p', model: 'm' }, 's', 'u')
-  assert.equal(emptyReply.ok, false, 'empty stream refused')
-  const throwingStream = await callLlmOneShot({ llm: { prepareCall: async () => ({ config: {}, stream: async function* () { throw new Error('mid-stream') } }) } }, { provider: 'p', model: 'm' }, 's', 'u')
-  assert.equal(throwingStream.ok, false, 'throwing stream refused')
-  assert.match(throwingStream.reason, /mid-stream/, 'stream error surfaced in the reason')
-  // Route pick: explicit matched / bare / off-catalog verbatim / high-tier default.
-  assert.deepEqual(pickRecommendRoute('p-b/small-8b', options), { provider: 'p-b', model: 'small-8b' }, 'explicit route matched')
-  assert.deepEqual(pickRecommendRoute('big-72b', options), { provider: 'p-a', model: 'big-72b' }, 'bare model matched')
-  assert.deepEqual(pickRecommendRoute('ghost/ghost-9000', options), { provider: 'ghost', model: 'ghost-9000' }, 'off-catalog explicit honored verbatim')
-  assert.deepEqual(pickRecommendRoute('', options), { provider: 'p-a', model: 'big-72b' }, 'default = first high-tier entry')
-  assert.equal(pickRecommendRoute('', []), undefined, 'empty catalog → undefined')
-  console.log('✓ v17 (7) end-to-end ok (notes carry session-ignore + effort-drop); all degradations explained; route pick pinned')
+  // Submit-side degradation semantics (mirrors the old recommendModes failures):
+  // unusable reply → explained rejection…
+  const garbage = await applyRecommendationAnswer(spyCtx, '不会输出JSON', options)
+  assert.equal(garbage.ok, false)
+  assert.match(garbage.reason ?? '', /推荐回复不可用|没有找到 JSON/)
+  assert.equal(prepareCallCalls, 0, 'rejection path also makes zero LLM calls')
+  // …all-null answer (keep current) → zero ops, explained…
+  const allNull = await applyRecommendationAnswer(spyCtx, '{"task":null,"verify":null,"triage":null}', options)
+  assert.equal(allNull.ok, false)
+  assert.match(allNull.reason ?? '', /推荐结果为空|保持现状/)
+  // …off-catalog-only answer → explained rejection, nothing applied.
+  const offCatalog = await applyRecommendationAnswer(spyCtx, '{"task":{"provider":"ghost","model":"ghost-9"},"verify":null,"triage":null}', options)
+  assert.equal(offCatalog.ok, false)
+  assert.match(offCatalog.reason ?? '', /未命中目录内模型/)
+  assert.equal(prepareCallCalls, 0, 'still zero LLM calls after all degradations')
+  // Empty catalog: the brief refuses before anything else; the submit side
+  // has nothing to validate against and the handler degrades (see (8)).
+  const emptyBrief = buildRecommendationBrief({ options: [], currentOverrides: {} })
+  assert.equal(emptyBrief.ok, false, 'empty catalog → no handoff at all')
+  console.log('✓ v17 (7) brief+submit run with a THROWING prepareCall face and still succeed — zero independent LLM calls; all degradations explained')
 }
 
 // (8) plugin handler (apply) -----------------------------------------------------------
 section('(8) apply(): one-shot presetPlan resolve, record enrichment, session scope')
 {
   const flush = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)) }
-  // Fake host: settings service captures mutate ops; ctx.on captures listeners.
+  // Fake host: settings service captures mutate ops; ctx.on captures listeners;
+  // tools.register captures every tool def (v0.18.2: the preset_recommend tool
+  // is pinned in (9)).
   const mkCtx = async ({ llm, config }) => {
     const mutates = []
     const listeners = {}
     const warns = []
+    const registeredTools = []
     const settings = { mutate: async (ns, ops) => { mutates.push({ ns, ops }); return true } }
     const root = await mkdtemp(join(tmpdir(), 'cyb-v17-'))
     const ctx = {
-      tools: { register: () => () => {} },
+      tools: { register: (def) => { registeredTools.push(def); return () => {} } },
       systemPrompt: { section() {}, getSectionOrder: () => 0 },
       goals: { get: () => null },
       workingDirectory: { get: () => root },
@@ -449,17 +488,19 @@ section('(8) apply(): one-shot presetPlan resolve, record enrichment, session sc
         await flush()
         return mutates
       },
-      mutates, warns,
+      mutates, warns, registeredTools,
     }
   }
   // Live-ref config the way the loader hands volatile fields over.
   const ref = (initial) => ({ value: initial, get() { return this.value } })
+  // v0.18.2 THE EVIDENCE: prepareCall THROWS — any independent one-shot LLM
+  // call in the auto flow would explode loudly (and produce a degraded
+  // record), so a pending record proves no call was even attempted.
+  // listProviders/listModels (catalog probe) stay functional.
   const catalogLlm = {
     listProviders: () => [{ id: 'p-a' }, { id: 'p-b' }],
     listModels: async (pid) => [pid === 'p-a' ? { provider: pid, id: 'big-72b', name: 'Big' } : { provider: pid, id: 'small-8b', name: 'Small' }],
-    prepareCall: async () => ({ config: {}, stream: async function* () {
-      yield { type: 'text-delta', index: 0, text: '{"task":{"provider":"p-a","model":"big-72b","reasoningEffort":"high"},"verify":{"provider":"p-a","model":"big-72b"},"triage":{"provider":"p-b","model":"small-8b"}}' }
-    } }),
+    prepareCall: async () => { throw new Error('prepareCall MUST NOT be called by the auto flow (v0.18.2)') },
   }
   {
     // Vendor preset: default variant ops + enriched record via the settings service.
@@ -504,19 +545,22 @@ section('(8) apply(): one-shot presetPlan resolve, record enrichment, session sc
     assert.equal(record2.variant, 'A（均衡）', 'record names variant A')
   }
   {
-    // Auto path: happy (efforts in the record) …
+    // Auto path (v0.18.2): a PENDING handoff record, NO model field touched,
+    // NO LLM call (prepareCall above throws — a pending record proves the
+    // flow never even attempted one).
     const planRef3 = ref('')
     const host3 = await mkCtx({ llm: catalogLlm, config: { presetPlan: planRef3 } })
     planRef3.value = 'auto'
     await host3.fire()
-    const ops3 = host3.mutates.at(-1).ops
-    const record3 = parseRecommendationRecord(ops3.find((op) => op.path[0] === 'presetRecommendation').value)
-    assert.equal(record3.status, 'ok', 'auto ok')
-    assert.deepEqual(record3.picks, { task: 'p-a/big-72b', verify: 'p-a/big-72b', triage: 'p-b/small-8b' }, 'auto picks applied')
-    assert.deepEqual(record3.efforts, { task: 'high', verify: '', triage: '' }, 'auto efforts recorded (empty = model default)')
-    assert.ok(record3.notes.some((n) => /session 由用户自行管理/.test(n)), 'auto record carries the session-scope note')
-    const modelOps3 = ops3.filter((op) => op.path[0].endsWith('AgentModel'))
-    assert.equal(modelOps3.length, 3, 'three model ops (task/verify/triage ONLY — session structurally unreachable)')
+    assert.equal(host3.mutates.length, 1, 'auto writes exactly one mutate (the record)')
+    const ops3 = host3.mutates[0].ops
+    assert.equal(ops3.length, 1, 'pending handoff writes ONLY the record — zero model/effort ops')
+    const record3 = parseRecommendationRecord(ops3[0].value)
+    assert.equal(record3.status, 'pending', 'auto record = pending (handed to the session agent)')
+    assert.equal(record3.preset, 'auto', 'record names the auto preset')
+    assert.equal(record3.catalogSize, 2, 'pending record discloses the live catalog size')
+    assert.ok(record3.reason.length > 0, 'pending record explains the handoff')
+    assert.ok(!JSON.stringify(ops3).includes('AgentModel'), 'no model field touched before the session agent answers')
   }
   {
     // Auto path degraded (no llm at all): the card still gets the record, no model field touched.
@@ -529,6 +573,7 @@ section('(8) apply(): one-shot presetPlan resolve, record enrichment, session sc
     const record4 = parseRecommendationRecord(ops4[0].value)
     assert.equal(record4.status, 'degraded', 'degraded record')
     assert.ok(record4.reason.length > 0, 'degradation reason present')
+    assert.match(record4.reason, /目录不可用或为空/, 'degradation reason = the catalog probe came up empty')
   }
   {
     // Unknown id ignored without a write.
@@ -561,7 +606,7 @@ section('(8) apply(): one-shot presetPlan resolve, record enrichment, session sc
     const record7 = parseRecommendationRecord(host7.mutates[0].ops.find((op) => op.path[0] === 'presetRecommendation').value)
     assert.equal(record7.preset, 'minimax', 'the new selection resolved')
   }
-  console.log('✓ v17 (8) handler: one-shot resolve, enriched record, degraded path, unknown/seeded/cleared guards')
+  console.log('✓ v17 (8) handler: one-shot resolve, enriched record, pending auto handoff (zero LLM calls), degraded path, unknown/seeded/cleared guards')
 }
 
 // (10) v0.17.2 HMR-transaction escape -------------------------------------------------
@@ -642,23 +687,22 @@ section('(10) hmr escape: mutate runs outside the enclosing HMR transaction (v0.
 }
 
 // (11) v0.17.2 root-llm fallback ------------------------------------------------------
-section('(11) llm face fallback: auto recommend works when only ctx.root carries the llm service')
+section('(11) llm face fallback: the auto handoff probes the catalog when only ctx.root carries the llm service')
 {
   const flush11 = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)) }
   const ref11 = (initial) => ({ value: initial, get() { return this.value } })
   const catalogLlm11 = {
     listProviders: () => [{ id: 'p-a' }, { id: 'p-b' }],
     listModels: async (pid) => [pid === 'p-a' ? { provider: pid, id: 'big-72b', name: 'Big' } : { provider: pid, id: 'small-8b', name: 'Small' }],
-    prepareCall: async () => ({ config: {}, stream: async function* () {
-      yield { type: 'text-delta', index: 0, text: '{"task":{"provider":"p-a","model":"big-72b"},"verify":{"provider":"p-a","model":"big-72b"},"triage":{"provider":"p-b","model":"small-8b"}}' }
-    } }),
+    prepareCall: async () => { throw new Error('prepareCall MUST NOT be called by the auto flow (v0.18.2)') },
   }
   const mutates = []
   const listeners = {}
   const settings = { mutate: async (ns, ops) => { mutates.push({ ns, ops }); return true } }
   const rootDir = await mkdtemp(join(tmpdir(), 'cyb-v17-'))
   // Entry ctx WITHOUT an llm face (the suspected live-host shape); the root
-  // carries it — the fallback must find it and the recommend must succeed.
+  // carries it — the fallback must find it and the handoff must still probe
+  // the catalog through it (a pending record proves the probe succeeded).
   const ctx11 = {
     tools: { register: () => () => {} },
     systemPrompt: { section() {}, getSectionOrder: () => 0 },
@@ -676,17 +720,129 @@ section('(11) llm face fallback: auto recommend works when only ctx.root carries
   planRef.value = 'auto'
   for (const fn of listeners['loader/volatile-update'] ?? []) fn()
   await flush11()
-  assert.equal(mutates.length, 1, 'root-llm fallback: the auto recommend resolved through ctx.root.llm')
+  assert.equal(mutates.length, 1, 'root-llm fallback: the auto handoff resolved through ctx.root.llm')
   const record = parseRecommendationRecord(mutates[0].ops.find((op) => op.path[0] === 'presetRecommendation').value)
-  assert.equal(record.status, 'ok', 'recommendation succeeded via the root face (catalog probed, picks returned)')
-  assert.deepEqual(record.picks, { task: 'p-a/big-72b', verify: 'p-a/big-72b', triage: 'p-b/small-8b' }, 'picks came from the root-provided catalog')
-  console.log('✓ v17 (11) root-llm fallback: bare entry ctx + root face → recommend ok')
+  assert.equal(record.status, 'pending', 'handoff succeeded via the root face (catalog probed through ctx.root.llm)')
+  assert.equal(record.catalogSize, 2, 'catalog size came from the root-provided probe')
+  console.log('✓ v17 (11) root-llm fallback: bare entry ctx + root face → auto handoff pending with the probed catalog')
 }
 
-// (9) settings card -------------------------------------------------------------------
-section('(9) settings card: 9-option select, session callout, record rendering, write path')
+// (9) preset_recommend tool --------------------------------------------------------------
+section('(9) preset_recommend tool: hop 1 brief / hop 2 apply / rejection / gate survival')
+{
+  const flush9 = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)) }
+  const ref9 = (initial) => ({ value: initial, get() { return this.value } })
+  const catalogLlm9 = {
+    listProviders: () => [{ id: 'p-a' }, { id: 'p-b' }],
+    listModels: async (pid) => [pid === 'p-a' ? { provider: pid, id: 'big-72b', name: 'Big' } : { provider: pid, id: 'small-8b', name: 'Small' }],
+    prepareCall: async () => { throw new Error('prepareCall MUST NOT be called by the auto flow (v0.18.2)') },
+  }
+  const mkHost9 = async ({ config }) => {
+    const mutates = []
+    const listeners = {}
+    const registered = []
+    const settings = { mutate: async (ns, ops) => { mutates.push({ ns, ops }); return true } }
+    const rootDir = await mkdtemp(join(tmpdir(), 'cyb-v17-'))
+    const ctx = {
+      tools: { register: (def) => { registered.push(def); return () => {} } },
+      systemPrompt: { section() {}, getSectionOrder: () => 0 },
+      goals: { get: () => null },
+      workingDirectory: { get: () => rootDir },
+      agentPresets: { serviceFor: () => undefined },
+      sessionProjections: { register: () => () => {} },
+      get: (name) => (name === 'settings' ? settings : undefined),
+      logger: { warn: () => {} },
+      on: (event, fn) => { (listeners[event] ??= []).push(fn); return () => {} },
+      llm: catalogLlm9,
+      ...(config?.hardGate ? {} : {}),
+    }
+    apply(ctx, config ?? {})
+    return { ctx, mutates, listeners, registered }
+  }
+  {
+    const host = await mkHost9({})
+    const tool = host.registered.find((d) => d?.name === PRESET_RECOMMEND_TOOL_NAME)
+    assert.ok(tool, 'the preset_recommend tool is registered')
+    assert.match(String(tool.description), /SESSION AGENT/i, 'the tool description names the session agent as the answerer')
+    assert.match(String(tool.description), /no independent LLM call|never runs its own LLM call/i, 'the description states the zero-LLM-call design')
+    // Hop 1: no recommendation → the brief (catalog + rules + protocol).
+    const brief1 = await tool.execute({}, {})
+    assert.equal(brief1.status, 'brief', 'hop 1 returns the brief')
+    assert.equal(brief1.catalogSize, 2, 'hop 1 discloses the catalog size')
+    assert.ok(String(brief1.brief).includes('- p-a/big-72b (Big)'), 'hop 1 brief carries the live catalog')
+    assert.ok(String(brief1.brief).includes(PRESET_RECOMMEND_TOOL_NAME), 'hop 1 brief carries the answer protocol')
+    // The tool's own render prints the brief verbatim (the session agent reads it).
+    const rendered1 = tool.output.render({}, brief1)
+    assert.equal(rendered1[0].text, brief1.brief, 'render prints the brief text verbatim')
+    // Hop 2: the session agent's JSON answer → validated, applied, written.
+    const answer = '```json\n{"task":{"provider":"p-a","model":"big-72b","reasoningEffort":"high"},"verify":{"provider":"p-b","model":"small-8b"},"triage":{"provider":"p-b","model":"small-8b"}}\n```'
+    const applied = await tool.execute({ recommendation: answer }, {})
+    assert.equal(applied.status, 'applied', 'hop 2 applies the session agent answer')
+    assert.deepEqual(applied.picks, { task: 'p-a/big-72b', verify: 'p-b/small-8b', triage: 'p-b/small-8b' }, 'hop 2 reports the applied picks')
+    const okMutate = host.mutates.at(-1)
+    const modelOps = okMutate.ops.filter((op) => op.path[0].endsWith('AgentModel'))
+    assert.deepEqual(modelOps.map((op) => op.value).sort(), ['p-a/big-72b', 'p-b/small-8b', 'p-b/small-8b'], 'hop 2 wrote the three model fields')
+    for (const op of okMutate.ops) {
+      if (op.path[0] !== 'presetRecommendation') assert.ok(ALLOWED_OP_PATHS.has(op.path[0]), `hop 2 op within the six fields: ${op.path[0]}`)
+    }
+    const okRecord = parseRecommendationRecord(okMutate.ops.find((op) => op.path[0] === 'presetRecommendation').value)
+    assert.equal(okRecord.status, 'ok', 'hop 2 wrote the ok record')
+    assert.deepEqual(okRecord.efforts, { task: 'high', verify: '', triage: '' }, 'hop 2 record carries efforts (empty = model default)')
+    assert.ok(okRecord.notes.some((n) => /session 由用户自行管理/.test(n)), 'hop 2 record carries the session-scope note')
+    // Hop 2 rejected: an unusable answer writes a degraded record and returns
+    // the reason so the session agent can correct and re-submit.
+    const rejected = await tool.execute({ recommendation: '完全不是 JSON' }, {})
+    assert.equal(rejected.status, 'rejected', 'garbage answer rejected')
+    assert.match(rejected.reason ?? '', /推荐回复不可用|没有找到 JSON/, 'rejection names the parse failure')
+    const rejectedRecord = parseRecommendationRecord(host.mutates.at(-1).ops.find((op) => op.path[0] === 'presetRecommendation').value)
+    assert.equal(rejectedRecord.status, 'degraded', 'rejection wrote a degraded record for the card')
+    // Hop 2 rejected (off-catalog models): nothing applied, reason surfaced.
+    const offCat = await tool.execute({ recommendation: '{"task":{"provider":"ghost","model":"ghost-9"},"verify":null,"triage":null}' }, {})
+    assert.equal(offCat.status, 'rejected', 'off-catalog-only answer rejected')
+    assert.match(offCat.reason ?? '', /未命中目录内模型/, 'rejection names the off-catalog picks')
+    // Degraded: catalog gone (no llm) → hop 1 and hop 2 both degrade cleanly.
+    const host2 = await mkHost9({ config: {} })
+    delete host2.ctx.llm
+    const tool2 = host2.registered.find((d) => d?.name === PRESET_RECOMMEND_TOOL_NAME)
+    const degraded1 = await tool2.execute({}, {})
+    assert.equal(degraded1.status, 'degraded', 'hop 1 degrades without a catalog')
+    assert.match(degraded1.reason ?? '', /目录不可用或为空/, 'degradation reason surfaced')
+    const degraded2 = await tool2.execute({ recommendation: '{"task":null,"verify":null,"triage":null}' }, {})
+    assert.equal(degraded2.status, 'degraded', 'hop 2 degrades without a catalog')
+  }
+  {
+    // Hard-gate survival: with the allowlist gate on, the assemble waterfall
+    // must keep preset_recommend alongside the cybernetics tool itself and
+    // strip everything else (a top-level session agent must be able to
+    // answer the handoff even under the gate).
+    const host = await mkHost9({ config: { hardGate: true } })
+    const rootScope = { id: 'session-root', session: { header: {} } }
+    host.ctx.agents = { roots: () => [rootScope] }
+    let assembly = { tools: [{ name: 'bash' }, { name: 'cybernetics' }, { name: PRESET_RECOMMEND_TOOL_NAME }, { name: 'read' }] }
+    let passedThrough = false
+    for (const fn of host.listeners['system-prompt/assemble'] ?? []) {
+      await fn(assembly, { scope: rootScope }, () => { passedThrough = true })
+    }
+    assert.equal(passedThrough, true, 'the assemble waterfall completed')
+    const names = assembly.tools.map((t) => t.name)
+    assert.ok(names.includes(PRESET_RECOMMEND_TOOL_NAME), 'preset_recommend survives the allowlist gate')
+    assert.ok(names.includes('cybernetics'), 'cybernetics itself survives the gate')
+    assert.ok(!names.includes('bash'), 'bash is stripped by the gate')
+  }
+  console.log('✓ v17 (9) preset_recommend tool: brief hop, apply hop, rejections, degradation, gate survival')
+}
+
+// (12) settings card -------------------------------------------------------------------
+section('(12) settings card: 9-option select, session callout, record rendering (incl. pending), write path')
 {
   const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
+  // v0.18.2 acceptance criterion (1)+(2): the removed input row is gone from
+  // the client entirely — no field row, no locale key, no stray reference.
+  // The name is assembled at runtime so this file itself carries zero
+  // literal occurrences of the removed config field's name (repo-wide grep
+  // acceptance criterion).
+  const removedField = ['preset', 'Recommend', 'Model'].join('')
+  assert.ok(!client.includes(removedField), 'client.js contains no removed input-row reference (field + locale keys deleted)')
   let loaded
   globalThis.window = { __ModuleLoader__: { load: (m) => { loaded = m } } }
   new Function('window', client)(globalThis.window)
@@ -717,16 +873,20 @@ section('(9) settings card: 9-option select, session callout, record rendering, 
     'settings.presetPlan', 'settings.presetPlanHint', 'settings.presetNone',
     'settings.preset.optAuto', 'settings.preset.optOpenai', 'settings.preset.optClaude', 'settings.preset.optGemini',
     'settings.preset.optDeepseek', 'settings.preset.optKimi', 'settings.preset.optQwen', 'settings.preset.optVolcanoCodingPlan',
-    'settings.preset.optMinimax', 'settings.presetRecommendModel', 'settings.presetRecommendModelHint',
+    'settings.preset.optMinimax',
     'settings.preset.sessionScope', 'settings.preset.applied', 'settings.preset.effortSuffix', 'settings.preset.effortDefaultSuffix',
     'settings.preset.variant', 'settings.preset.otherVariants', 'settings.preset.notes',
-    'settings.preset.appliedInvalid', 'settings.preset.placeholder', 'settings.preset.degraded', 'settings.preset.recordRaw',
+    'settings.preset.appliedInvalid', 'settings.preset.placeholder', 'settings.preset.degraded', 'settings.preset.pending',
+    'settings.preset.recordRaw',
   ]) {
     assert.equal(typeof dicts.zh[key], 'string', `zh locale has ${key}`)
     assert.equal(typeof dicts.en[key], 'string', `en locale has ${key}`)
   }
   assert.match(dicts.zh['settings.presetPlanHint'], /session/, 'zh hint explains the session scope')
   assert.match(dicts.en['settings.presetPlanHint'], /session/, 'en hint explains the session scope')
+  // v0.18.2: both hints describe the session-agent handoff (no independent AI call).
+  assert.match(dicts.zh['settings.presetPlanHint'], /不发起任何独立 LLM 调用|不新起子 agent/, 'zh hint states the zero-LLM-call handoff')
+  assert.match(dicts.en['settings.presetPlanHint'], /no independent LLM call/i, 'en hint states the zero-LLM-call handoff')
   // The 9 dropdown ids mirror the server registry, in order.
   const choices = client.match(/PRESET_CHOICES = \[([\s\S]*?)\];/)?.[1] ?? ''
   const choiceIds = [...choices.matchAll(/id: '([^']+)'/g)].map((m) => m[1])
@@ -786,12 +946,22 @@ section('(9) settings card: 9-option select, session callout, record rendering, 
   const rendered2 = flatten(seat.view({ view: 'page', t, form: { ...form, getSnapshot: () => ({ ...snap, value: { ...snap.value, presetRecommendation: withEffortRecord } }) } }))
   const appliedText2 = rendered2.map((n) => (typeof n.props?.children === 'string' ? n.props.children : '')).find((s) => s.includes('已应用'))
   assert.ok(appliedText2.includes('task=openai/gpt-6.1-sol（effort high）'), 'effort token rendered in the pick')
+  // v0.18.2: a pending record renders the handoff note (informational tone,
+  // NOT the amber warning — the session agent has not answered yet).
+  const pendingRecord = formatRecommendationRecord({
+    status: 'pending', preset: 'auto', label: '根据现有配置自动推荐', at: '2026-11-06T00:00:00.000Z',
+    catalogSize: 7, reason: '已交办 session agent',
+  })
+  const rendered3 = flatten(seat.view({ view: 'page', t, form: { ...form, getSnapshot: () => ({ ...snap, value: { ...snap.value, presetRecommendation: pendingRecord } }) } }))
+  const pendingText = rendered3.map((n) => (typeof n.props?.children === 'string' ? n.props.children : '')).find((s) => s.includes('已交办 session agent'))
+  assert.ok(pendingText, 'pending record renders the handoff note')
+  assert.ok(pendingText.includes('preset_recommend'), 'pending note names the preset_recommend tool')
   // Selecting a vendor writes the volatile presetPlan field (server resolves).
   await presetSelect.props.onChange({ target: { value: 'deepseek' } })
   assert.deepEqual(writes, [['presetPlan', 'deepseek']], 'selection writes the volatile presetPlan field')
   await presetSelect.props.onChange({ target: { value: '' } })
   assert.deepEqual(writes.at(-1), ['presetPlan', 'UNSET'], 'blanking writes the unset op')
-  console.log('✓ v17 (9) card: 9 options + (none), session callout, enriched record, volatile write path')
+  console.log('✓ v17 (12) card: 9 options + (none), session callout, enriched + pending records, volatile write path, no input row')
 }
 
 console.log('\nALL v17 CHECKS PASSED')
