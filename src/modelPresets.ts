@@ -113,6 +113,8 @@ export const PRESET_IDS = [
   'volcano-coding-plan',
   'minimax',
   'glm',
+  'builtin-glm-light',
+  'builtin-deepseek-fast',
 ] as const
 
 export type PresetId = (typeof PRESET_IDS)[number]
@@ -525,6 +527,50 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       },
     ],
     note: '命名角色（frontend 等）的 glm-5.3 max effort 只按需生效（智能选择命中难 subgoal 时），避免全量 max；verify 恒 glm-5.3 max，成本不构成降级理由。',
+    sessionNote: PRESET_SESSION_NOTE,
+  },
+  {
+    id: 'builtin-glm-light',
+    label: '轻量级GLM',
+    description: '用户自定义轻量 GLM 组合（provider 一律 zai-coding-cn）：task glm-5.3-flash / verify glm-5.3(effort medium) / triage glm-5.3-flash(effort minimal)。任务以 flash 为主、verify 只做中档强化，最小化单轮成本。',
+    status: 'ready',
+    roles: {
+      task: { provider: 'zai-coding-cn', model: 'glm-5.3-flash', rationale: '量最大的角色用 Flash：成本低、速度快。' },
+      verify: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'medium', rationale: 'verify 升到 glm-5.3 中档 effort，以档位差补偿同家族独立性。' },
+      triage: { provider: 'zai-coding-cn', model: 'glm-5.3-flash', reasoningEffort: 'minimal', rationale: '轻量分拣走 minimal effort，压成本与 wall-clock。' },
+    },
+    variants: [{
+      id: 'standard',
+      label: '标准组合',
+      roles: {
+        task: { provider: 'zai-coding-cn', model: 'glm-5.3-flash', rationale: 'Flash 执行主力。' },
+        verify: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'medium', rationale: 'verify glm-5.3 medium：轻量场景下的审计底线。' },
+        triage: { provider: 'zai-coding-cn', model: 'glm-5.3-flash', reasoningEffort: 'minimal', rationale: '轻量分拣 minimal。' },
+      },
+    }],
+    note: '源自用户自定义方案「轻量级GLM」的内置化副本（roles 照抄，id 固定为 builtin-glm-light）；provider zai-coding-cn 需部署侧具备对应渠道方可应用。',
+    sessionNote: PRESET_SESSION_NOTE,
+  },
+  {
+    id: 'builtin-deepseek-fast',
+    label: 'deepseek 快速',
+    description: '用户自定义 DeepSeek 快速组合：task deepseek-official/deepseek-flash / verify deepseek-official/deepseek-flash(effort high) / triage deepseek-account/deepseek-flash(effort low)。全 Flash 档拉满速度，verify 以 high effort 补偿同模型独立性。',
+    status: 'ready',
+    roles: {
+      task: { provider: 'deepseek-official', model: 'deepseek-flash', rationale: 'Flash 档执行主力：速度优先。' },
+      verify: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high', rationale: 'verify 同模型但开 high effort，以思考深度补偿独立性损失。' },
+      triage: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: 'low', rationale: '轻量分拣 low 档（deepseek-account 为同款另一计费渠道）。' },
+    },
+    variants: [{
+      id: 'standard',
+      label: '标准组合',
+      roles: {
+        task: { provider: 'deepseek-official', model: 'deepseek-flash', rationale: 'Flash 执行主力。' },
+        verify: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high', rationale: 'verify high effort 审计。' },
+        triage: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: 'low', rationale: '轻量分拣。' },
+      },
+    }],
+    note: '源自用户自定义方案「deepseek 快速」的内置化副本（roles 照抄，id 固定为 builtin-deepseek-fast）；triage 走 deepseek-account 渠道，需部署侧具备 deepseek-official / deepseek-account 两个 provider 方可应用。',
     sessionNote: PRESET_SESSION_NOTE,
   },
 ]

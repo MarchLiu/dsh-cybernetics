@@ -84,14 +84,14 @@ import {
 const section = (label) => console.log(`\n— ${label}`)
 
 // (1) registry completeness ------------------------------------------------------
-section("(1) registry: 10 options, 9 READY vendors, full data, session reference-only")
+section("(1) registry: 12 options (auto + 9 vendors + 2 built-in user presets), full data, session reference-only")
 {
-  assert.equal(PRESET_IDS.length, 10, 'dropdown ids: auto + 9 vendors')
+  assert.equal(PRESET_IDS.length, 12, 'dropdown ids: auto + 9 vendors + 2 built-in user presets')
   assert.equal(PRESET_IDS[0], PRESET_AUTO_ID, 'auto first')
   const ids = PRESET_IDS.slice(1)
   assert.deepEqual([...new Set(ids)].sort(), [...ids].sort(), 'vendor ids unique')
   const vendors = allVendorPresets()
-  assert.equal(vendors.length, 9, '9 vendor entries')
+  assert.equal(vendors.length, 11, '11 entries (9 vendors + 2 built-in user presets)')
   assert.deepEqual(vendors.map((v) => v.id), ids, 'registry order mirrors the dropdown ids')
   assert.equal(presetById('auto'), undefined, 'auto is not a vendor entry')
   const ROLE_KEYS = new Set(['task', 'verify', 'triage'])
@@ -102,7 +102,7 @@ section("(1) registry: 10 options, 9 READY vendors, full data, session reference
     assert.ok(Array.isArray(vendor.variants) && vendor.variants.length >= 1, `${vendor.id}: at least one variant`)
     // Multi-variant vendors from the brief: Claude 常规/高要求, DeepSeek 仅本家/verify外置,
     // Kimi 长期/最高验收, Qwen A/B/C, 火山 A/B.
-    const expectedVariants = { openai: 1, claude: 2, gemini: 1, deepseek: 2, kimi: 2, qwen: 3, 'volcano-coding-plan': 2, minimax: 1, glm: 2 }
+    const expectedVariants = { openai: 1, claude: 2, gemini: 1, deepseek: 2, kimi: 2, qwen: 3, 'volcano-coding-plan': 2, minimax: 1, glm: 2, 'builtin-glm-light': 1, 'builtin-deepseek-fast': 1 }
     assert.equal(vendor.variants.length, expectedVariants[vendor.id], `${vendor.id}: variant count matches the brief`)
     // roles mirrors the DEFAULT variant (first) for old readers.
     assert.equal(vendor.roles, vendor.variants[0].roles, `${vendor.id}: roles === default variant roles (mirror invariant)`)
@@ -959,12 +959,13 @@ section("(12) settings card: 10-option select, session callout, record rendering
   const presetSelect = rendered.find((n) => n.type === 'select' && n.props['aria-label'] === t('settings.presetPlan'))
   assert.ok(presetSelect, 'preset select rendered')
   const options = flatten(presetSelect.props.children).filter((n) => n.type === 'option')
-  // v0.19: (none) + 10 built-ins + the custom-divider (no custom presets in
-  // this snapshot yet) — custom entries would render after the divider.
-  assert.equal(options.length, 12, "(none) + 10 built-ins + divider")
+  // v0.19 + built-in user presets: (none) + 12 built-ins + the custom-divider
+  // (no custom presets in this snapshot yet) — custom entries would render
+  // after the divider.
+  assert.equal(options.length, 14, "(none) + 12 built-ins + divider")
   assert.equal(options[0].props.value, '', 'leading (none) option')
-  assert.deepEqual(options.slice(1, 11).map((o) => o.props.value), [...PRESET_IDS], 'the 10 built-in options in registry order')
-  const divider = options[11]
+  assert.deepEqual(options.slice(1, 13).map((o) => o.props.value), [...PRESET_IDS], 'the 12 built-in options in registry order')
+  const divider = options[13]
   assert.equal(divider.props.disabled, true, 'custom divider option is disabled (separator only)')
   assert.equal(divider.props.children, t('settings.preset.customDivider'), 'divider label renders')
   assert.equal(options[1].props.children, t('settings.preset.optAuto'), 'first scheme option = auto-recommend')
