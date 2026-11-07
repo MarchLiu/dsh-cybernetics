@@ -4,6 +4,17 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.21.0（2026-11-07）：轮次生效模型审计——round-cyb-*.json 记录 task/verify/triage 实际调用的 provider/model/effort，board 快照镜像 models 字段
+
+**背景（用户裁定，§7.12.1）**：历史全部 213 个 `round-cyb-*.json` 均无结构化 model/reasoningEffort 字段，board 快照只有 `{goals, savedAt, sessionId, version}`——「每个角色实际跑在什么模型上」跨轮不可审计。插件既有 taskAgentModel/verifyAgentModel/triageAgentModel 配置（v0.8.x 调用级回退、v0.15 思考强度），本轮把生效值落进轮审计与 board 快照。
+
+- **round 记录新增 `agents` 字段（`workflows/round.js`）**：每轮结果携带 `agents: {[roleKey]: {provider?, model?, reasoningEffort?, source, fallbackChain?}}`（roleKey = task 角色键/'verify'/'triage'）。诚实来源语义：workflow runtime 不透传子会话最终模型 id，故今天每行由配置推导（`source: 'config'`；`'observed'` 预留给将来子会话日志回读接缝）；覆盖未回退 = 覆盖字段原样记录；发生调用级回退（v0.8）= 最终调用继承 session 模型——覆盖字段省略、被绕过的覆盖完整保留在 `fallbackChain`；无覆盖 = 继承 session 模型（字段省略）。完整回退历史仍在 `fallbacks` 数组。
+- **controller 合成兜底（`src/controller.ts`）**：`foldRound` 经新导出的 `mergeAgentAudit`/`buildAgentAudit` 把 `agents` 补全写入每个 round 文件——脚本自带行（按行消毒后）优先，脚本未带（旧脚本/失败轮/persistent teammate 路径）时从 `config.roles` + `result.fallbacks` 合成，失败轮同样有审计。返回给调用方的 result 改为带审计的 logged 结果。
+- **board 快照/投影镜像（`src/index.ts` + `src/projection.ts`）**：`LoopState`/`GoalView` 新增 `models: {round, agents}`（只镜像最近一轮，轻量；完整历史在 round 文件）。blocking `round` 与 `collect` 两条折叠路径均写入；board 快照 `restoreLoop` 容错恢复（畸形镜像降级为缺失，不炸板）；投影 `normalizeGoal` 逐行消毒（无效 source 行丢弃、有效行保留）；快照格式 version 保持 1（纯增量可选字段，旧快照照常加载）。
+- **schema/类型（`src/schemas.ts`）**：新增 `AgentModelAudit`/`AgentsModelAudit`/`GoalModelsMirror` 类型与 `agentModelAuditSchema` JSON Schema。
+- **测试**：新增 `test/v22-agent-model-audit.mjs`（11 组：无覆盖三角色行、覆盖原样记录、回退后 observed 语义（覆盖字段省略 + fallbackChain）、quick 深度只有 task 行、buildAgentAudit 合成、mergeAgentAudit 脚本优先/坏行丢弃、foldRound 成功与失败轮 round 文件含 agents、board 快照 models 往返、旧快照无字段可加载 + 畸形镜像安全降级、投影 wire 消毒、旧 round 记录读取容错）。全仓 15 个离线套件全绿；`tsc --noEmit` 仅既有基线（TS5097/TS2307）零新增错误。
+- **生效手段**：`workflows/round.js` 热生效；`src/` 改动宿主重载生效。
+
 ## v0.20.0（2026-11-07）：控制模式状态指示统一——静止整环/旋转缺口环、pill 计数语义「停止数/总数」、状态提示位置配置
 
 **背景（用户多轮反馈）**：控制模式 pill 的运行指示器从绿点演进为圆环后，仍有三处体验问题——空闲态仍是实心绿点与运行态形状不一致；pill 与提示条（ComposerHint）文案/指示器各说各话；缺少「状态提示显示在哪」的配置入口。本轮统一收敛。

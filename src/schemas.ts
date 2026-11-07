@@ -37,6 +37,71 @@ export interface Triage {
   human: TriagedStep[]
 }
 
+/**
+ * v0.21: one role's actually-effective LLM target for a round, as recorded in
+ * the round audit file (`agents.<role>`) and mirrored onto the board snapshot
+ * / projection (`goal.models.agents`). `source: 'config'` = the fields come
+ * from the configured per-role override (or absence of one = session-agent
+ * inherit) — the workflow runtime does not expose the child session's final
+ * model id, so today every row is config-derived; `source: 'observed'` is
+ * reserved for rows read back from actual child-session logs (future seam).
+ * When a call-level fallback (v0.8) fired, the EFFECTIVE call inherited the
+ * session model: the provider/model/reasoningEffort fields are then omitted
+ * and the bypassed override is preserved verbatim in `fallbackChain`.
+ */
+export interface AgentModelAudit {
+  provider?: string
+  model?: string
+  reasoningEffort?: string
+  source: 'config' | 'observed'
+  /** Bypassed overrides that fell back to the session model this round. */
+  fallbackChain?: Array<{
+    from: { provider?: string; model?: string; reasoningEffort?: string }
+    trigger: 'availability-error' | 'null-result'
+    reason: string
+  }>
+}
+
+/** Per-role model audit of one round, keyed by agent() role key. */
+export type AgentsModelAudit = Record<string, AgentModelAudit>
+
+/** Board-side mirror of a goal's most recent round's model audit. */
+export interface GoalModelsMirror {
+  /** Round number the audit belongs to. */
+  round: number
+  agents: AgentsModelAudit
+}
+
+/** JSON Schema for {@link AgentModelAudit} (documentation/diagnostic use). */
+export const agentModelAuditSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['source'],
+  properties: {
+    provider: { type: 'string' },
+    model: { type: 'string' },
+    reasoningEffort: { type: 'string' },
+    source: { enum: ['config', 'observed'] },
+    fallbackChain: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['from', 'trigger', 'reason'],
+        properties: {
+          from: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { provider: { type: 'string' }, model: { type: 'string' }, reasoningEffort: { type: 'string' } },
+          },
+          trigger: { enum: ['availability-error', 'null-result'] },
+          reason: { type: 'string' },
+        },
+      },
+    },
+  },
+} as const
+
 /** Structured delivery report produced by the task agent. */
 export interface TaskReport {
   summary: string

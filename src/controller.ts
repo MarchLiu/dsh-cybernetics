@@ -13,6 +13,8 @@ import { join } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { WorkflowEngine } from '@deepseek-ai/dsh-workflow'
 import type { SmartSelectionAudit } from './modelSelection.ts'
+import type { AgentModelAudit, AgentsModelAudit, GoalModelsMirror } from './schemas.ts'
+export type { AgentModelAudit, AgentsModelAudit, GoalModelsMirror } from './schemas.ts'
 
 /** Directory holding per-round audit logs, relative to the workspace root. */
 export const STATE_DIR = '.cybernetics'
@@ -61,6 +63,14 @@ export interface RoundResult {
    * src/modelSelection.ts), the script only carries it into the record.
    */
   smartSelection?: SmartSelectionAudit
+  /**
+   * v0.21: per-role actually-effective LLM target for this round (task role
+   * key / 'verify' / 'triage'), written by the round script (workflows/
+   * round.js `agents`). When the script did not supply it (an old script or a
+   * failed run) `foldRound` synthesizes it from `config.roles` + `fallbacks`
+   * via `buildAgentAudit`, so the round record always carries the audit.
+   */
+  agents?: AgentsModelAudit
 }
 
 /** LLM target overrides for one sub-agent role; workflow `agent()` opts subset. */
@@ -211,6 +221,14 @@ export interface LoopState {
    * renders it as the goal's 关联智能体 line with live run state.
    */
   agents?: GoalAgentRecord[]
+  /**
+   * v0.21 board mirror: the most recent round's per-role model audit (see
+   * {@link RoundResult.agents}). Lightweight by design — only the LATEST
+   * round is mirrored (full history lives in the round-*.json audit files);
+   * restored from the board snapshot so cross-round auditing survives a host
+   * restart, absent on goals that have not run a round since v0.21.
+   */
+  models?: GoalModelsMirror
 }
 
 /** One `revise` transition as written to `.cybernetics/revisions-<newGoalId>.jsonl`. */
@@ -299,6 +317,89 @@ export interface GoalSeed {
   executor?: 'ephemeral' | 'persistent'
   role?: string
   subgoal?: string
+}
+
+/**
+ * v0.21: synthesize the per-role effective-model audit from the round's
+ * call-level fallback records plus the configured role overrides. Pure; used
+ * by `foldRound` when the round script did not carry `agents` (old script,
+ * failed run, persistent-teammate path). Rows reflect the EFFECTIVE call:
+ * a configured override that ran untouched keeps its fields (`source:
+ * 'config'`); a role that fell back ends on the session model (override
+ * fields omitted, the bypassed spec preserved in `fallbackChain`); a role
+ * with no override inherits the session model (fields omitted, no chain).
+ * Script-supplied rows always win — this is the fallback synthesis only.
+ */
+export function buildAgentAudit(
+  config: ControllerConfig,
+  state: Pick<LoopState, 'role'>,
+  fallbacks: RoleFallback[] | undefined,
+): AgentsModelAudit {
+  const keys = [state.role ?? 'default', 'verify', 'triage']
+  const audit: AgentsModelAudit = {}
+  for (const key of new Set(keys)) {
+    const spec = config.roles?.[key]
+    const chain = (fallbacks ?? []).filter((f) => f.role === key).map((f) => ({
+      from: { ...f.from },
+      trigger: f.trigger,
+      reason: f.reason,
+    }))
+    const fellBack = chain.length > 0
+    audit[key] = {
+      source: 'config',
+      ...(spec?.provider && !fellBack ? { provider: spec.provider } : {}),
+      ...(spec?.model && !fellBack ? { model: spec.model } : {}),
+      ...(spec?.reasoningEffort && !fellBack ? { reasoningEffort: spec.reasoningEffort } : {}),
+      ...(fellBack ? { fallbackChain: chain } : {}),
+    }
+  }
+  return audit
+}
+
+/** Normalize one script-supplied audit row (tolerant: corrupt rows are dropped). */
+function sanitizeAuditRow(raw: unknown): AgentModelAudit | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const r = raw as Record<string, unknown>
+  if (r.source !== 'config' && r.source !== 'observed') return undefined
+  const row: AgentModelAudit = { source: r.source }
+  for (const field of ['provider', 'model', 'reasoningEffort'] as const) {
+    if (typeof r[field] === 'string' && (r[field] as string).length > 0) row[field] = r[field] as string
+  }
+  if (Array.isArray(r.fallbackChain)) {
+    const chain = r.fallbackChain.filter((e) => e !== null && typeof e === 'object').map((e) => {
+      const f = e as Record<string, unknown>
+      const from = (f.from ?? {}) as Record<string, unknown>
+      return {
+        from: {
+          ...(typeof from.provider === 'string' ? { provider: from.provider } : {}),
+          ...(typeof from.model === 'string' ? { model: from.model } : {}),
+          ...(typeof from.reasoningEffort === 'string' ? { reasoningEffort: from.reasoningEffort } : {}),
+        },
+        ...(f.trigger === 'availability-error' || f.trigger === 'null-result' ? { trigger: f.trigger } : {}),
+        ...(typeof f.reason === 'string' ? { reason: f.reason } : {}),
+      }
+    })
+    if (chain.length > 0) row.fallbackChain = chain as AgentModelAudit['fallbackChain']
+  }
+  return row
+}
+
+/**
+ * Merge the round's model audit: script-supplied `agents` rows win per role
+ * (sanitized); missing roles are synthesized from config + fallbacks so the
+ * round record always carries a complete task/verify/triage audit. Pure.
+ */
+export function mergeAgentAudit(
+  config: ControllerConfig,
+  state: Pick<LoopState, 'role'>,
+  result: Pick<RoundResult, 'agents' | 'fallbacks'>,
+): AgentsModelAudit {
+  const base = buildAgentAudit(config, state, result.fallbacks)
+  for (const [key, raw] of Object.entries(result.agents ?? {})) {
+    const row = sanitizeAuditRow(raw)
+    if (row !== undefined) base[key] = row
+  }
+  return base
 }
 
 /** Append one round's structured result to the per-workspace audit log. */
@@ -427,8 +528,13 @@ export async function foldRound(
   }
   // v0.6 audit: record which substrate ran the round.
   const logged: RoundResult = { ...result, executor: state.executor ?? 'ephemeral' }
+  // v0.21 audit: per-role effective model target (script rows win, config +
+  // fallbacks fill the gaps), so every round file names what ran on what.
+  logged.agents = mergeAgentAudit(config, state, result)
   await writeRoundLog(root, state.goalId, round, logged)
-  return { result, decision: decide(result, state, config) }
+  // Return the logged (audit-complete) result: callers mirror `agents` onto
+  // the board via `loop.models` and the tool result reads from the same shape.
+  return { result: logged, decision: decide(result, state, config) }
 }
 
 /**

@@ -23,7 +23,12 @@
 //                                                   // verify/triage); full = the whole loop (default,
 //                                                   // for complex analysis and any world change)
 // }
-// Returns { round, report, verdict, triage } — the controller folds this into the decision.
+// Returns { round, report, verdict, triage, fallbacks, agents } — the controller folds
+// this into the decision. v0.21: `agents` = per-role EFFECTIVE model audit
+// ({[roleKey]: {provider?, model?, reasoningEffort?, source, fallbackChain?}}) so
+// the round record names what each role actually ran on (config-derived today;
+// a role that fell back ends on the session model with the bypassed override
+// preserved in fallbackChain).
 
 const { goal, state, subgoal, brief, role, roles, depth, taskReport, smartSelection } = args
 
@@ -99,14 +104,44 @@ const specLabel = (spec) => [spec.provider, spec.model, spec.reasoningEffort].fi
  * 无覆盖 = 直接调用（无回退必要）；非可用性错误原样上抛；重试再失败降级为
  * null（沿用既有「本轮无结果」路径，回退记录仍可见）。
  */
+// --- v0.21 每角色生效模型审计（agents） ---------------------------------------
+// 轮结果携带 agents: { [roleKey]: { provider?, model?, reasoningEffort?,
+// source, fallbackChain? } }。workflow runtime 不透传子会话最终模型 id，因此
+// 今天每行都由配置推导（source: 'config'；'observed' 预留给将来从子会话日志
+// 回读的接缝）：覆盖生效 = 覆盖字段原样记录；发生回退 = 最终调用继承 session
+// 模型（覆盖字段省略，被绕过的覆盖完整保留在 fallbackChain）；无覆盖 = 继承
+// session 模型（字段省略）。真正的完整历史仍在轮审计文件 fallbacks 数组。
+const modelAudit = {}
+
+const auditSpec = (roleKey, spec) => {
+  modelAudit[roleKey] = {
+    source: 'config',
+    ...(spec.provider ? { provider: spec.provider } : {}),
+    ...(spec.model ? { model: spec.model } : {}),
+    ...(spec.reasoningEffort ? { reasoningEffort: spec.reasoningEffort } : {}),
+  }
+}
+
+const auditFallback = (roleKey, fb) => {
+  const row = modelAudit[roleKey] ?? { source: 'config' }
+  delete row.provider
+  delete row.model
+  delete row.reasoningEffort
+  row.fallbackChain = [...(row.fallbackChain ?? []), { from: { ...fb.from }, trigger: fb.trigger, reason: fb.reason }]
+  modelAudit[roleKey] = row
+}
+
 const callRoleAgent = async (roleKey, prompt, opts) => {
   const spec = specFor(roleKey)
   const overridden = !!(spec.provider || spec.model || spec.reasoningEffort)
+  auditSpec(roleKey, spec)
   try {
     const result = await agent(prompt, { ...opts, ...spec })
     if (result === null && overridden) {
       const reason = 'agent() 返回 null（runtime 未透传原因：子 agent 未完成或无结构化产出），疑似覆盖模型不可调用'
-      fallbacks.push({ role: roleKey, from: spec, trigger: 'null-result', reason })
+      const fb = { role: roleKey, from: spec, trigger: 'null-result', reason }
+      fallbacks.push(fb)
+      auditFallback(roleKey, fb)
       log(`[cybernetics fallback] ${roleKey} 角色覆盖模型 ${specLabel(spec)} 执行无产出，回退到 session agent 模型重试`)
       try { return await agent(prompt, opts) } catch { return null }
     }
@@ -114,7 +149,9 @@ const callRoleAgent = async (roleKey, prompt, opts) => {
   } catch (err) {
     if (overridden && isAvailabilityFailure(err)) {
       const reason = errorTextOf(err).split('\n')[0].slice(0, 300)
-      fallbacks.push({ role: roleKey, from: spec, trigger: 'availability-error', reason })
+      const fb = { role: roleKey, from: spec, trigger: 'availability-error', reason }
+      fallbacks.push(fb)
+      auditFallback(roleKey, fb)
       log(`[cybernetics fallback] ${roleKey} 角色覆盖模型 ${specLabel(spec)} 调用失败（${reason}），回退到 session agent 模型重试`)
       try { return await agent(prompt, opts) } catch { return null }
     }
@@ -122,11 +159,12 @@ const callRoleAgent = async (roleKey, prompt, opts) => {
   }
 }
 
-/** 轮结果统一携带回退记录（空数组 = 未发生回退）+ v0.16 智能选择审计（关闭时缺省）。 */
+/** 轮结果统一携带回退记录（空数组 = 未发生回退）+ v0.16 智能选择审计（关闭时缺省）+ v0.21 每角色生效模型审计。 */
 const withFallbacks = (out) => ({
   ...(smartSelection && typeof smartSelection === 'object' ? { smartSelection } : {}),
   ...out,
   fallbacks,
+  agents: modelAudit,
 })
 
 // v0.6 TeamExecutor: the persistent teammate already did the task work; the

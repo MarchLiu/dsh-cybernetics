@@ -30,7 +30,7 @@ import {
   STATE_DIR, createGoal, decideAbort, foldRound, parseAgentModelSpec, runRound, sanitizeReasoningEffort, startRound, supersedeGoal, writeRevisionLog,
 } from './controller.ts'
 import type {
-  ControllerConfig, ControllerDecision, LoopState, ResumableReason, RoundResult, RolesConfig,
+  AgentsModelAudit, ControllerConfig, ControllerDecision, LoopState, ResumableReason, RoundResult, RolesConfig,
 } from './controller.ts'
 import { startTeamRound, teamExecutorAvailable, teamExecutorUnavailableError } from './executor.ts'
 import { computeSmartSelection, probeCatalogOptions, sessionRouteOf } from './modelSelection.ts'
@@ -542,6 +542,23 @@ function restoreLoop(raw: unknown): LoopState | undefined {
       })
     }
     if (agents.length > 0) loop.agents = agents
+  }
+  // v0.21 model-audit mirror: restore the latest round's per-role audit so the
+  // board keeps answering "what ran on what" across host restarts. Absent on
+  // pre-v0.21 snapshots (readers tolerate missing fields). Corrupt rows are
+  // dropped per-field; a whole-malformed mirror restores to nothing.
+  if (g.models !== null && typeof g.models === 'object' && !Array.isArray(g.models)) {
+    const m = g.models as Record<string, unknown>
+    if (typeof m.round === 'number' && Number.isFinite(m.round) && m.agents !== null && typeof m.agents === 'object' && !Array.isArray(m.agents)) {
+      const agents: Record<string, unknown> = {}
+      for (const [key, row] of Object.entries(m.agents as Record<string, unknown>)) {
+        if (row !== null && typeof row === 'object' && !Array.isArray(row)) {
+          const r = row as Record<string, unknown>
+          if (r.source === 'config' || r.source === 'observed') agents[key] = row
+        }
+      }
+      loop.models = { round: m.round, agents: agents as AgentsModelAudit }
+    }
   }
   if (Array.isArray(g.revisions)) {
     loop.revisions = []
@@ -2429,6 +2446,9 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         if (!h) throw new Error(`cybernetics: goal "${loop.goalId}" has no background round to collect`)
         if (!h.settled) return { goalId: loop.goalId, round: h.round, pending: true }
         const { result, decision } = await foldRound(h.root, h.round, h.settled, h.loop, h.config)
+        // v0.21: mirror the latest round's per-role model audit onto the board
+        // (round file already carries the full record).
+        h.loop.models = { round: h.round, agents: result.agents ?? {} }
         applyDecision(h.loop, h.round, result, decision)
         running.delete(loop.goalId!)
         await disposeOnce(h)
@@ -2463,6 +2483,9 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         await handle.dispose()
       }
       const { result, decision } = await foldRound(root, handle.round, settled, loop, controllerConfig)
+      // v0.21: mirror the latest round's per-role model audit onto the board
+      // (round file already carries the full record).
+      loop.models = { round: result.round ?? handle.round, agents: result.agents ?? {} }
       applyDecision(loop, result.round, result, decision)
       // Round settlement decision applied — republish (round / status / subgoal).
       await publishBoard()

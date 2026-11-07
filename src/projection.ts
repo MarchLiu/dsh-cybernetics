@@ -30,6 +30,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { appendPluginRecord } from '@deepseek-ai/dsh-session'
 import type { LoopState } from './controller.ts'
+import type { AgentsModelAudit, GoalModelsMirror } from './schemas.ts'
+
+export type { AgentsModelAudit, GoalModelsMirror } from './schemas.ts'
 
 /** One goal revision (v0.6 outer loop: agent proposes, the user confirms). */
 export interface GoalRevisionView {
@@ -94,6 +97,12 @@ export interface GoalView {
   revisions: GoalRevisionView[]
   /** Every child agent this goal's rounds spawned (v0.14, aggregated). */
   agents?: GoalAgentView[]
+  /**
+   * v0.21 mirror of the goal's most recent round's per-role model audit
+   * (task/verify/triage effective provider/model/effort + fallback chain) —
+   * lightweight: only the latest round; full history in round-*.json.
+   */
+  models?: GoalModelsMirror
   /** Epoch milliseconds of the last content change (ordering key for the tab). */
   updatedAt: number
 }
@@ -190,6 +199,49 @@ function normalizeAgent(agent: unknown): GoalAgentView | undefined {
   }
 }
 
+/** Normalize one wire model-audit row into a fresh plain-JSON object. */
+function normalizeModelRow(raw: unknown): AgentsModelAudit[string] | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const r = raw as Record<string, unknown>
+  if (r.source !== 'config' && r.source !== 'observed') return undefined
+  const row: AgentsModelAudit[string] = { source: r.source }
+  for (const field of ['provider', 'model', 'reasoningEffort'] as const) {
+    if (typeof r[field] === 'string' && (r[field] as string).length > 0) row[field] = r[field] as string
+  }
+  if (Array.isArray(r.fallbackChain)) {
+    const chain = r.fallbackChain.filter((e): e is Record<string, unknown> =>
+      e !== null && typeof e === 'object' && !Array.isArray(e)).map((f) => {
+      const from = (f.from ?? {}) as Record<string, unknown>
+      return {
+        from: {
+          ...(typeof from.provider === 'string' ? { provider: from.provider } : {}),
+          ...(typeof from.model === 'string' ? { model: from.model } : {}),
+          ...(typeof from.reasoningEffort === 'string' ? { reasoningEffort: from.reasoningEffort } : {}),
+        },
+        ...(f.trigger === 'availability-error' || f.trigger === 'null-result' ? { trigger: f.trigger } : {}),
+        ...(typeof f.reason === 'string' ? { reason: f.reason } : {}),
+      }
+    })
+    if (chain.length > 0) row.fallbackChain = chain as AgentsModelAudit[string]['fallbackChain']
+  }
+  return row
+}
+
+/** Normalize one wire models mirror into a fresh plain-JSON object. */
+function normalizeModels(raw: unknown): GoalModelsMirror | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const m = raw as Record<string, unknown>
+  if (!Number.isFinite(m.round) || m.agents === null || typeof m.agents !== 'object' || Array.isArray(m.agents)) {
+    return undefined
+  }
+  const agents: AgentsModelAudit = {}
+  for (const [key, row] of Object.entries(m.agents as Record<string, unknown>)) {
+    const clean = normalizeModelRow(row)
+    if (clean !== undefined) agents[key] = clean
+  }
+  return { round: Number(m.round), agents }
+}
+
 /** Normalize one wire goal into a fresh plain-JSON object. */
 function normalizeGoal(goal: GoalView): GoalView {
   return {
@@ -220,6 +272,7 @@ function normalizeGoal(goal: GoalView): GoalView {
     ...(Array.isArray(goal.agents)
       ? { agents: goal.agents.map(normalizeAgent).filter((a): a is GoalAgentView => a !== undefined) }
       : {}),
+    ...(normalizeModels(goal.models) !== undefined ? { models: normalizeModels(goal.models)! } : {}),
     updatedAt: Number.isFinite(goal.updatedAt) ? Number(goal.updatedAt) : 0,
   }
 }
@@ -287,6 +340,7 @@ function toGoalView(loop: LoopState, now: number): GoalView {
     ...(Array.isArray(loop.agents) && loop.agents.length > 0
       ? { agents: loop.agents.map(normalizeAgent).filter((a): a is GoalAgentView => a !== undefined) }
       : {}),
+    ...(loop.models !== undefined ? { models: loop.models } : {}),
     updatedAt: 0,
   }
   const fingerprint = JSON.stringify({ ...view, updatedAt: 0 })
