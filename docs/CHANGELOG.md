@@ -4,6 +4,16 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.20.0（2026-11-07）：控制模式状态指示统一——静止整环/旋转缺口环、pill 计数语义「停止数/总数」、状态提示位置配置
+
+**背景（用户多轮反馈）**：控制模式 pill 的运行指示器从绿点演进为圆环后，仍有三处体验问题——空闲态仍是实心绿点与运行态形状不一致；pill 与提示条（ComposerHint）文案/指示器各说各话；缺少「状态提示显示在哪」的配置入口。本轮统一收敛。
+
+- **运行指示器统一为圆环（`lib/client.js`）**：新增共享渲染器 `renderModeRing(running, color)`——14×14 盒、`viewBox 0 0 14 14`、`circle cx/cy=7 r=6 stroke 2`、`MODE_ON_COLOR #3fb950`（尺寸先浏览器实测 GUI 既有 context 圆环后取整）；`running=true` 为缺口环（`strokeDasharray '28.3 9.4'`，3:1 缺口）+ 3s/圈旋转动画类，`running=false` 为静止完整整环（无 dasharray、无动画）。语义：**静止整环 = 开但空闲；转动缺口环 = 运行中**。ModePill 空闲态由实心绿点改为静态整环；关闭/未加载态维持灰色实心圆点；`prefers-reduced-motion` 下运行态静态呈现。
+- **pill/提示条文案统一（`lib/client.js`）**：新增纯 reducer `countGoals(board)`（返回 `{stopped, total}`：stopped = total − running 并 clamp 到 [0,total]，畸形输入降级 `{stopped:0,total:0}` 绝不抛错，已导出）；ModePill 与 ComposerHint 可见文案统一为「控制模式：{stopped}/{total}」（zh）/ "Control {stopped}/{total}"（en），分子为**停止数**（settle 的目标数）而非运行数；ComposerHint 原 6px hintDot 换成同一 `renderModeRing`，原 insert/queue 长文案移入 title/aria-label 作 tooltip，`role:'note'` 与 `data-cybernetics-hint` 保留；未知/未就绪态显示「控制模式：…」。
+- **新增配置字段 `hintLocation`（`src/index.ts` + `lib/client.js`）**：`'both' | 'pill' | 'composer' | 'none'`，默认 `'both'`，声明为 volatile；客户端 `readHintLocation` 快照读取器（未加载/旧宿主/畸形值一律回退 `'both'`）；ModePill 在 `'none'/'composer'` 时不渲染、ComposerHint 在 `'none'/'pill'` 时不渲染（均在全部 hooks 之后 early-return，不破坏 hook 顺序）；设置卡片新增 kind:'enum' 下拉行「状态提示位置」。
+- **测试**：`test/v12-mode-pill-running.mjs` 重写为 stopped 语义 + 三态圆环断言（空闲整环无动画类/运行态缺口旋转/关闭灰点）+ 30 个 mode.* locale 键两侧一致性；新增 `test/v21-hint-location.mjs`（readHintLocation 回退矩阵、两组件门控、统一渲染、schema 声明）；`test/v03-offline.mjs` volatile 字段清单更新为 17 个。全仓 15 个离线测试全绿，`node --check lib/client.js` OK。
+- **生效手段**：`lib/client.js` 改动需重启宿主 + 刷新浏览器；`src/index.ts` 改动宿主重载生效。
+
 ## v0.19.1（2026-11-07）：预置方案模型命名校准——对齐厂商官方 API id 与本部署模型目录
 
 **背景（用户反馈）**：选择厂商方案普遍报错——卡片显示「该模型已不在当前系统模型列表中，运行时将回退到 session agent 模型」。根因：`VENDOR_PRESETS` 注册表中大量 `provider/model` 是商品名/编造名或未对齐本部署渠道（如 `deepseek/V4-Pro`、`anthropic/Sonnet-5.5`、`volcano/Seed-2.1-lite`、`moonshot/kimi-k3.1-pro-highspeed`），而厂商方案的 apply 路径把该字符串直接写入扁平模型字段、不做目录校验，名字必须事先正确。本轮以「本部署实时模型目录（2026-11-07 经 preset_recommend 第一跳实测）+ 各厂商官方 API 模型列表」为唯一基准做逐厂商调研并全表校准。

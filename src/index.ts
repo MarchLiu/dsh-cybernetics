@@ -191,6 +191,12 @@ export interface Config extends ControllerConfig {
    */
   noticePolicy?: 'insert' | 'queue'
   /**
+   * Where the status indicators render (v0.19.0, default 'both'): the
+   * session-header pill (pill), the composer-dock hint bar (composer), both,
+   * or neither (none). Purely a client-UI concern; purely cosmetic either way.
+   */
+  hintLocation?: 'both' | 'pill' | 'composer' | 'none'
+  /**
    * Max concurrent rounds across ALL sessions (default 0 = unlimited): a new
    * round (blocking, 'start' or 'revise') is refused while this many rounds
    * are in flight, protecting the host from parallel-agent storms.
@@ -383,6 +389,13 @@ export const Config = z.object({
    */
   noticePolicy: z.union(['insert', 'queue'] as const).default('insert').volatile()
     .description('轮完成通知策略（v0.13.0，缺省 insert）：本会话 cybernetics 生效期间，后台 goal 轮结束产生的内环完成通知（<cybernetics_round>）若排队在 next-turn（session agent 仍在跑），自动重定位为 next-step（steer）即时插入当前回合，免手动推送/等待轮后折叠；queue 恢复原生 next-turn 排队。保存后即时生效。'),
+  /**
+   * Status-indicator location (v0.19.0, default 'both'). Volatile: the client
+   * reads it from the live ConfigForm snapshot on every render, so a panel
+   * edit moves/hides the pill + hint bar without a remount. Purely cosmetic.
+   */
+  hintLocation: z.union(['both', 'pill', 'composer', 'none'] as const).default('both').volatile()
+    .description('状态提示位置（v0.19.0，缺省 both）：控制模式状态 UI 的显示位置——both=顶栏药丸 + 编辑器下方提示条（默认，保持现状）；pill=仅顶栏药丸；composer=仅编辑器下方提示条；none=两处都不显示。纯外观项，不影响任何控制语义；配置未加载或旧宿主缺字段时客户端回退为 both。保存后即时生效，无需重载。'),
 })
 
 /** One resolved config field: a live reference (volatile), or a plain value. */

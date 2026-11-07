@@ -2690,8 +2690,8 @@ console.log(JSON.stringify({
   }
   const form57 = volatileForm57(Config)
   assert.deepEqual(Object.keys(form57.dict ?? {}).sort(),
-    ['allGoalsMode', 'customPresets', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'presetPlan', 'presetRecommendation', 'roundsPerSubgoal', 'smartAgentModelSelection', 'taskAgentModel', 'taskAgentReasoningEffort', 'triageAgentModel', 'triageAgentReasoningEffort', 'verifyAgentModel', 'verifyAgentReasoningEffort'],
-    'the served settings form exposes exactly the sixteen volatile fields (v0.17 added the preset-plan fields, v0.18.2 removed the auto-recommend-route input row, v0.19 added customPresets; roles still not served since v0.8.4)')
+    ['allGoalsMode', 'customPresets', 'hardGate', 'hintLocation', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'presetPlan', 'presetRecommendation', 'roundsPerSubgoal', 'smartAgentModelSelection', 'taskAgentModel', 'taskAgentReasoningEffort', 'triageAgentModel', 'triageAgentReasoningEffort', 'verifyAgentModel', 'verifyAgentReasoningEffort'],
+    'the served settings form exposes exactly the seventeen volatile fields (v0.17 added the preset-plan fields, v0.18.2 removed the auto-recommend-route input row, v0.19 added customPresets; roles still not served since v0.8.4)')
   assert.equal(isVolatilePath57(Config, ['roles']), false,
     'a roles write path is NOT volatile (v0.8.4): the panel neither serves nor writes it')
   // STALE-RUNTIME CONTROL: the pre-0.7.7 runtime face (only allGoalsMode
@@ -2727,8 +2727,8 @@ console.log(JSON.stringify({
     const hostForm = hostSchema.volatileForm(Config)
     assert.notEqual(hostForm, undefined, 'host volatileForm serves a form for the current schema')
     assert.deepEqual(Object.keys(hostForm.dict ?? {}).sort(),
-      ['allGoalsMode', 'customPresets', 'hardGate', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'presetPlan', 'presetRecommendation', 'roundsPerSubgoal', 'smartAgentModelSelection', 'taskAgentModel', 'taskAgentReasoningEffort', 'triageAgentModel', 'triageAgentReasoningEffort', 'verifyAgentModel', 'verifyAgentReasoningEffort'],
-      'the REAL host volatileForm serves exactly the sixteen volatile fields (v0.17 added the preset-plan fields, v0.18.2 removed the auto-recommend-route input, v0.19 added customPresets; roles is off the panel since v0.8.4)')
+      ['allGoalsMode', 'customPresets', 'hardGate', 'hintLocation', 'inputPolicy', 'maxConcurrentRounds', 'noticePolicy', 'presetPlan', 'presetRecommendation', 'roundsPerSubgoal', 'smartAgentModelSelection', 'taskAgentModel', 'taskAgentReasoningEffort', 'triageAgentModel', 'triageAgentReasoningEffort', 'verifyAgentModel', 'verifyAgentReasoningEffort'],
+      'the REAL host volatileForm serves exactly the seventeen volatile fields (v0.17 added the preset-plan fields, v0.18.2 removed the auto-recommend-route input, v0.19 added customPresets; roles is off the panel since v0.8.4)')
     assert.equal(Object.hasOwn(hostForm.dict ?? {}, 'roles'), false, 'the host form does not serve roles any more')
     // v0.18.2: the removed auto-recommend-route field is gone from the schema
     // entirely (name assembled at runtime — zero literal occurrences here).
