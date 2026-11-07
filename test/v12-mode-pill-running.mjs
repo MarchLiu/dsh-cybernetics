@@ -66,6 +66,35 @@ await import('../lib/client.js')
   console.log('✓ 1 countRunningGoals: real/malformed board shapes, running count + highest round')
 }
 
+// --- 1b. countGoals: pill label counts {active, total} ------------------------
+{
+  const countGoals = factoryResult.countGoals
+  assert.equal(typeof countGoals, 'function', 'countGoals exported from client bundle')
+
+  // Empty / unloaded / malformed shapes → { active: 0, total: 0 }, never throw.
+  assert.deepEqual(countGoals(undefined), { active: 0, total: 0 }, 'unloaded face snapshot')
+  assert.deepEqual(countGoals(null), { active: 0, total: 0 }, 'null snapshot')
+  assert.deepEqual(countGoals({}), { active: 0, total: 0 }, 'board without goals array')
+  assert.deepEqual(countGoals({ goals: [] }), { active: 0, total: 0 }, 'empty goals array')
+  assert.deepEqual(countGoals('garbage'), { active: 0, total: 0 }, 'non-object snapshot')
+  assert.deepEqual(countGoals({ goals: 'garbage' }), { active: 0, total: 0 }, 'non-array goals')
+
+  // Real wire shape: active = running count, total = goals.length (ALL goals
+  // count toward total, including malformed entries — length is length).
+  const board = {
+    goals: [
+      { goalId: 'a', status: 'running', round: 2 },
+      { goalId: 'b', status: 'running', round: 5 },
+      { goalId: 'c', status: 'met', round: 3 },
+      { goalId: 'd', status: 'pending', round: 0 },
+      { goalId: 'e', status: 'paused', round: 1 },
+    ],
+  }
+  assert.deepEqual(countGoals(board), { active: 2, total: 5 }, '2 running of 5 total → 2/5')
+  assert.deepEqual(countGoals({ goals: [null, 'x', { status: 'running' }] }), { active: 1, total: 3 }, 'malformed entries still count toward total')
+  console.log('✓ 1b countGoals: active/total label counts, malformed shapes degrade to 0/0')
+}
+
 // --- 2. locale dictionaries: bilingual running tooltip key --------------------
 {
   // client.js is a single factory body; grep-level import isn't possible, so
@@ -83,6 +112,14 @@ await import('../lib/client.js')
     assert.ok(enZone.includes("'" + key + "'"), `en dictionary carries ${key}`)
   }
   assert.ok(zhKeys.includes('mode.tip.running'), 'zh key set includes mode.tip.running')
+  // v0.18.x: pill label keys —「控制模式：{active}/{total}」format, bilingual.
+  assert.ok(source.includes("'mode.pillCounts': '控制模式：{active}/{total}'"), 'zh label wording 控制模式：{active}/{total}')
+  assert.ok(source.includes("'mode.pillCounts': 'Control {active}/{total}'"), 'en label wording Control {active}/{total}')
+  assert.ok(source.includes("'mode.pillUnknown': '控制模式：…'"), 'zh not-loaded label keeps unknown semantics')
+  assert.ok(source.includes("'mode.pillUnknown': 'Control …'"), 'en not-loaded label keeps unknown semantics')
+  assert.ok(zhKeys.includes('mode.pillCounts') && zhKeys.includes('mode.pillUnknown'), 'zh key set includes the new label keys')
+  assert.ok(source.includes("t('mode.pillCounts', { active: counts.active, total: counts.total })"), 'label interpolates running/total counts')
+  assert.ok(source.includes("state.ready ? t('mode.pillCounts', { active: counts.active, total: counts.total }) : t('mode.pillUnknown')"), 'not-loaded state renders the unknown label')
   console.log(`✓ 2 locale: bilingual mode.tip.running key + zh/en mode.* key parity (${zhKeys.length} keys)`)
 }
 
@@ -92,6 +129,7 @@ await import('../lib/client.js')
   assert.ok(source.includes('@keyframes dsh-cybernetics-pill-spin'), 'spin keyframes declared')
   assert.ok(source.includes('.dsh-cybernetics-pill-ring-running { animation: dsh-cybernetics-pill-spin 3s linear infinite'), 'ring rotates 3s linear infinite')
   assert.ok(source.includes('strokeDasharray'), 'ring arc carries a visible gap (stroke-dasharray)')
+  assert.ok(source.includes("const PILL_RING_DASHARRAY = '28.3 9.4'"), 'dasharray keeps the 3:1 arc:gap ratio at r 6 (2π·6 ≈ 37.7)')
   assert.ok(source.includes('@media (prefers-reduced-motion: reduce)'), 'reduced-motion fallback declared')
   assert.ok(source.includes('animation: none'), 'reduced-motion degrades to static ring')
   assert.ok(source.includes("document.getElementById(PILL_SPIN_STYLE_ID)"), 'injection guarded by style id')
@@ -103,6 +141,41 @@ await import('../lib/client.js')
   assert.ok(source.includes("pulsing\n\t\t\t\t\t\t? jsx.jsx('svg'"), 'ring element gated on pulsing flag')
   assert.ok(source.includes('const pulsing = state.ready && state.effective === true && running.count > 0'), 'pulsing = ready + on + running')
   console.log('✓ 3 ring CSS: single-injection guard, 3s linear spin, dasharray gap, reduced-motion fallback, on+running gating')
+}
+
+// --- 3b. idle-on state renders a STATIC FULL ring (no dasharray, no anim class)
+{
+  const source = (await import('node:fs')).readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  // The idle branch is the middle arm of the indicator ternary, gated on
+  // ready + effective === true (and NOT pulsing, which takes the first arm).
+  const idleStart = source.indexOf(": (state.ready && state.effective === true")
+  assert.ok(idleStart > 0, 'idle-on branch exists and is gated on ready + effective === true')
+  const idleEnd = source.indexOf('modeIndicatorStyles.dot, background: dotColor', idleStart)
+  assert.ok(idleEnd > idleStart, 'idle branch ends at the off/unknown dot fallback')
+  const idle = source.slice(idleStart, idleEnd)
+  assert.ok(idle.includes("jsx.jsx('svg'"), 'idle-on renders an svg ring')
+  assert.ok(idle.includes("viewBox: '0 0 14 14'"), 'idle ring reuses the 14×14 box (context-ring size)')
+  assert.ok(idle.includes('r: PILL_RING_RADIUS') && idle.includes('strokeWidth: PILL_RING_STROKE'), 'idle ring geometry shares the running-ring constants (r 6, stroke 2)')
+  assert.ok(idle.includes('stroke: dotColor'), 'idle ring color follows MODE_ON_COLOR via dotColor')
+  assert.ok(!idle.includes('strokeDasharray'), 'idle ring is a FULL ring — no dasharray gap')
+  assert.ok(!idle.includes('dsh-cybernetics-pill-ring-running'), 'idle ring carries no animation class')
+  assert.ok(!idle.includes('dsh-cybernetics-pill-spin'), 'idle ring declares no spin animation')
+  // Ring size constants: 14×14 to match the host context-usage ring
+  // (measured live in the 3080 GUI: svg 14×14 CSS px); the off/unknown dot
+  // shares the same box via modeIndicatorStyles.dot.
+  assert.ok(source.includes('const PILL_RING_SIZE = 14'), 'ring box constant = 14 (context-ring match)')
+  assert.ok(source.includes('const PILL_RING_RADIUS = 6'), 'ring radius constant = 6 (outer edge 7 = box edge)')
+  assert.ok(source.includes('const PILL_RING_STROKE = 2'), 'ring stroke constant = 2 (scaled from the old 1px @ ×14/6)')
+  assert.ok(source.includes('width: PILL_RING_SIZE') && source.includes('height: PILL_RING_SIZE'), 'ring svg sizes ride the constant')
+  assert.ok(source.includes('width: PILL_RING_SIZE, height: PILL_RING_SIZE, borderRadius: 999'), 'off/unknown dot shares the same box (no layout jump)')
+  assert.ok(!source.includes("viewBox: '0 0 6 6'"), 'old 6px ring geometry fully replaced')
+  // Running arm still has its gap + class; off/unknown arm still the dot.
+  const runningArm = source.slice(source.indexOf("pulsing\n\t\t\t\t\t\t? jsx.jsx('svg'"), idleStart)
+  assert.ok(runningArm.includes('strokeDasharray: PILL_RING_DASHARRAY'), 'running ring keeps its dasharray gap')
+  assert.ok(runningArm.includes("className: 'dsh-cybernetics-pill-ring-running'"), 'running ring keeps the spin class')
+  const offArm = source.slice(source.indexOf('modeIndicatorStyles.dot, background: dotColor', idleStart))
+  assert.ok(offArm.includes('modeIndicatorStyles.dot'), 'off/unknown keep the static dot')
+  console.log('✓ 3b idle-on: static full green ring (no dasharray/no animation), running keeps gap+spin, off keeps dot')
 }
 
 // --- 4. client.js factory: inject unchanged, exports intact -------------------

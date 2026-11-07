@@ -112,6 +112,7 @@ export const PRESET_IDS = [
   'qwen',
   'volcano-coding-plan',
   'minimax',
+  'glm',
 ] as const
 
 export type PresetId = (typeof PRESET_IDS)[number]
@@ -197,20 +198,31 @@ export const CROSS_VENDOR_PRINCIPLES: string[] = [
 ]
 
 /**
- * The vendor registry (v0.17: the eight vendors' published combinations,
- * collected 2026-11-06). Selecting a READY preset applies its DEFAULT
- * variant's task/verify/triage roles (model + effort) to the flat volatile
- * fields; the session suggestion travels with the variant as reference data
- * only. DeepSeek deliberately publishes two variants (in-house stack vs
- * external verify); Kimi/Qwen/火山 carry the multi-variant ladders the
- * vendors document. Gemini resolves 「家族 + 最新版本」 at runtime, so its
- * ids are family-latest tokens rather than pinned version numbers.
+ * The vendor registry (v0.17: the vendors' published combinations, collected
+ * 2026-11-06; v0.19.1 naming audit 2026-11-07). The audit re-grounded every
+ * `model` id against (a) the vendors' official API model lists and (b) THIS
+ * deployment's live catalog: catalog-covered families (DeepSeek, Kimi, 火山
+ * Coding Plan, GLM) use verbatim catalog ids (provider+model both hit);
+ * off-catalog vendors (OpenAI / Anthropic / Google / Qwen / MiniMax) keep
+ * their vendor provider id with officially confirmed API ids (Anthropic's
+ * product-name forms — Sonnet-5.5/Opus-5.5/… — became the lowercase-hyphen
+ * API ids claude-*-5-5 / claude-fable-5-1; Qwen's qwen-turbo is gone, so the
+ * trio is the current qwen3.7-plus / qwen3.8-max / qwen3.8-flash; OpenAI /
+ * Gemini / MiniMax ids verified correct as-is). Each entry's `source` names
+ * the official page checked and its `note` carries the audit disclosure.
+ * Selecting a READY preset applies its DEFAULT variant's task/verify/triage
+ * roles (model + effort) to the flat volatile fields; the session suggestion
+ * travels with the variant as reference data only. DeepSeek deliberately
+ * publishes two variants (in-house stack vs external verify); Kimi/Qwen/火山
+ * carry the multi-variant ladders. Gemini resolves 「家族 + 最新版本」 at
+ * runtime, so its ids are family-latest tokens rather than pinned versions.
  */
 export const VENDOR_PRESETS: VendorPreset[] = [
   {
     id: 'openai',
     label: 'OpenAI',
     description: 'OpenAI 官方针对 cybernetic 循环（规划-执行-验证-分拣）推荐的组合：gpt-6.1-sol 承担 task/verify，gpt-6-luna 承担 triage；effort 五档 low/medium/high/xhigh/max（astra/6.1-sol 不支持 none）。',
+    source: 'https://developers.openai.com/api/docs/models',
     status: 'ready',
     roles: {
       task: {
@@ -239,48 +251,50 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       },
       session: { provider: 'openai', model: 'gpt-6-astra', reasoningEffort: 'high', upgradeTo: 'gpt-6-astra (xhigh/max)', rationale: 'session 主脑用旗舰 astra（仅参考）。' },
     }],
-    note: 'effort 五档：low/medium/high/xhigh/max；gpt-6-astra 与 gpt-6.1-sol 不支持 none 档。',
+    note: 'effort 五档：low/medium/high/xhigh/max；gpt-6-astra 与 gpt-6.1-sol 不支持 none 档（官方迁移指引：改用 low）。v0.19.1 核对：gpt-6-astra（旗舰）/ gpt-6.1-sol（6.1 代主力）/ gpt-6-luna（轻量档）均为官方现行 API id，非编造名；本部署目录未含 openai，需部署侧具备对应 provider 方可应用。',
     sessionNote: PRESET_SESSION_NOTE,
   },
   {
     id: 'claude',
     label: 'Claude',
-    description: 'Anthropic 官方组合（单家族跨代际）：常规 = task Sonnet 5.5 / verify Opus 5.5 / triage Haiku 5.5；高要求 = task Opus 5.5 / verify Fable 5.1 / triage Haiku 5.5。',
+    description: 'Anthropic 官方组合（单家族跨代际）：常规 = task claude-sonnet-5-5 / verify claude-opus-5-5 / triage claude-haiku-5-5；高要求 = task claude-opus-5-5 / verify claude-fable-5-1 / triage claude-haiku-5-5。',
+    source: 'https://platform.claude.com/docs/en/models/overview',
     status: 'ready',
     roles: {
-      task: { provider: 'anthropic', model: 'Sonnet-5.5', rationale: '常规档 task 用 Sonnet 5.5：性价比主力。' },
-      verify: { provider: 'anthropic', model: 'Opus-5.5', fallback: 'Fable-5.1', rationale: 'verify 高一档（Opus）补偿单家族独立性损失。' },
-      triage: { provider: 'anthropic', model: 'Haiku-5.5', rationale: '轻量分拣。' },
+      task: { provider: 'anthropic', model: 'claude-sonnet-5-5', rationale: '常规档 task 用 Sonnet 5.5（claude-sonnet-5-5）：性价比主力。' },
+      verify: { provider: 'anthropic', model: 'claude-opus-5-5', fallback: 'claude-fable-5-1', rationale: 'verify 高一档（Opus 5.5）补偿单家族独立性损失。' },
+      triage: { provider: 'anthropic', model: 'claude-haiku-5-5', rationale: '轻量分拣。' },
     },
     variants: [
       {
         id: 'standard',
         label: '常规',
         roles: {
-          task: { provider: 'anthropic', model: 'Sonnet-5.5', rationale: '性价比主力执行。' },
-          verify: { provider: 'anthropic', model: 'Opus-5.5', fallback: 'Fable-5.1', rationale: 'verify 高一档补偿单家族。' },
-          triage: { provider: 'anthropic', model: 'Haiku-5.5', rationale: '轻量分拣。' },
+          task: { provider: 'anthropic', model: 'claude-sonnet-5-5', rationale: '性价比主力执行。' },
+          verify: { provider: 'anthropic', model: 'claude-opus-5-5', fallback: 'claude-fable-5-1', rationale: 'verify 高一档补偿单家族。' },
+          triage: { provider: 'anthropic', model: 'claude-haiku-5-5', rationale: '轻量分拣。' },
         },
-        session: { provider: 'anthropic', model: 'Opus-5.5', rationale: 'session 主脑用 Opus 5.5（仅参考）。' },
+        session: { provider: 'anthropic', model: 'claude-opus-5-5', rationale: 'session 主脑用 Opus 5.5（仅参考）。' },
       },
       {
         id: 'demanding',
         label: '高要求',
         roles: {
-          task: { provider: 'anthropic', model: 'Opus-5.5', rationale: '高要求场景 task 直接上 Opus。' },
-          verify: { provider: 'anthropic', model: 'Fable-5.1', rationale: 'verify 用最强判断档 Fable 5.1。' },
-          triage: { provider: 'anthropic', model: 'Haiku-5.5', rationale: '轻量分拣不变。' },
+          task: { provider: 'anthropic', model: 'claude-opus-5-5', rationale: '高要求场景 task 直接上 Opus 5.5。' },
+          verify: { provider: 'anthropic', model: 'claude-fable-5-1', rationale: 'verify 用最强判断档 Fable 5.1（claude-fable-5-1，官方定位 demanding reasoning / long-horizon agentic）。' },
+          triage: { provider: 'anthropic', model: 'claude-haiku-5-5', rationale: '轻量分拣不变。' },
         },
-        session: { provider: 'anthropic', model: 'Fable-5.1', rationale: 'session 主脑用 Fable 5.1（仅参考）。' },
+        session: { provider: 'anthropic', model: 'claude-fable-5-1', rationale: 'session 主脑用 Fable 5.1（仅参考）。' },
       },
     ],
-    note: 'verify 恒比 task 高一档，补偿单家族缺独立性的短板；Fable 5.1 的实际可用性以部署模型目录为准。',
+    note: 'v0.19.1 命名核对：官方 API id 一律小写连字符——claude-sonnet-5-5 / claude-opus-5-5 / claude-haiku-5-5 / claude-fable-5-1（旧文案的 Sonnet-5.5 等商品名形式已更正为 API id；Fable 5.1 为真实产品线，非编造）。本部署目录未含 anthropic，需部署侧具备对应 provider 方可应用。',
     sessionNote: PRESET_SESSION_NOTE,
   },
   {
     id: 'gemini',
     label: 'Gemini',
     description: 'Google 官方组合（家族 + 最新版本，运行时解析，不硬编码旧版本号）：task Flash、verify Pro（或高配 Flash + 严格 Prompt）、triage Flash。',
+    source: 'https://ai.google.dev/gemini-api/docs/models',
     status: 'ready',
     roles: {
       task: { provider: 'google', model: 'gemini-flash-latest', rationale: '上下文对齐：task 用最新 Flash，速度吞吐优先。' },
@@ -297,163 +311,168 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       },
       session: { provider: 'google', model: 'gemini-pro-latest', rationale: 'session 主脑用最新 Pro（仅参考）。' },
     }],
-    note: '模型 id 按家族 + 最新版本在部署目录中解析（*-latest），不硬编码旧版本号；verify 也可用高配 Flash + 严格 Prompt 替代 Pro。',
+    note: 'v0.19.1 核对：gemini-flash-latest / gemini-pro-latest 家族别名在官方模型枚举中仍有效，当前代际旗舰为 gemini-4-argon、Flash 当代为 gemini-3.8-flash（*-latest 由部署目录在运行时解析到最新稳定版，无需硬编码版本号）；verify 也可用高配 Flash + 严格 Prompt 替代 Pro（Flash 别名默认开启 thinking，成本敏感时留意）。本部署目录未含 google，需部署侧具备对应 provider 方可应用。',
     sessionNote: PRESET_SESSION_NOTE,
   },
   {
     id: 'deepseek',
     label: 'DeepSeek',
-    description: 'DeepSeek 官方组合（两个变体）：仅本家栈 = verify R1/V4-Pro(thinking)、task V4-Pro(视难度切 thinking)、triage V4-Flash/V3.2；verify 外置 = verify 优先 Claude Opus / GPT 旗舰 / Gemini Pro。',
+    description: 'DeepSeek 官方组合（两个变体，已对齐官方 API id 与本部署目录）：仅本家栈 = verify deepseek-v4-pro(thinking)、task deepseek-v4-pro(视难度切 thinking)、triage deepseek-flash；verify 外置 = verify 优先 Claude Opus / GPT 旗舰 / Gemini Pro。',
+    source: 'https://api-docs.deepseek.com/quick_start/pricing/',
     status: 'ready',
     roles: {
-      task: { provider: 'deepseek', model: 'V4-Pro', fallback: 'V4-Pro (thinking)', rationale: '默认非 thinking 起步，按任务难度切换 thinking 档。' },
-      verify: { provider: 'deepseek', model: 'V4-Pro', reasoningEffort: 'thinking', fallback: 'R1 (thinking)', rationale: 'verify 常开 thinking（R1/V4-Pro thinking 档），审计岗不省这一层。' },
-      triage: { provider: 'deepseek', model: 'V4-Flash', fallback: 'V3.2 (非 thinking)', rationale: '轻量分拣用 Flash/V3.2 非思考档。' },
+      task: { provider: 'deepseek-official', model: 'deepseek-v4-pro', fallback: 'deepseek-v4-pro (thinking)', rationale: '默认非 thinking 起步，按任务难度切换 thinking 档。' },
+      verify: { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'thinking', fallback: 'deepseek-flash', rationale: 'verify 常开 thinking 档，审计岗不省这一层。' },
+      triage: { provider: 'deepseek-official', model: 'deepseek-flash', rationale: '轻量分拣用 Flash 非思考档。' },
     },
     variants: [
       {
         id: 'in-house',
         label: '仅本家',
         roles: {
-          task: { provider: 'deepseek', model: 'V4-Pro', fallback: 'V4-Pro (thinking)', rationale: '视难度切 thinking。' },
-          verify: { provider: 'deepseek', model: 'V4-Pro', reasoningEffort: 'thinking', fallback: 'R1 (thinking)', rationale: 'verify R1/V4-Pro thinking。' },
-          triage: { provider: 'deepseek', model: 'V4-Flash', fallback: 'V3.2 (非 thinking)', rationale: '轻量分拣。' },
+          task: { provider: 'deepseek-official', model: 'deepseek-v4-pro', fallback: 'deepseek-v4-pro (thinking)', rationale: '视难度切 thinking。' },
+          verify: { provider: 'deepseek-official', model: 'deepseek-v4-pro', reasoningEffort: 'thinking', fallback: 'deepseek-flash', rationale: 'verify 常开 thinking。' },
+          triage: { provider: 'deepseek-official', model: 'deepseek-flash', rationale: '轻量分拣。' },
         },
-        session: { provider: 'deepseek', model: 'V4-Pro (非 thinking)', fallback: 'Flash', rationale: 'session 用 V4-Pro 非思考档或 Flash（仅参考）。' },
+        session: { provider: 'deepseek-official', model: 'deepseek-v4-pro (非 thinking)', fallback: 'deepseek-flash', rationale: 'session 用 deepseek-v4-pro 非思考档或 deepseek-flash（仅参考）。' },
       },
       {
         id: 'external-verify',
         label: 'verify 外置',
         roles: {
-          task: { provider: 'deepseek', model: 'V4-Pro', fallback: 'V4-Pro (thinking)', rationale: '本家 task 不变。' },
-          verify: { provider: 'anthropic', model: 'Opus-5.5', fallback: 'GPT 旗舰 / Gemini Pro', rationale: 'verify 优先外置旗舰（Claude Opus / GPT 旗舰 / Gemini Pro），跨家族独立性最大化。' },
-          triage: { provider: 'deepseek', model: 'V4-Flash', fallback: 'V3.2 (非 thinking)', rationale: '轻量分拣。' },
+          task: { provider: 'deepseek-official', model: 'deepseek-v4-pro', fallback: 'deepseek-v4-pro (thinking)', rationale: '本家 task 不变。' },
+          verify: { provider: 'anthropic', model: 'claude-opus-5-5', fallback: 'gpt-6-astra / gemini-pro-latest', rationale: 'verify 优先外置旗舰（Claude Opus / GPT 旗舰 / Gemini Pro），跨家族独立性最大化。' },
+          triage: { provider: 'deepseek-official', model: 'deepseek-flash', rationale: '轻量分拣。' },
         },
-        session: { provider: 'deepseek', model: 'V4-Pro (非 thinking)', fallback: 'Flash', rationale: 'session 用 V4-Pro 非思考档或 Flash（仅参考）。' },
+        session: { provider: 'deepseek-official', model: 'deepseek-v4-pro (非 thinking)', fallback: 'deepseek-flash', rationale: 'session 用 deepseek-v4-pro 非思考档或 deepseek-flash（仅参考）。' },
       },
     ],
-    note: '成本不应成为降级 verify 的理由；thinking 档按 DeepSeek 目录实际提供的档位 id 应用，部署目录未提供时按模型默认执行。',
+    note: '成本不应成为降级 verify 的理由；官方现行 API id 只有 deepseek-v4-pro 与 deepseek-flash（v0.19.1 核对：旧文案的 V4-Flash 已由 deepseek-flash/V4.1-Flash 接替，R1、V3.2 已不在官方目录，相应兜底一并更正），两者均支持 thinking/非 thinking 双模切换；thinking 档按部署目录实际提供的档位 id 应用，未提供时按模型默认执行。本部署 provider 为 deepseek-official（deepseek-account 为同款另一计费渠道）。',
     sessionNote: PRESET_SESSION_NOTE,
   },
   {
     id: 'kimi',
     label: 'Kimi',
-    description: 'Moonshot 官方组合（两个变体）：长期组合 = task/triage kimi-k3.1-pro-highspeed + verify kimi-k3（代际差异保独立）；最高验收质量 = verify 改 kimi-k3.1-pro。',
+    description: 'Moonshot 官方组合（两个变体，已对齐本部署 kimi 目录）：长期组合 = task/triage kimi-for-coding-highspeed + verify k3（代际差异保独立）；最高验收质量 = verify 改 k3-256k。',
+    source: 'https://platform.kimi.ai/docs/models',
     status: 'ready',
     roles: {
-      task: { provider: 'moonshot', model: 'kimi-k3.1-pro-highspeed', rationale: '高速版执行主力。' },
-      verify: { provider: 'moonshot', model: 'kimi-k3', fallback: 'kimi-k3.1-pro', rationale: 'verify 用上一代 k3：代际差异保持审计独立性；最高验收质量可换 k3.1-pro。' },
-      triage: { provider: 'moonshot', model: 'kimi-k3.1-pro-highspeed', rationale: '轻量分拣同执行主力（高速版成本低）。' },
+      task: { provider: 'kimi', model: 'kimi-for-coding-highspeed', rationale: '高速执行主力（本部署目录内的高速 coding 档）。' },
+      verify: { provider: 'kimi', model: 'k3', fallback: 'k3-256k', rationale: 'verify 用上一代 k3：代际差异保持审计独立性；最高验收质量可换 k3-256k。' },
+      triage: { provider: 'kimi', model: 'kimi-for-coding-highspeed', rationale: '轻量分拣同执行主力（高速版成本低）。' },
     },
     variants: [
       {
         id: 'long-term',
         label: '长期组合',
         roles: {
-          task: { provider: 'moonshot', model: 'kimi-k3.1-pro-highspeed', rationale: '高速版执行主力。' },
-          verify: { provider: 'moonshot', model: 'kimi-k3', fallback: 'kimi-k3.1-pro', rationale: '代际差异保独立。' },
-          triage: { provider: 'moonshot', model: 'kimi-k3.1-pro-highspeed', rationale: '轻量分拣。' },
+          task: { provider: 'kimi', model: 'kimi-for-coding-highspeed', rationale: '高速执行主力。' },
+          verify: { provider: 'kimi', model: 'k3', fallback: 'k3-256k', rationale: '代际差异保独立。' },
+          triage: { provider: 'kimi', model: 'kimi-for-coding-highspeed', rationale: '轻量分拣。' },
         },
-        session: { provider: 'moonshot', model: 'kimi-k3.1-pro-highspeed', rationale: 'session 同执行主力（仅参考）。' },
+        session: { provider: 'kimi', model: 'kimi-for-coding-highspeed', rationale: 'session 同执行主力（仅参考）。' },
       },
       {
         id: 'max-acceptance',
         label: '最高验收质量',
         roles: {
-          task: { provider: 'moonshot', model: 'kimi-k3.1-pro-highspeed', rationale: '执行主力不变。' },
-          verify: { provider: 'moonshot', model: 'kimi-k3.1-pro', rationale: 'verify 升级到当代最强 k3.1-pro。' },
-          triage: { provider: 'moonshot', model: 'kimi-k3.1-pro-highspeed', rationale: '轻量分拣。' },
+          task: { provider: 'kimi', model: 'kimi-for-coding-highspeed', rationale: '执行主力不变。' },
+          verify: { provider: 'kimi', model: 'k3-256k', rationale: 'verify 升级到目录内当代最强 k3-256k（原方案 kimi-k3.1-pro 不在部署目录，就近替换并披露）。' },
+          triage: { provider: 'kimi', model: 'kimi-for-coding-highspeed', rationale: '轻量分拣。' },
         },
-        session: { provider: 'moonshot', model: 'kimi-k3.1-pro-highspeed', rationale: 'session 同执行主力（仅参考）。' },
+        session: { provider: 'kimi', model: 'kimi-for-coding-highspeed', rationale: 'session 同执行主力（仅参考）。' },
       },
     ],
-    note: '避开即将退役的 K2 系列；k3（上一代）与 k3.1（当代）的代际差异是该方案 independence 的来源。',
+    note: 'v0.19.1 就近替换披露：原方案的 kimi-k3.1-pro(-highspeed) 在本部署 kimi 目录不存在（官方平台虽有 kimi-k3.1-pro，但部署目录未接入，不编造 id），高速执行档以 kimi-for-coding-highspeed、当代最强验收档以 k3-256k 就近替换。K2 系列官方公告 2026-10-31 起停止新用户接入、计划 2026 年底前全量退役——本部署 kimi 渠道现仍提供 kimi-for-coding(-highspeed)（K2.7 Code），退役窗口内可用、请留意迁移；k3（上一代）与 k3-256k（当代 K3 全量档）的代际差异是该方案 independence 的来源。',
     sessionNote: PRESET_SESSION_NOTE,
   },
   {
     id: 'qwen',
     label: 'Qwen',
-    description: '阿里 Qwen 官方组合（三档）：A = task plus/verify max/triage turbo；B = task max/verify max(或深度思考版)/triage plus；C = task turbo/verify plus/triage turbo。',
+    description: '阿里 Qwen 官方组合（三档，2026-11 当代代际）：A = task qwen3.7-plus/verify qwen3.8-max/triage qwen3.8-flash；B = task max/verify max(或深度思考)/triage plus；C = task flash/verify plus/triage flash。旧系列 qwen-plus/qwen-max 仍可调用但已列入旧版（qwen-max 32k 且无思考档），qwen-turbo 已由 flash 系接替。',
+    source: 'https://www.alibabacloud.com/help/zh/model-studio/text-generation-model',
     status: 'ready',
     roles: {
-      task: { provider: 'qwen', model: 'qwen-plus', upgradeTo: 'qwen-max', rationale: 'A 档：plus 执行，max 留给 verify。' },
-      verify: { provider: 'qwen', model: 'qwen-max', fallback: 'qwen-max (深度思考版)', rationale: 'verify 恒用 max；⚠️ 绝不用 Turbo（幻觉共振）。' },
-      triage: { provider: 'qwen', model: 'qwen-turbo', rationale: '轻量分拣。' },
+      task: { provider: 'qwen', model: 'qwen3.7-plus', upgradeTo: 'qwen3.8-max', rationale: 'A 档：plus 执行（官方默认推荐档），max 留给 verify。' },
+      verify: { provider: 'qwen', model: 'qwen3.8-max', fallback: 'qwen3.8-max（深度思考）', rationale: 'verify 恒用 max 档；⚠️ 绝不用 Flash（幻觉共振）。' },
+      triage: { provider: 'qwen', model: 'qwen3.8-flash', rationale: '轻量分拣。' },
     },
     variants: [
       {
         id: 'a',
         label: 'A（均衡）',
         roles: {
-          task: { provider: 'qwen', model: 'qwen-plus', upgradeTo: 'qwen-max', rationale: 'plus 执行。' },
-          verify: { provider: 'qwen', model: 'qwen-max', fallback: 'qwen-max (深度思考版)', rationale: 'max 审计。' },
-          triage: { provider: 'qwen', model: 'qwen-turbo', rationale: 'turbo 分拣。' },
+          task: { provider: 'qwen', model: 'qwen3.7-plus', upgradeTo: 'qwen3.8-max', rationale: 'plus 执行。' },
+          verify: { provider: 'qwen', model: 'qwen3.8-max', fallback: 'qwen3.8-max（深度思考）', rationale: 'max 审计。' },
+          triage: { provider: 'qwen', model: 'qwen3.8-flash', rationale: 'flash 分拣。' },
         },
-        session: { provider: 'qwen', model: 'qwen-max', rationale: 'session max（仅参考）。' },
+        session: { provider: 'qwen', model: 'qwen3.8-max', rationale: 'session max（仅参考）。' },
       },
       {
         id: 'b',
         label: 'B（高要求）',
         roles: {
-          task: { provider: 'qwen', model: 'qwen-max', rationale: 'max 执行。' },
-          verify: { provider: 'qwen', model: 'qwen-max', fallback: 'qwen-max (深度思考版)', rationale: 'max（或深度思考版）审计。' },
-          triage: { provider: 'qwen', model: 'qwen-plus', rationale: 'plus 分拣。' },
+          task: { provider: 'qwen', model: 'qwen3.8-max', rationale: 'max 执行。' },
+          verify: { provider: 'qwen', model: 'qwen3.8-max', fallback: 'qwen3.8-max（深度思考）', rationale: 'max（或深度思考）审计。' },
+          triage: { provider: 'qwen', model: 'qwen3.7-plus', rationale: 'plus 分拣。' },
         },
-        session: { provider: 'qwen', model: 'qwen-max', rationale: 'session max（仅参考）。' },
+        session: { provider: 'qwen', model: 'qwen3.8-max', rationale: 'session max（仅参考）。' },
       },
       {
         id: 'c',
         label: 'C（轻量）',
         roles: {
-          task: { provider: 'qwen', model: 'qwen-turbo', rationale: 'turbo 执行（轻量场景）。' },
-          verify: { provider: 'qwen', model: 'qwen-plus', rationale: 'plus 审计（verify 底线，绝不用 Turbo）。' },
-          triage: { provider: 'qwen', model: 'qwen-turbo', rationale: 'turbo 分拣。' },
+          task: { provider: 'qwen', model: 'qwen3.8-flash', rationale: 'flash 执行（轻量场景）。' },
+          verify: { provider: 'qwen', model: 'qwen3.7-plus', rationale: 'plus 审计（verify 底线，绝不用 Flash）。' },
+          triage: { provider: 'qwen', model: 'qwen3.8-flash', rationale: 'flash 分拣。' },
         },
-        session: { provider: 'qwen', model: 'qwen-plus', rationale: 'session plus（仅参考）。' },
+        session: { provider: 'qwen', model: 'qwen3.7-plus', rationale: 'session plus（仅参考）。' },
       },
     ],
-    note: '⚠️ verify 绝不用 Turbo（qwen-turbo；幻觉共振：轻模型审计重模型输出会互相放大幻觉）；verify 档恒 ≥ task。',
+    note: '⚠️ verify 绝不用 Flash 档（qwen3.8-flash/qwen-flash；幻觉共振：轻模型审计重模型输出会互相放大幻觉）；verify 档恒 ≥ task。v0.19.1 命名核对：qwen-turbo 已从官方目录下架（由 flash 系接替），qwen-plus/qwen-max 转入旧版（qwen-max 32k 且无思考档），故整表换用官方当前推荐的 qwen3.7-plus / qwen3.8-max / qwen3.8-flash。本部署目录未含 qwen，需部署侧具备对应 provider 方可应用。',
     sessionNote: PRESET_SESSION_NOTE,
   },
   {
     id: 'volcano-coding-plan',
     label: '火山 Coding Plan',
-    description: '火山引擎 Coding Plan 组合（可用池 Seed-2.1-pro / Seed-Evolving / Seed-2.1-lite / Seed-2.0-mini，另有 DeepSeek-V4、GLM-5.3）：A = task lite（复杂重构自动切 pro）/ verify lite（高危 fallback pro）/ triage mini；B = task mini（复杂强制 lite）/ verify lite / triage mini。',
+    description: '火山引擎 Coding Plan 组合（可用池 doubao-seed-2.1-pro / doubao-seed-evolving / doubao-seed-2.1-lite / doubao-seed-2.0-mini，另有 deepseek-v4 系与 glm 系）：A = task lite（复杂重构自动切 pro）/ verify lite（高危 fallback pro）/ triage mini；B = task mini（复杂强制 lite）/ verify lite / triage mini。',
+    source: 'https://ark.volcengine.com/region:cn-beijing/docs/model-list',
     status: 'ready',
     roles: {
-      task: { provider: 'volcano', model: 'Seed-2.1-lite', upgradeTo: 'Seed-2.1-pro', rationale: 'A 档：lite 执行，复杂重构自动切 pro。' },
-      verify: { provider: 'volcano', model: 'Seed-2.1-lite', fallback: 'Seed-2.1-pro', rationale: 'verify 用 lite，高危任务 fallback pro；备选可换 GLM-5.3。' },
-      triage: { provider: 'volcano', model: 'Seed-2.0-mini', rationale: '最轻分拣。' },
+      task: { provider: 'bza-plan', model: 'doubao-seed-2.1-lite', upgradeTo: 'doubao-seed-2.1-pro', rationale: 'A 档：lite 执行，复杂重构自动切 pro。' },
+      verify: { provider: 'bza-plan', model: 'doubao-seed-2.1-lite', fallback: 'doubao-seed-2.1-pro', rationale: 'verify 用 lite，高危任务 fallback pro；备选可换 zai-coding-cn/glm-5.3。' },
+      triage: { provider: 'bza-plan', model: 'doubao-seed-2.0-mini', rationale: '最轻分拣。' },
     },
     variants: [
       {
         id: 'a',
         label: 'A（均衡）',
         roles: {
-          task: { provider: 'volcano', model: 'Seed-2.1-lite', upgradeTo: 'Seed-2.1-pro', rationale: 'lite 执行，复杂重构自动切 pro。' },
-          verify: { provider: 'volcano', model: 'Seed-2.1-lite', fallback: 'Seed-2.1-pro', rationale: 'lite 审计，高危 fallback pro；备选 GLM-5.3。' },
-          triage: { provider: 'volcano', model: 'Seed-2.0-mini', rationale: '最轻分拣。' },
+          task: { provider: 'bza-plan', model: 'doubao-seed-2.1-lite', upgradeTo: 'doubao-seed-2.1-pro', rationale: 'lite 执行，复杂重构自动切 pro。' },
+          verify: { provider: 'bza-plan', model: 'doubao-seed-2.1-lite', fallback: 'doubao-seed-2.1-pro', rationale: 'lite 审计，高危 fallback pro；备选 zai-coding-cn/glm-5.3。' },
+          triage: { provider: 'bza-plan', model: 'doubao-seed-2.0-mini', rationale: '最轻分拣。' },
         },
-        session: { provider: 'volcano', model: 'Seed-Evolving', fallback: 'Seed-2.1-pro', rationale: 'session 首选 Evolving，退 pro（仅参考）。' },
+        session: { provider: 'bza-plan', model: 'doubao-seed-evolving', fallback: 'doubao-seed-2.1-pro', rationale: 'session 首选 doubao-seed-evolving，退 pro（仅参考）。' },
       },
       {
         id: 'b',
         label: 'B（成本优先）',
         roles: {
-          task: { provider: 'volcano', model: 'Seed-2.0-mini', upgradeTo: 'Seed-2.1-lite', rationale: 'mini 执行，复杂任务强制 lite。' },
-          verify: { provider: 'volcano', model: 'Seed-2.1-lite', fallback: 'Seed-2.1-pro', rationale: 'lite 审计不变（成本再压也不降 verify）。' },
-          triage: { provider: 'volcano', model: 'Seed-2.0-mini', rationale: '最轻分拣。' },
+          task: { provider: 'bza-plan', model: 'doubao-seed-2.0-mini', upgradeTo: 'doubao-seed-2.1-lite', rationale: 'mini 执行，复杂任务强制 lite。' },
+          verify: { provider: 'bza-plan', model: 'doubao-seed-2.1-lite', fallback: 'doubao-seed-2.1-pro', rationale: 'lite 审计不变（成本再压也不降 verify）。' },
+          triage: { provider: 'bza-plan', model: 'doubao-seed-2.0-mini', rationale: '最轻分拣。' },
         },
-        session: { provider: 'volcano', model: 'Seed-Evolving', fallback: 'Seed-2.1-pro', rationale: 'session Evolving（仅参考）。' },
+        session: { provider: 'bza-plan', model: 'doubao-seed-evolving', fallback: 'doubao-seed-2.1-pro', rationale: 'session doubao-seed-evolving（仅参考）。' },
       },
     ],
-    note: 'verify/复杂 task 的 fallback 可换 GLM-5.3（外部家族），但禁给 triage/普通 task；session 首选 Seed-Evolving（持续演化档）。',
+    note: 'v0.19.1 命名核对：provider 用本部署的 bza-plan 渠道（火山系模型在本部署的唯一入口），模型 id 逐字对齐部署目录（doubao-seed-2.1-pro / doubao-seed-2.1-lite / doubao-seed-2.0-mini / doubao-seed-evolving；旧文案的 Seed-2.1-lite 等商品名形式已更正）；官方方舟 Doubao-Seed-2.1 系列提供 pro/turbo/lite 三档。verify/复杂 task 的 fallback 可换 zai-coding-cn/glm-5.3（外部家族），但禁给 triage/普通 task；session 首选 doubao-seed-evolving（持续演化档）。',
     sessionNote: PRESET_SESSION_NOTE,
   },
   {
     id: 'minimax',
     label: 'Minimax',
     description: 'Minimax 官方组合：task M3.1-Flash(effort high，可升 xhigh) / verify M3 / triage M3.1-Flash(effort low，可升 medium)；session M3（参考）。',
+    source: 'https://platform.minimax.io/docs/guides/text-generation',
     status: 'ready',
     roles: {
       task: { provider: 'minimax', model: 'MiniMax-M3.1-Flash', reasoningEffort: 'high', upgradeTo: 'MiniMax-M3.1-Flash (xhigh)', rationale: 'Flash 执行主力，effort high 起步。' },
@@ -470,7 +489,42 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       },
       session: { provider: 'minimax', model: 'MiniMax-M3', rationale: 'session 用 M3（仅参考）。' },
     }],
-    note: 'verify 必须能承认不确定性（M3 的校准优于 Flash）；缓存读 4 倍差价——同前缀的重复轮次成本敏感，triage effort 保持 low。',
+    note: 'verify 必须能承认不确定性（M3 的校准优于 Flash）；缓存读 4 倍差价——同前缀的重复轮次成本敏感，triage effort 保持 low。v0.19.1 核对：MiniMax-M3 与 MiniMax-M3.1-Flash 均为官方 API model 枚举内的真实 id（M3.1-Flash 为 M 系最新，支持思考深度调节）；本部署目录未含 minimax，需部署侧具备对应 provider 方可应用。',
+    sessionNote: PRESET_SESSION_NOTE,
+  },
+  {
+    id: 'glm',
+    label: 'GLM',
+    description: '智谱 GLM 官方组合（两个变体，provider 一律 zai-coding-cn）：标准组合 = task glm-5.3-flash(effort high，可升 glm-5.3 max) / verify glm-5.3(effort max) / triage glm-5.3-flash(effort low)；重活命名角色（frontend 等）= task/verify glm-5.3(effort max) / triage glm-5.3-flash(effort low)；session glm-5.3(effort high，参考)。',
+    status: 'ready',
+    roles: {
+      task: { provider: 'zai-coding-cn', model: 'glm-5.3-flash', reasoningEffort: 'high', upgradeTo: 'glm-5.3 (max)', rationale: '量最大的角色，effort 杠杆收益最大处；不用 low 兜底——太弱触发 verify 拒绝循环反而更贵；Flash 上 high 思考成本约是 5.3 的 1/10。' },
+      verify: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'max', rationale: '全系统最不该省的位置：假阳性静默污染整个循环；只跑 full 轮、调用量低，max token 溢价付得起；测量点多花计算=降低测量噪声。' },
+      triage: { provider: 'zai-coding-cn', model: 'glm-5.3-flash', reasoningEffort: 'low', rationale: '四分类小输入小输出，机制性工作；在轮次收敛关键路径上，low 顺带压 wall-clock。' },
+    },
+    variants: [
+      {
+        id: 'standard',
+        label: '标准组合',
+        roles: {
+          task: { provider: 'zai-coding-cn', model: 'glm-5.3-flash', reasoningEffort: 'high', upgradeTo: 'glm-5.3 (max)', rationale: 'Flash 执行主力，effort high；难题升 glm-5.3 max。' },
+          verify: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'max', rationale: 'verify 恒 glm-5.3 max：审计岗不省这一层。' },
+          triage: { provider: 'zai-coding-cn', model: 'glm-5.3-flash', reasoningEffort: 'low', rationale: '轻量分拣 low 档。' },
+        },
+        session: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'high', rationale: '规划/brief 写作受益于思考，但外环、用户面对面，max 延迟和 token 不值；high 档做 fallback 执行者也够用（仅参考）。' },
+      },
+      {
+        id: 'heavy-named-roles',
+        label: '重活命名角色（frontend 等）',
+        roles: {
+          task: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'max', rationale: '官方建议复杂 coding 用 max；按需触发，只在难 subgoal 上生效。' },
+          verify: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'max', rationale: 'verify 与 task 同级 max，同家族下以最高档补偿独立性损失。' },
+          triage: { provider: 'zai-coding-cn', model: 'glm-5.3-flash', reasoningEffort: 'low', rationale: '轻量分拣不变。' },
+        },
+        session: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'high', rationale: 'session 同标准组合（仅参考）。' },
+      },
+    ],
+    note: '命名角色（frontend 等）的 glm-5.3 max effort 只按需生效（智能选择命中难 subgoal 时），避免全量 max；verify 恒 glm-5.3 max，成本不构成降级理由。',
     sessionNote: PRESET_SESSION_NOTE,
   },
 ]
@@ -910,6 +964,167 @@ export function vendorPresetApplyOps(
     )
   }
   return { ready: true, ops: filterAllowedOps(ops), ...(variant !== undefined ? { variant } : {}) }
+}
+
+// --- custom presets (用户自定义方案, v0.19) ---------------------------------------
+
+/**
+ * The presetPlan selector id prefix that marks a USER-SAVED combination
+ * (「自定义方案」). The full selector value is `<prefix><id>` where id is the
+ * stable entry id inside the `customPresets` config field. The prefix keeps
+ * custom ids structurally distinct from the fixed registry ids (and from the
+ * vendor ids a future registry edit could collide with).
+ */
+export const CUSTOM_PRESET_PREFIX = 'custom:'
+
+/** True when a presetPlan selector value names a user-saved combination. */
+export function isCustomPresetId(plan: string): boolean {
+  return typeof plan === 'string' && plan.startsWith(CUSTOM_PRESET_PREFIX)
+}
+
+/** The registry entry id of a custom selector value (strips the prefix). */
+export function customPresetEntryId(plan: string): string {
+  return isCustomPresetId(plan) ? plan.slice(CUSTOM_PRESET_PREFIX.length) : ''
+}
+
+/**
+ * One user-saved combination (「自定义方案」): exactly what the settings card
+ * currently carries for task/verify/triage (model routes + effort tokens),
+ * captured verbatim. Storage is the plugin's `customPresets` config field —
+ * a compact JSON array serialized by serializeCustomPresets (backward
+ * compatible: the field is new, defaults to '', and old readers simply see
+ * no such key).
+ */
+export interface CustomPreset {
+  /** Stable unique entry id (the selector value is CUSTOM_PRESET_PREFIX + id). */
+  id: string
+  /** User-chosen display name (unique across custom presets — enforced by the save UI). */
+  name: string
+  /** ISO time the entry was created (refreshed on overwrite). */
+  at: string
+  /** The captured combination — the three SUB-AGENT roles only (session is user-managed, structurally out of scope). */
+  roles: { task?: PresetRoleSpec; verify?: PresetRoleSpec; triage?: PresetRoleSpec }
+}
+
+/** One role spec extracted from the card's flat config values (undefined = unset/inherit). */
+export interface CustomRoleCapture {
+  provider?: string
+  model?: string
+  reasoningEffort?: string
+}
+
+/**
+ * Capture the card's current task/verify/triage combination (the flat
+ * `*AgentModel` / `*AgentReasoningEffort` values) into a CustomPreset's
+ * roles object. A model value is parsed as `provider/model` when it carries
+ * a slash (bare model names keep undefined provider, exactly the runtime's
+ * parseAgentModelSpec acceptance); blank model/effort fields are dropped so
+ * the stored entry never carries empty strings.
+ */
+export function captureCustomRoles(values: {
+  taskAgentModel?: unknown; taskAgentReasoningEffort?: unknown
+  verifyAgentModel?: unknown; verifyAgentReasoningEffort?: unknown
+  triageAgentModel?: unknown; triageAgentReasoningEffort?: unknown
+}): CustomPreset['roles'] {
+  const parseModel = (raw: unknown): CustomRoleCapture | undefined => {
+    const text = raw === undefined || raw === null ? '' : String(raw).trim()
+    if (text === '') return undefined
+    const slash = text.indexOf('/')
+    return slash > 0
+      ? { provider: text.slice(0, slash), model: text.slice(slash + 1) }
+      : { model: text }
+  }
+  const parseEffort = (raw: unknown): string | undefined => {
+    const text = raw === undefined || raw === null ? '' : String(raw).trim()
+    return text === '' ? undefined : text
+  }
+  const roles: CustomPreset['roles'] = {}
+  const pairs: Array<[keyof CustomPreset['roles'], CustomRoleCapture | undefined, string | undefined]> = [
+    ['task', parseModel(values.taskAgentModel), parseEffort(values.taskAgentReasoningEffort)],
+    ['verify', parseModel(values.verifyAgentModel), parseEffort(values.verifyAgentReasoningEffort)],
+    ['triage', parseModel(values.triageAgentModel), parseEffort(values.triageAgentReasoningEffort)],
+  ]
+  for (const [roleKey, model, effort] of pairs) {
+    if (model === undefined && effort === undefined) continue
+    roles[roleKey] = {
+      ...(model?.provider !== undefined ? { provider: model.provider } : {}),
+      ...(model?.model !== undefined ? { model: model.model } : {}),
+      ...(effort !== undefined ? { reasoningEffort: effort } : {}),
+    }
+  }
+  return roles
+}
+
+const CUSTOM_ROLES = ['task', 'verify', 'triage'] as const
+
+/**
+ * Parse the `customPresets` config field (a compact JSON array). Fully
+ * defensive: anything that is not an array of well-shaped entries returns
+ * the valid prefix (a corrupt entry is dropped, never a throw) — a broken
+ * storage payload must not take down the settings card or the selection
+ * handler. Entries with an empty id or name are invalid.
+ */
+export function parseCustomPresets(text: unknown): CustomPreset[] {
+  if (typeof text !== 'string' || text.trim() === '') return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const out: CustomPreset[] = []
+  for (const raw of parsed) {
+    if (raw === null || typeof raw !== 'object') continue
+    const record = raw as Partial<CustomPreset>
+    if (typeof record.id !== 'string' || record.id === '') continue
+    if (typeof record.name !== 'string' || record.name.trim() === '') continue
+    if (record.roles === null || typeof record.roles !== 'object') continue
+    const roles: CustomPreset['roles'] = {}
+    const source = record.roles as Record<string, unknown>
+    for (const roleKey of CUSTOM_ROLES) {
+      const spec = source[roleKey]
+      if (spec === null || typeof spec !== 'object') continue
+      const entry = spec as Partial<PresetRoleSpec>
+      const next: PresetRoleSpec = {}
+      if (typeof entry.provider === 'string' && entry.provider !== '') next.provider = entry.provider
+      if (typeof entry.model === 'string' && entry.model !== '') next.model = entry.model
+      if (typeof entry.reasoningEffort === 'string' && entry.reasoningEffort !== '') next.reasoningEffort = entry.reasoningEffort
+      if (next.provider !== undefined || next.model !== undefined) roles[roleKey] = next
+    }
+    out.push({
+      id: record.id,
+      name: record.name.trim(),
+      ...(typeof record.at === 'string' && record.at !== '' ? { at: record.at } : { at: '' }),
+      roles,
+    })
+  }
+  return out
+}
+
+/** Serialize the custom-preset list into the config field (compact JSON). */
+export function serializeCustomPresets(list: CustomPreset[]): string {
+  return JSON.stringify(Array.isArray(list) ? list : [])
+}
+
+/**
+ * Adapt one custom preset into the VendorPreset shape so the existing
+ * `vendorPresetApplyOps` builds its apply ops (same six-field bound, same
+ * effort unset semantics, same filterAllowedOps guarantee). `ready` status
+ * with a single variant mirroring `roles` — the exact mirror invariant the
+ * registry normalizes for built-ins.
+ */
+export function customPresetAsVendor(preset: CustomPreset): VendorPreset {
+  return {
+    id: preset.id as VendorPreset['id'],
+    label: preset.name,
+    description: `用户自定义方案「${preset.name}」`,
+    status: 'ready',
+    roles: preset.roles,
+    variants: [{ id: 'custom', label: preset.name, roles: preset.roles }],
+    note: '自定义方案：保存时从设置卡片当前组合捕获，仅含 task/verify/triage 三个子 agent 角色。',
+    sessionNote: PRESET_SESSION_NOTE,
+  }
 }
 
 // --- outcome record (the card-visible status) -----------------------------------

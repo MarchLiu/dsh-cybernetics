@@ -36,10 +36,11 @@ import { startTeamRound, teamExecutorAvailable, teamExecutorUnavailableError } f
 import { computeSmartSelection, probeCatalogOptions, sessionRouteOf } from './modelSelection.ts'
 import type { SmartSelectionAudit } from './modelSelection.ts'
 import {
-  PRESET_AUTO_ID, PRESET_IDS, PRESET_RECOMMEND_TOOL_NAME, applyRecommendationAnswer, buildRecommendationBrief,
-  formatRecommendationRecord, presetById, presetChoiceLabel, vendorPresetApplyOps,
+  PRESET_AUTO_ID, PRESET_RECOMMEND_TOOL_NAME, applyRecommendationAnswer, buildRecommendationBrief,
+  customPresetAsVendor, customPresetEntryId, formatRecommendationRecord, isCustomPresetId, parseCustomPresets,
+  presetById, presetChoiceLabel, vendorPresetApplyOps,
 } from './modelPresets.ts'
-import type { PresetRecommendationRecord, SettingsOp } from './modelPresets.ts'
+import type { CustomPreset, PresetRecommendationRecord, SettingsOp } from './modelPresets.ts'
 import { linkRunToGoal, noteWorkflowAgent, setBoardSource, unlinkRun } from './agents.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setPublishDebugRoot, appendModeRecord } from './projection.ts'
 import {
@@ -107,7 +108,8 @@ export interface Config extends ControllerConfig {
    * v0.17 preset plans (预置方案): the settings card's selector ('' = none,
    * 'auto' = 根据现有配置自动推荐 (v0.18.2: handed to the session agent
    * through the preset_recommend tool — no independent LLM call), otherwise
-   * a vendor registry id). Selecting writes this volatile field; the
+   * a vendor registry id or `custom:<id>` for a user-saved combination
+   * (v0.19)). Selecting writes this volatile field; the
    * loader/volatile-update handler resolves each change ONE-SHOT and applies
    * the result to the flat task/verify/triage model+effort fields only — the
    * session agent's configuration is user-managed and structurally out of
@@ -116,6 +118,8 @@ export interface Config extends ControllerConfig {
   presetPlan?: string
   /** v0.17: the card-visible JSON record of the last preset selection outcome ({status, preset, label, at, picks?, efforts?, variant?, notes?, reason?...}). Volatile. */
   presetRecommendation?: string
+  /** v0.19: the user-saved custom presets (自定义方案), one compact JSON array (CustomPreset[]). Volatile (persisted via the host's user patch row). */
+  customPresets?: string
   /**
    * Hard control gate (default false): hide execution tools from
    * TOP-LEVEL session agents at prompt-assembly time, so the session agent
@@ -288,11 +292,16 @@ export const Config = z.object({
    * handler below resolves it ONE-SHOT: 'auto' writes the pending handoff
    * record and notifies the live session agent(s); a READY vendor preset
    * applies its roles to the three flat model fields; a PLACEHOLDER one only
-   * records the status note. The applied values live in the standard flat
+   * records the status note; a `custom:<id>` value (v0.19) applies the
+   * matching user-saved combination from the `customPresets` field. The
+   * applied values live in the standard flat
    * fields, so persistence, display and the round-start fold are all the
    * existing paths — this field is the trigger, not a parallel config.
+   * v0.19: the selector accepts the `custom:` prefix (user-saved combos), so
+   * the union became a free string — the handler validates ids itself
+   * (unknown ids are ignored with a warn, exactly like before).
    */
-  presetPlan: z.union(['', ...PRESET_IDS] as const).default('').volatile().description('预置方案选择（v0.17，缺省空）：设置卡片下拉框的当前选择。选「根据现有配置自动推荐」(auto) 时，插件把实时模型目录、分配原则与当前角色配置直接交给 session agent（通过 preset_recommend 工具，不发起任何独立 LLM 调用、不新起子 agent），由 session agent 在自己的上下文中给出 task/verify/triage 推荐并回传，插件校验后写入下方各角色字段（已显式配置的角色会被覆盖，请以推荐结果为准复核）；选某厂商方案时应用其默认变体的组合（OpenAI/Claude/Gemini/DeepSeek/Kimi/Qwen/火山 Coding Plan/Minimax，数据见 src/modelPresets.ts）。作用范围仅 task/verify/triage 三个子 agent 角色——session agent 由用户自行管理，方案与自动推荐都不应用 session 项（厂商 session 推荐仅作参考展示）。每次选择的结果记录在 presetRecommendation 字段（pending=已交办 session agent 等待作答）。'),
+  presetPlan: z.string().default('').volatile().description('预置方案选择（v0.17，缺省空）：设置卡片下拉框的当前选择。选「根据现有配置自动推荐」(auto) 时，插件把实时模型目录、分配原则与当前角色配置直接交给 session agent（通过 preset_recommend 工具，不发起任何独立 LLM 调用、不新起子 agent），由 session agent 在自己的上下文中给出 task/verify/triage 推荐并回传，插件校验后写入下方各角色字段（已显式配置的角色会被覆盖，请以推荐结果为准复核）；选某厂商方案时应用其默认变体的组合（OpenAI/Claude/Gemini/DeepSeek/Kimi/Qwen/火山 Coding Plan/Minimax/GLM，数据见 src/modelPresets.ts）；选「custom:<id>」时应用 customPresets 字段中对应自定义方案的组合。作用范围仅 task/verify/triage 三个子 agent 角色——session agent 由用户自行管理，方案与自动推荐都不应用 session 项（厂商 session 推荐仅作参考展示）。每次选择的结果记录在 presetRecommendation 字段（pending=已交办 session agent 等待作答）。'),
   /**
    * v0.17: the card-visible outcome of the last preset selection. The server
    * writes a compact JSON record ({status: ok|pending|placeholder|degraded,
@@ -303,6 +312,21 @@ export const Config = z.object({
    * fields).
    */
   presetRecommendation: z.string().default('').volatile().description('最近一次预置方案应用/自动推荐的结果记录（JSON）：ok=已应用（picks 列出各角色写入的模型）；pending=自动推荐已交办 session agent，等待其经 preset_recommend 工具作答；placeholder=厂商方案占位待填充（未更改配置）；degraded=降级原因（目录不可用/回复不可用/未命中目录）。设置卡片在下拉框下方渲染该记录。'),
+  /**
+   * v0.19 custom presets (自定义方案): the user-saved combinations, stored as
+   * ONE compact JSON array (CustomPreset[] in src/modelPresets.ts) in this
+   * single config field. Volatile like every other field on the card — the
+   * host persists volatile writes into the profile's user patch row, so the
+   * list survives restarts; the field defaults to '' (empty list), which
+   * keeps old profile payloads and old readers fully compatible (an absent
+   * key parses to no entries). The card renders these entries under the
+   * built-in vendor presets, below a divider, and the save/delete/overwrite
+   * flows all rewrite this one field; the selection handler reads it with
+   * the defensive parseCustomPresets (a corrupt payload degrades to an empty
+   * list, never a throw). Built-in vendor presets are code data and can
+   * NEVER be overwritten or deleted through this field.
+   */
+  customPresets: z.string().default('').volatile().description('自定义方案列表（v0.19，缺省空）：设置卡片上保存的用户自定义模型组合（task/verify/triage 的模型与思考强度），JSON 数组格式。保存/覆盖/删除自定义方案即改写本字段；选择某个自定义方案（presetPlan = custom:<id>）时按其组合写入下方各角色字段。内置厂商方案为代码内置数据，不经过本字段，不可覆盖或删除。'),
   /**
    * Max consecutive rounds per subgoal before the loop pauses for the user
    * (controller round-cap, default 3). Volatile: read per round start, so the
@@ -1575,6 +1599,45 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           reason: PRESET_HANDOFF_NOTE,
         }))
         deliverPresetHandoff()
+        return
+      }
+      // v0.19 custom presets (自定义方案): `custom:<id>` resolves against the
+      // `customPresets` config field (the user-saved combinations). The entry
+      // is adapted into the VendorPreset shape so vendorPresetApplyOps builds
+      // the SAME six-field-bounded ops the built-ins use (session scope holds
+      // structurally: the ops builders read task/verify/triage exclusively).
+      if (isCustomPresetId(plan)) {
+        const entryId = customPresetEntryId(plan)
+        let list: CustomPreset[] = []
+        try {
+          list = parseCustomPresets(readConfigField(config.customPresets, ''))
+        } catch { /* defensive: readConfigField face absent → treat as empty */ }
+        const entry = list.find((p) => p.id === entryId)
+        if (entry === undefined) {
+          warnOf(`cybernetics: custom preset plan "${plan}" not found in customPresets — ignored`)
+          await writePresetRecord([], recordOf(plan, {
+            status: 'degraded',
+            label: entryId,
+            reason: '自定义方案不存在（可能已被删除），未应用任何更改',
+          }))
+          return
+        }
+        const appliedCustom = vendorPresetApplyOps(customPresetAsVendor(entry))
+        const customRoles = appliedCustom.variant !== undefined ? appliedCustom.variant.roles : entry.roles
+        const customPicks: Record<string, string> = {}
+        const customEfforts: Record<string, string> = {}
+        for (const roleKey of ['task', 'verify', 'triage'] as const) {
+          const spec = customRoles[roleKey]
+          if (!spec || (!spec.provider && !spec.model)) continue
+          customPicks[roleKey] = spec.provider ? `${spec.provider}/${spec.model}` : String(spec.model)
+          customEfforts[roleKey] = spec.reasoningEffort ?? ''
+        }
+        await writePresetRecord(appliedCustom.ops, recordOf(plan, {
+          label: entry.name,
+          picks: customPicks,
+          efforts: customEfforts,
+          notes: [SESSION_SCOPE_NOTE, '自定义方案：应用用户保存的组合（保存于设置卡片）'],
+        }))
         return
       }
       const preset = presetById(plan)

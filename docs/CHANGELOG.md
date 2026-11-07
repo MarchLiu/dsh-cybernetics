@@ -4,6 +4,33 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.19.1（2026-11-07）：预置方案模型命名校准——对齐厂商官方 API id 与本部署模型目录
+
+**背景（用户反馈）**：选择厂商方案普遍报错——卡片显示「该模型已不在当前系统模型列表中，运行时将回退到 session agent 模型」。根因：`VENDOR_PRESETS` 注册表中大量 `provider/model` 是商品名/编造名或未对齐本部署渠道（如 `deepseek/V4-Pro`、`anthropic/Sonnet-5.5`、`volcano/Seed-2.1-lite`、`moonshot/kimi-k3.1-pro-highspeed`），而厂商方案的 apply 路径把该字符串直接写入扁平模型字段、不做目录校验，名字必须事先正确。本轮以「本部署实时模型目录（2026-11-07 经 preset_recommend 第一跳实测）+ 各厂商官方 API 模型列表」为唯一基准做逐厂商调研并全表校准。
+
+- **注册表（`src/modelPresets.ts`）**：结构与行为零变更（接口/variants 数量与 id/status/PRESET_IDS/session 范围裁定/ALLOWED_OP_PATHS/reasoningEffort 取值一律不动），只改数据与文案：
+  - **目录内四家族逐字对齐**：DeepSeek provider `deepseek`→`deepseek-official`，模型 `V4-Pro`/`V4-Flash`→`deepseek-v4-pro`/`deepseek-flash`（官方现行 API id 仅此两个，旧 R1/V3.2 兜底移除并披露）；Kimi provider `moonshot`→`kimi`，`kimi-k3.1-pro-highspeed`→`kimi-for-coding-highspeed`、verify `kimi-k3`→`k3`、最高验收档 `kimi-k3.1-pro`（部署目录不存在，不编造）→就近替换 `k3-256k` 并在 note/rationale 披露；火山 provider `volcano`→`bza-plan`，`Seed-2.1-pro/Seed-2.1-lite/Seed-2.0-mini/Seed-Evolving`→`doubao-seed-2.1-pro/doubao-seed-2.1-lite/doubao-seed-2.0-mini/doubao-seed-evolving`；GLM（`zai-coding-cn/glm-5.3(-flash)`）与本部署逐字一致，保持不变。
+  - **目录外五厂商对齐官方 API id**：Anthropic 商品名形式更正为官方小写连字符 API id——`Sonnet-5.5`/`Opus-5.5`/`Haiku-5.5`/`Fable-5.1`→`claude-sonnet-5-5`/`claude-opus-5-5`/`claude-haiku-5-5`/`claude-fable-5-1`（调研证实 Fable 5.1 为真实产品线，非编造；deepseek 外置 verify 变体引用同步）；Qwen `qwen-plus`/`qwen-max`/`qwen-turbo`→官方当前推荐代际 `qwen3.7-plus`/`qwen3.8-max`/`qwen3.8-flash`（qwen-turbo 已下架由 flash 系接替、qwen-max 旧版 32k 无思考档，「Turbo 幻觉共振」警示改指 Flash 档）；OpenAI `gpt-6.1-sol`/`gpt-6-luna`/`gpt-6-astra` 与 Gemini `gemini-flash-latest`/`gemini-pro-latest`、Minimax `MiniMax-M3`/`MiniMax-M3.1-Flash` 经官方文档核对均为真实现行 id，保持不变。五厂商 note 统一追加「本部署目录未含该厂商，需部署侧具备对应 provider 方可应用」；五个 id 有出处的条目新增 `source` 字段（官方文档 URL，卡片与交办单渲染「来源」）。
+- **测试（`test/v17-model-presets.mjs`）**：旧名断言全部更新（qwen 系 turbo/plus/max→flash/plus/max 新代际、claude demanding `Fable-5.1`→`claude-fable-5-1`、volcano `volcano/Seed-2.1-lite`→`bza-plan/doubao-seed-2.1-lite`、Qwen note 警示 `/Turbo/`→`/Flash/`）；section (1) 新增 v0.19.1 命名核对断言组（deepseek-official / kimi / bza-plan provider 逐字命中、就近替换披露、五厂商部署 note 存在）。全量离线测试全绿。
+- **文档**：README 中英文未引用旧模型名，无需改动；历史 CHANGELOG 条目不回改。
+- **生效手段**：`src/` 改动宿主重载生效（厂商方案是服务端内置数据，客户端下拉 id 不变）。
+
+## v0.19.0（2026-11-07）：预置方案支持「自定义方案」（保存/覆盖/删除/分区显示/一键应用）
+
+- **存储（`src/modelPresets.ts` 新增 + `src/index.ts` 新字段）**：新增 volatile 配置字段 `customPresets`（缺省 `''`），以单个 JSON 数组（`CustomPreset[]`：`{id, name, at, roles:{task/verify/triage}}`）保存用户组合——宿主把 volatile 写入落进 profile 的用户 patch 行，重启后仍在；缺省空串对旧配置/旧读者完全向后兼容。配套纯函数：`captureCustomRoles`（从卡片六个平铺字段捕获组合，空白字段丢弃、`provider/model` 按 `/` 拆分）、`parseCustomPresets`/`serializeCustomPresets`（防御式解析：损坏载荷降级为空列表，绝不 throw；非 task/verify/triage 角色键——含 session——永不成为条目角色）、`customPresetAsVendor`（把自定义条目适配成 VendorPreset 形状，复用 `vendorPresetApplyOps` 构建 ops，六字段 `ALLOWED_OP_PATHS` 边界与内置方案完全一致）。
+- **选择处理（`src/index.ts`）**：`presetPlan` 由固定 union 放宽为自由字符串（v0.19 起接受 `custom:<id>`）；`handlePresetSelection` 在内置查找前新增自定义分支：从 `customPresets` 解析条目→适配→应用 ops→写 ok 记录（label=用户命名，notes 带 session-scope 声明）；条目已被删除时写 degraded 记录「自定义方案不存在」，未知 id 与以往一样 warn 后忽略。内置厂商方案是代码内置数据，不经该字段，结构上不可覆盖/删除。
+- **客户端（`lib/client.js`）**：预置方案下拉在内置 10 项之后渲染禁用的分割项「── 自定义方案 ──」，其下为自定义方案（值 `custom:<id>`，label=名称）；下拉下方新增「保存为自定义方案」按钮——`window.prompt` 命名、重名时 `window.confirm` 确认覆盖（覆盖保留原 id，选择器始终有效）；选中自定义方案时出现「删除」按钮——`window.confirm` 确认后单次 combine mutate 同时改写列表并 unset 选择器。zh/en 各新增 8 个 locale 键，hint 文案说明自定义方案。保存仅写 `customPresets` 字段，结构上不可能触及内置方案。
+- **测试**：`test/v17-model-presets.mjs` 新增（13）自定义方案全链路（捕获/解析/序列化/ops 边界/handler 应用/缺条目降级），（12）卡片段更新为 12 选项+分割项断言并新增保存/覆盖确认/删除合并写入/取消不写入四组交互流；(12) locale 键清单加新键。`test/v03-offline.mjs` 两处 volatile 表单字段清单 15→16（+`customPresets`）。全仓 14 个离线/探针测试全绿；`tsc --noEmit` 除既有基线（.ts 扩展导入 TS5097、peer 模块 TS2307）外零新增错误。
+
+## v0.18.4（2026-11-06）：预置方案注册表新增第 9 家厂商「GLM」
+
+- **注册表（`src/modelPresets.ts`）**：`PRESET_IDS` 追加 `'glm'`（minimax 之后）；`VENDOR_PRESETS` 末尾新增完整 `ready` 条目，provider 一律 `zai-coding-cn`。两个变体：**标准组合** = task `glm-5.3-flash`(effort high，可升 glm-5.3 max) / verify `glm-5.3`(effort max) / triage `glm-5.3-flash`(effort low)；**重活命名角色（frontend 等）** = task/verify `glm-5.3`(effort max) / triage `glm-5.3-flash`(effort low)。session 参考项 `glm-5.3`(effort high)，仅展示不应用。vendor note 写明：命名角色的 max effort 只按需生效（智能选择命中难 subgoal 时），避免全量 max。`roles === variants[0].roles` 镜像不变量由既有归一化循环自动保证。
+- **客户端（`lib/client.js`）**：zh/en 两处 i18n 各加 `settings.preset.optGlm`；`PRESET_CHOICES` 注册 `{ id: 'glm', labelKey: 'settings.preset.optGlm' }`；两处 `presetPlanHint` 文案「八家厂商」改「九家厂商」并追加 GLM。
+- **服务端（`src/index.ts`）**：`presetPlan` 字段 description 的厂商清单追加 GLM。
+- **测试（`test/v17-model-presets.mjs`）**：厂商数 8→9；`expectedVariants` 加 `glm: 2`；新增 GLM 断言（task `glm-5.3-flash`/high、triage low、verify `glm-5.3`/max、provider `zai-coding-cn`、重活变体 task `glm-5.3`、note 按需语义）；locale 键清单加 `settings.preset.optGlm`。
+- **文档**：README 中英文预置方案小节改为 10 选项 / 9 家厂商并列举 GLM 变体。
+- **生效手段**：`src/` 改动宿主重载生效；`lib/client.js` 改动需重启宿主 + 刷新浏览器。
+
 ## v0.18.3（2026-11-06）：顶部「对话」入口改为「回到主 agent 对话」——跨会话回主页导航
 
 **背景（用户重启后实测）**：「刚才在主 agent 的目标页点击返回对话，返回主 agent，这是对的，但是我在子 agent 的目标页点击返回对话，进入的也是子 agent，这不对……无论在哪个 agent 的目标页点击最顶端的那个返回，都应该回到主 agent 的对话页，这相当于 web 站的『回到主页』导航。」v0.18.1 的入口调用的是 `openView('chat', …)`，而会话内「当前页签」是 **per-session** conversation store 的 `view` 字段（persist 键 `dsh.conversation.<sessionId>`），所以子 agent 页签上的点击只会切换**子会话自己**的视图——语义上像页签切换，不是主页导航。宿主**没有**「按 sessionId 选择另一个会话视图」的插件 API，跨会话只能「先切到根会话 + 根会话里我们的视图消费一次性请求并调用自己的 `openView`」。

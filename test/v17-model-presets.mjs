@@ -84,14 +84,14 @@ import {
 const section = (label) => console.log(`\n— ${label}`)
 
 // (1) registry completeness ------------------------------------------------------
-section('(1) registry: 9 options, 8 READY vendors, full data, session reference-only')
+section("(1) registry: 10 options, 9 READY vendors, full data, session reference-only")
 {
-  assert.equal(PRESET_IDS.length, 9, 'dropdown ids: auto + 8 vendors')
+  assert.equal(PRESET_IDS.length, 10, 'dropdown ids: auto + 9 vendors')
   assert.equal(PRESET_IDS[0], PRESET_AUTO_ID, 'auto first')
   const ids = PRESET_IDS.slice(1)
   assert.deepEqual([...new Set(ids)].sort(), [...ids].sort(), 'vendor ids unique')
   const vendors = allVendorPresets()
-  assert.equal(vendors.length, 8, '8 vendor entries')
+  assert.equal(vendors.length, 9, '9 vendor entries')
   assert.deepEqual(vendors.map((v) => v.id), ids, 'registry order mirrors the dropdown ids')
   assert.equal(presetById('auto'), undefined, 'auto is not a vendor entry')
   const ROLE_KEYS = new Set(['task', 'verify', 'triage'])
@@ -102,7 +102,7 @@ section('(1) registry: 9 options, 8 READY vendors, full data, session reference-
     assert.ok(Array.isArray(vendor.variants) && vendor.variants.length >= 1, `${vendor.id}: at least one variant`)
     // Multi-variant vendors from the brief: Claude 常规/高要求, DeepSeek 仅本家/verify外置,
     // Kimi 长期/最高验收, Qwen A/B/C, 火山 A/B.
-    const expectedVariants = { openai: 1, claude: 2, gemini: 1, deepseek: 2, kimi: 2, qwen: 3, 'volcano-coding-plan': 2, minimax: 1 }
+    const expectedVariants = { openai: 1, claude: 2, gemini: 1, deepseek: 2, kimi: 2, qwen: 3, 'volcano-coding-plan': 2, minimax: 1, glm: 2 }
     assert.equal(vendor.variants.length, expectedVariants[vendor.id], `${vendor.id}: variant count matches the brief`)
     // roles mirrors the DEFAULT variant (first) for old readers.
     assert.equal(vendor.roles, vendor.variants[0].roles, `${vendor.id}: roles === default variant roles (mirror invariant)`)
@@ -133,18 +133,51 @@ section('(1) registry: 9 options, 8 READY vendors, full data, session reference-
   }
   // Spot-check brief-critical data points.
   assert.equal(presetById('qwen').variants.length, 3, 'Qwen A/B/C')
-  assert.match(presetById('qwen').note, /Turbo/, 'Qwen note carries the Turbo warning')
+  assert.match(presetById('qwen').note, /Flash/, 'Qwen note carries the Flash-tier warning')
   assert.match(presetById('kimi').note, /退役/, 'Kimi note carries the K2 retirement warning')
+  assert.match(presetById('kimi').note, /kimi-k3\.1-pro.*不存在|不存在.*就近替换/, 'Kimi note discloses the nearest-substitution')
   assert.match(presetById('deepseek').note, /成本不应成为降级 verify/, 'DeepSeek note carries the verify-cost principle')
   assert.equal(presetById('minimax').roles.task.reasoningEffort, 'high', 'Minimax task effort high')
   assert.equal(presetById('minimax').roles.triage.reasoningEffort, 'low', 'Minimax triage effort low')
+  assert.equal(presetById('glm').roles.task.model, 'glm-5.3-flash', 'GLM task model flash')
+  assert.equal(presetById('glm').roles.task.reasoningEffort, 'high', 'GLM task effort high')
+  assert.equal(presetById('glm').roles.task.provider, 'zai-coding-cn', 'GLM provider zai-coding-cn')
+  assert.equal(presetById('glm').roles.triage.reasoningEffort, 'low', 'GLM triage effort low')
+  assert.equal(presetById('glm').roles.verify.model, 'glm-5.3', 'GLM verify model glm-5.3')
+  assert.equal(presetById('glm').roles.verify.reasoningEffort, 'max', 'GLM verify effort max')
+  assert.equal(presetById('glm').variants[1].roles.task.model, 'glm-5.3', 'GLM heavy variant task model glm-5.3')
+  assert.match(presetById('glm').note, /按需/, 'GLM note carries the on-demand named-roles note')
   assert.equal(presetById('openai').roles.verify.model, 'gpt-6.1-sol', 'OpenAI verify model')
-  assert.equal(presetById('claude').variants[1].roles.verify.model, 'Fable-5.1', 'Claude demanding variant verify')
+  assert.equal(presetById('claude').variants[1].roles.verify.model, 'claude-fable-5-1', 'Claude demanding variant verify')
   assert.match(presetById('gemini').roles.verify.model, /latest/, 'Gemini resolves family+latest (no pinned old version)')
+  // v0.19.1 naming audit: catalog-covered families are verbatim catalog hits;
+  // off-catalog vendors carry officially confirmed API ids + the deployment note.
+  assert.equal(presetById('deepseek').roles.task.provider, 'deepseek-official', 'DeepSeek provider deepseek-official')
+  assert.equal(presetById('deepseek').roles.task.model, 'deepseek-v4-pro', 'DeepSeek task model deepseek-v4-pro')
+  assert.equal(presetById('deepseek').roles.triage.model, 'deepseek-flash', 'DeepSeek triage model deepseek-flash')
+  assert.equal(presetById('kimi').roles.task.provider, 'kimi', 'Kimi provider kimi')
+  assert.equal(presetById('kimi').roles.task.model, 'kimi-for-coding-highspeed', 'Kimi high-speed execution → kimi-for-coding-highspeed')
+  assert.equal(presetById('kimi').roles.verify.model, 'k3', 'Kimi previous-gen verify stays k3')
+  assert.equal(presetById('kimi').variants[1].roles.verify.model, 'k3-256k', 'Kimi max-acceptance verify → k3-256k (nearest substitution)')
+  assert.equal(presetById('volcano-coding-plan').roles.task.provider, 'bza-plan', 'Volcano provider bza-plan')
+  assert.equal(presetById('volcano-coding-plan').roles.task.model, 'doubao-seed-2.1-lite', 'Volcano task model doubao-seed-2.1-lite')
+  assert.equal(presetById('volcano-coding-plan').variants[0].session.model, 'doubao-seed-evolving', 'Volcano session reference doubao-seed-evolving')
+  assert.equal(presetById('claude').roles.task.model, 'claude-sonnet-5-5', 'Claude task model claude-sonnet-5-5')
+  assert.equal(presetById('claude').roles.verify.model, 'claude-opus-5-5', 'Claude verify model claude-opus-5-5')
+  assert.equal(presetById('claude').roles.triage.model, 'claude-haiku-5-5', 'Claude triage model claude-haiku-5-5')
+  assert.equal(presetById('qwen').roles.task.model, 'qwen3.7-plus', 'Qwen task model qwen3.7-plus')
+  assert.equal(presetById('qwen').roles.verify.model, 'qwen3.8-max', 'Qwen verify model qwen3.8-max')
+  assert.equal(presetById('qwen').roles.triage.model, 'qwen3.8-flash', 'Qwen triage model qwen3.8-flash')
+  assert.equal(presetById('minimax').roles.task.model, 'MiniMax-M3.1-Flash', 'Minimax task model (official API id)')
+  assert.equal(presetById('minimax').roles.verify.model, 'MiniMax-M3', 'Minimax verify model (official API id)')
+  assert.equal(presetById('deepseek').variants[1].roles.verify.model, 'claude-opus-5-5', 'DeepSeek external-verify uses the official Claude API id')
+  for (const id of ['openai', 'claude', 'gemini', 'qwen', 'minimax']) {
+    assert.match(presetById(id).note ?? '', /需部署侧具备对应 provider/, `${id}: off-catalog deployment note present`)
+  }
   assert.ok(presetVariant(presetById('qwen')), 'presetVariant resolves the default')
   assert.equal(presetChoiceLabel(PRESET_AUTO_ID), '根据现有配置自动推荐', 'auto label')
   assert.equal(presetChoiceLabel('volcano-coding-plan'), '火山 Coding Plan', 'vendor label')
-  console.log('✓ v17 (1) registry complete: 8 READY vendors, variants/efforts/notes/rationale filled, session reference-only')
+  console.log('✓ v17 (1) registry complete: 9 READY vendors, variants/efforts/notes/rationale filled, session reference-only')
 }
 
 // (2) recommendation brief --------------------------------------------------------
@@ -375,19 +408,19 @@ section('(6) vendorPresetApplyOps: default/explicit/unknown variant, efforts, se
     }
   }
   const findOp = (ops, path) => ops.find((op) => op.path[0] === path)
-  // Explicit variantId: Qwen 'c' (task turbo, verify plus, triage turbo).
+  // Explicit variantId: Qwen 'c' (task flash, verify plus, triage flash).
   const qwenC = vendorPresetApplyOps(presetById('qwen'), 'c')
   assert.equal(qwenC.variant.label, 'C（轻量）', 'qwen variant c resolved')
-  assert.equal(findOp(qwenC.ops, 'taskAgentModel').value, 'qwen/qwen-turbo', 'qwen-c task turbo')
-  assert.equal(findOp(qwenC.ops, 'verifyAgentModel').value, 'qwen/qwen-plus', 'qwen-c verify plus (never turbo)')
-  assert.equal(findOp(qwenC.ops, 'triageAgentModel').value, 'qwen/qwen-turbo', 'qwen-c triage turbo')
+  assert.equal(findOp(qwenC.ops, 'taskAgentModel').value, 'qwen/qwen3.8-flash', 'qwen-c task flash')
+  assert.equal(findOp(qwenC.ops, 'verifyAgentModel').value, 'qwen/qwen3.7-plus', 'qwen-c verify plus (never flash)')
+  assert.equal(findOp(qwenC.ops, 'triageAgentModel').value, 'qwen/qwen3.8-flash', 'qwen-c triage flash')
   // Unknown variantId falls back to the default variant.
   const qwenFallback = vendorPresetApplyOps(presetById('qwen'), 'no-such-variant')
   assert.equal(qwenFallback.variant.id, presetById('qwen').variants[0].id, 'unknown variant id → default variant')
-  // Claude demanding variant: task Opus-5.5, verify Fable-5.1.
+  // Claude demanding variant: task claude-opus-5-5, verify claude-fable-5-1.
   const claudeD = vendorPresetApplyOps(presetById('claude'), 'demanding')
-  assert.equal(findOp(claudeD.ops, 'taskAgentModel').value, 'anthropic/Opus-5.5', 'claude demanding task Opus-5.5')
-  assert.equal(findOp(claudeD.ops, 'verifyAgentModel').value, 'anthropic/Fable-5.1', 'claude demanding verify Fable-5.1')
+  assert.equal(findOp(claudeD.ops, 'taskAgentModel').value, 'anthropic/claude-opus-5-5', 'claude demanding task claude-opus-5-5')
+  assert.equal(findOp(claudeD.ops, 'verifyAgentModel').value, 'anthropic/claude-fable-5-1', 'claude demanding verify claude-fable-5-1')
   // DeepSeek in-house: verify carries the thinking effort token.
   const deepseekIn = vendorPresetApplyOps(presetById('deepseek'), 'in-house')
   const verifyEffortOp = findOp(deepseekIn.ops, 'verifyAgentReasoningEffort')
@@ -515,7 +548,7 @@ section('(8) apply(): one-shot presetPlan resolve, record enrichment, session sc
     const effortOps = ops.filter((op) => op.path[0].endsWith('ReasoningEffort'))
     const recordOp = ops.find((op) => op.path[0] === 'presetRecommendation')
     assert.ok(recordOp, 'outcome record written to the card')
-    assert.deepEqual(modelOps.map((op) => op.value).sort(), ['qwen/qwen-max', 'qwen/qwen-plus', 'qwen/qwen-turbo'], 'qwen default variant A applied (max/plus/turbo)')
+    assert.deepEqual(modelOps.map((op) => op.value).sort(), ['qwen/qwen3.7-plus', 'qwen/qwen3.8-flash', 'qwen/qwen3.8-max'], 'qwen default variant A applied (max/plus/flash)')
     assert.equal(effortOps.every((op) => op.op === 'unset'), true, 'qwen roles carry no effort tokens → unset ops clear stale efforts')
     for (const op of ops) {
       if (op.path[0] !== 'presetRecommendation') assert.ok(ALLOWED_OP_PATHS.has(op.path[0]), `handler op within the six fields: ${op.path[0]}`)
@@ -524,7 +557,7 @@ section('(8) apply(): one-shot presetPlan resolve, record enrichment, session sc
     assert.equal(record.status, 'ok', 'record ok')
     assert.equal(record.preset, 'qwen', 'record names the preset')
     assert.ok(record.variant, 'record discloses the applied variant')
-    assert.deepEqual(record.picks, { task: 'qwen/qwen-plus', verify: 'qwen/qwen-max', triage: 'qwen/qwen-turbo' }, 'record picks = default variant routes')
+    assert.deepEqual(record.picks, { task: 'qwen/qwen3.7-plus', verify: 'qwen/qwen3.8-max', triage: 'qwen/qwen3.8-flash' }, 'record picks = default variant routes')
     assert.ok(record.notes.some((n) => /session 由用户自行管理/.test(n)), 'record carries the session-scope note')
     assert.ok(record.notes.some((n) => /session 参考（未应用）/.test(n)), 'record shows the vendor session suggestion as NOT applied')
     assert.ok(record.otherVariants.includes('B（高要求）'), 'record lists remaining variants')
@@ -540,7 +573,7 @@ section('(8) apply(): one-shot presetPlan resolve, record enrichment, session sc
     await host2.fire()
     const ops2 = host2.mutates.at(-1).ops
     const taskOp = ops2.find((op) => op.path[0] === 'taskAgentModel')
-    assert.equal(taskOp.value, 'volcano/Seed-2.1-lite', 'volcano default variant A: task lite')
+    assert.equal(taskOp.value, 'bza-plan/doubao-seed-2.1-lite', 'volcano default variant A: task lite')
     const record2 = parseRecommendationRecord(ops2.find((op) => op.path[0] === 'presetRecommendation').value)
     assert.equal(record2.variant, 'A（均衡）', 'record names variant A')
   }
@@ -665,7 +698,7 @@ section('(10) hmr escape: mutate runs outside the enclosing HMR transaction (v0.
     assert.equal(host.mutateContexts[0], undefined, 'the mutate ran with the transaction store CLEARED (als.exit escape)')
     const ops = mutates[0].ops
     assert.ok(ops.find((op) => op.path[0] === 'presetRecommendation'), 'outcome record written through the escaped mutate')
-    assert.ok(ops.some((op) => op.path[0] === 'verifyAgentModel' && op.value === 'qwen/qwen-max'), 'vendor model ops applied via the escape path')
+    assert.ok(ops.some((op) => op.path[0] === 'verifyAgentModel' && op.value === 'qwen/qwen3.8-max'), 'vendor model ops applied via the escape path')
   }
   {
     // A throwing exit falls back to the plain call — the write is still attempted.
@@ -833,7 +866,7 @@ section('(9) preset_recommend tool: hop 1 brief / hop 2 apply / rejection / gate
 }
 
 // (12) settings card -------------------------------------------------------------------
-section('(12) settings card: 9-option select, session callout, record rendering (incl. pending), write path')
+section("(12) settings card: 10-option select, session callout, record rendering (incl. pending), write path")
 {
   const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
   // v0.18.2 acceptance criterion (1)+(2): the removed input row is gone from
@@ -873,11 +906,14 @@ section('(12) settings card: 9-option select, session callout, record rendering 
     'settings.presetPlan', 'settings.presetPlanHint', 'settings.presetNone',
     'settings.preset.optAuto', 'settings.preset.optOpenai', 'settings.preset.optClaude', 'settings.preset.optGemini',
     'settings.preset.optDeepseek', 'settings.preset.optKimi', 'settings.preset.optQwen', 'settings.preset.optVolcanoCodingPlan',
-    'settings.preset.optMinimax',
+    'settings.preset.optMinimax', 'settings.preset.optGlm',
     'settings.preset.sessionScope', 'settings.preset.applied', 'settings.preset.effortSuffix', 'settings.preset.effortDefaultSuffix',
     'settings.preset.variant', 'settings.preset.otherVariants', 'settings.preset.notes',
     'settings.preset.appliedInvalid', 'settings.preset.placeholder', 'settings.preset.degraded', 'settings.preset.pending',
     'settings.preset.recordRaw',
+    // v0.19: custom presets (自定义方案).
+    'settings.preset.customDivider', 'settings.preset.save', 'settings.preset.delete', 'settings.preset.savePrompt',
+    'settings.preset.saveEmpty', 'settings.preset.overwriteConfirm', 'settings.preset.deleteConfirm', 'settings.preset.saveHint',
   ]) {
     assert.equal(typeof dicts.zh[key], 'string', `zh locale has ${key}`)
     assert.equal(typeof dicts.en[key], 'string', `en locale has ${key}`)
@@ -887,7 +923,7 @@ section('(12) settings card: 9-option select, session callout, record rendering 
   // v0.18.2: both hints describe the session-agent handoff (no independent AI call).
   assert.match(dicts.zh['settings.presetPlanHint'], /不发起任何独立 LLM 调用|不新起子 agent/, 'zh hint states the zero-LLM-call handoff')
   assert.match(dicts.en['settings.presetPlanHint'], /no independent LLM call/i, 'en hint states the zero-LLM-call handoff')
-  // The 9 dropdown ids mirror the server registry, in order.
+  // The 10 dropdown ids mirror the server registry, in order.
   const choices = client.match(/PRESET_CHOICES = \[([\s\S]*?)\];/)?.[1] ?? ''
   const choiceIds = [...choices.matchAll(/id: '([^']+)'/g)].map((m) => m[1])
   assert.deepEqual(choiceIds, [...PRESET_IDS], 'client PRESET_CHOICES ids mirror the server registry order')
@@ -907,10 +943,10 @@ section('(12) settings card: 9-option select, session callout, record rendering 
   }
   const appliedRecord = formatRecommendationRecord({
     status: 'ok', preset: 'qwen', label: 'Qwen', at: '2026-11-06T00:00:00.000Z',
-    picks: { task: 'qwen/qwen-plus', verify: 'qwen/qwen-max', triage: 'qwen/qwen-turbo' },
+    picks: { task: 'qwen/qwen3.7-plus', verify: 'qwen/qwen3.8-max', triage: 'qwen/qwen3.8-flash' },
     efforts: { task: '', verify: '', triage: '' },
     variant: 'A（均衡）', otherVariants: ['B（高要求）', 'C（轻量）'],
-    notes: [PRESET_SESSION_NOTE, 'session 参考（未应用）：qwen/qwen-max'],
+    notes: [PRESET_SESSION_NOTE, 'session 参考（未应用）：qwen/qwen3.8-max'],
   })
   const snap = { status: 'ready', writable: true, value: { allGoalsMode: false, hardGate: false, smartAgentModelSelection: false, presetPlan: '', presetRecommendation: appliedRecord, roundsPerSubgoal: 3, maxConcurrentRounds: 0 } }
   const writes = []
@@ -923,17 +959,25 @@ section('(12) settings card: 9-option select, session callout, record rendering 
   const presetSelect = rendered.find((n) => n.type === 'select' && n.props['aria-label'] === t('settings.presetPlan'))
   assert.ok(presetSelect, 'preset select rendered')
   const options = flatten(presetSelect.props.children).filter((n) => n.type === 'option')
-  assert.equal(options.length, 10, '(none) + 9 scheme options')
+  // v0.19: (none) + 10 built-ins + the custom-divider (no custom presets in
+  // this snapshot yet) — custom entries would render after the divider.
+  assert.equal(options.length, 12, "(none) + 10 built-ins + divider")
   assert.equal(options[0].props.value, '', 'leading (none) option')
-  assert.deepEqual(options.slice(1).map((o) => o.props.value), [...PRESET_IDS], 'the 9 scheme options in registry order')
+  assert.deepEqual(options.slice(1, 11).map((o) => o.props.value), [...PRESET_IDS], 'the 10 built-in options in registry order')
+  const divider = options[11]
+  assert.equal(divider.props.disabled, true, 'custom divider option is disabled (separator only)')
+  assert.equal(divider.props.children, t('settings.preset.customDivider'), 'divider label renders')
   assert.equal(options[1].props.children, t('settings.preset.optAuto'), 'first scheme option = auto-recommend')
+  // v0.19: the save button renders next to the select.
+  const saveButton = flatten(seat.view({ view: 'page', t, form })).filter((n) => n.type === 'button' && n.props['aria-label'] === t('settings.preset.save'))
+  assert.ok(saveButton.length === 1, '「保存为自定义方案」button rendered')
   // The session-scope callout renders on the card.
   const callout = rendered.find((n) => typeof n.props?.children === 'string' && n.props.children.includes('由用户自行管理'))
   assert.ok(callout, 'session-scope callout rendered')
   // The applied record renders picks + effort suffixes + variant + remaining variants + notes.
   const appliedText = rendered.map((n) => (typeof n.props?.children === 'string' ? n.props.children : '')).find((s) => s.includes('已应用'))
-  assert.ok(appliedText.includes('task=qwen/qwen-plus（effort 模型默认）'), 'pick with effort-default suffix')
-  assert.ok(appliedText.includes('verify=qwen/qwen-max（effort 模型默认）'), 'verify pick rendered')
+  assert.ok(appliedText.includes('task=qwen/qwen3.7-plus（effort 模型默认）'), 'pick with effort-default suffix')
+  assert.ok(appliedText.includes('verify=qwen/qwen3.8-max（effort 模型默认）'), 'verify pick rendered')
   assert.ok(appliedText.includes('应用变体「A（均衡）」'), 'variant disclosed')
   assert.ok(appliedText.includes('其余变体：B（高要求）、C（轻量）'), 'remaining variants disclosed')
   const notesText = rendered.map((n) => (typeof n.props?.children === 'string' ? n.props.children : '')).find((s) => s.startsWith('备注：'))
@@ -961,7 +1005,174 @@ section('(12) settings card: 9-option select, session callout, record rendering 
   assert.deepEqual(writes, [['presetPlan', 'deepseek']], 'selection writes the volatile presetPlan field')
   await presetSelect.props.onChange({ target: { value: '' } })
   assert.deepEqual(writes.at(-1), ['presetPlan', 'UNSET'], 'blanking writes the unset op')
-  console.log('✓ v17 (12) card: 9 options + (none), session callout, enriched + pending records, volatile write path, no input row')
+
+  // v0.19 custom-preset card flows: render with one stored entry and a
+  // selected custom:<id> — the entry renders below the divider and the
+  // delete button appears; save overwrites a duplicate name after confirm;
+  // delete rewrites the list AND unsets the selector in ONE mutate.
+  const customSnapValue = {
+    ...snap.value,
+    presetPlan: 'custom:u1',
+    customPresets: JSON.stringify([{
+      id: 'u1', name: '我的组合', at: '2026-11-07T00:00:00.000Z',
+      roles: { task: { provider: 'zai-coding-cn', model: 'glm-5.3-flash', reasoningEffort: 'high' } },
+    }]),
+  }
+  const customForm = {
+    getSnapshot: () => ({ ...snap, value: customSnapValue }), subscribe: () => () => {},
+    set: async (field, value) => { writes.push([field, value]); return true },
+    unset: async (field) => { writes.push([field, 'UNSET']); return true },
+    mutate: async (ops) => { writes.push(['mutate', ops]); return true },
+  }
+  const customRendered = flatten(seat.view({ view: 'page', t, form: customForm }))
+  const customSelect = customRendered.find((n) => n.type === 'select' && n.props['aria-label'] === t('settings.presetPlan'))
+  const customOptions = flatten(customSelect.props.children).filter((n) => n.type === 'option')
+  const customOption = customOptions.find((o) => o.props.value === 'custom:u1')
+  assert.ok(customOption, 'custom entry renders below the divider (custom:<id> value)')
+  assert.equal(customOption.props.children, '我的组合', 'custom entry label = the user-chosen name')
+  assert.equal(customOptions.findIndex((o) => o.props.value === 'custom:u1') > customOptions.findIndex((o) => o.props.disabled === true),
+    true, 'custom entry sits AFTER the divider (built-ins above, customs below)')
+  const buttons = customRendered.filter((n) => n.type === 'button')
+  const saveBtn = buttons.find((n) => n.props['aria-label'] === t('settings.preset.save'))
+  const deleteBtn = buttons.find((n) => n.props['aria-label'] === t('settings.preset.delete'))
+  assert.ok(saveBtn, 'save button rendered')
+  assert.ok(deleteBtn, 'delete button rendered while a custom preset is selected')
+  // Selecting the custom entry writes the custom:<id> selector.
+  writes.length = 0
+  await customSelect.props.onChange({ target: { value: 'custom:u1' } })
+  assert.deepEqual(writes.at(-1), ['presetPlan', 'custom:u1'], 'custom selection writes the custom:<id> selector')
+  // Save flow: prompt names it; the duplicate name overwrites after confirm.
+  const realPrompt = globalThis.window.prompt
+  const realConfirm = globalThis.window.confirm
+  const realAlert = globalThis.window.alert
+  globalThis.window.prompt = () => '  我的组合  '
+  globalThis.window.confirm = () => true
+  globalThis.window.alert = () => {}
+  writes.length = 0
+  await saveBtn.props.onClick()
+  const saveWrite = writes.find((w) => w[0] === 'customPresets')
+  assert.ok(saveWrite, 'save writes the customPresets field')
+  const savedList = JSON.parse(saveWrite[1])
+  assert.equal(savedList.length, 1, 'duplicate name OVERWRITES instead of appending')
+  assert.equal(savedList[0].id, 'u1', 'overwrite keeps the existing id (selector stays valid)')
+  assert.equal(savedList[0].name, '我的组合', 'name trimmed')
+  assert.ok(savedList[0].roles && typeof savedList[0].roles === 'object', 'roles captured')
+  // Cancelled overwrite confirm → no write.
+  globalThis.window.confirm = () => false
+  writes.length = 0
+  await saveBtn.props.onClick()
+  assert.deepEqual(writes, [], 'declined overwrite confirmation writes nothing')
+  // Delete flow: confirm → ONE combined mutate (list rewrite + selector unset).
+  globalThis.window.confirm = () => true
+  writes.length = 0
+  await deleteBtn.props.onClick()
+  const deleteWrite = writes.find((w) => w[0] === 'mutate')
+  assert.ok(deleteWrite, 'delete performs a combined mutate')
+  assert.deepEqual(deleteWrite[1], [
+    { op: 'set', path: ['customPresets'], value: '[]' },
+    { op: 'unset', path: ['presetPlan'] },
+  ], 'delete rewrites the list AND unsets the selector in one mutation')
+  // Declined delete confirm → no write.
+  globalThis.window.confirm = () => false
+  writes.length = 0
+  await deleteBtn.props.onClick()
+  assert.deepEqual(writes, [], 'declined delete confirmation writes nothing')
+  globalThis.window.prompt = realPrompt
+  globalThis.window.confirm = realConfirm
+  globalThis.window.alert = realAlert
+  console.log('✓ v17 (12) card: 10 options + (none), session callout, enriched + pending records, volatile write path, no input row')
+}
+
+// (13) v0.19 custom presets (自定义方案) ----------------------------------------------
+section('(13) custom presets: capture/parse/serialize, apply ops via the vendor path, handler resolve, built-ins untouchable')
+{
+  const {
+    CUSTOM_PRESET_PREFIX, isCustomPresetId, customPresetEntryId,
+    captureCustomRoles, parseCustomPresets, serializeCustomPresets, customPresetAsVendor,
+  } = await import('../src/modelPresets.ts')
+  // Selector prefix helpers.
+  assert.ok(isCustomPresetId('custom:u1'), 'custom: prefix recognized')
+  assert.ok(!isCustomPresetId('qwen'), 'vendor ids are not custom')
+  assert.ok(!isCustomPresetId(''), 'empty is not custom')
+  assert.equal(customPresetEntryId('custom:u1'), 'u1', 'entry id stripped')
+  // captureCustomRoles: provider/model split, blank fields dropped, efforts kept.
+  const captured = captureCustomRoles({
+    taskAgentModel: 'zai-coding-cn/glm-5.3-flash', taskAgentReasoningEffort: 'high',
+    verifyAgentModel: 'zai-coding-cn/glm-5.3', verifyAgentReasoningEffort: '',
+    triageAgentModel: 'glm-5.3-flash', triageAgentReasoningEffort: 'low',
+  })
+  assert.deepEqual(captured.task, { provider: 'zai-coding-cn', model: 'glm-5.3-flash', reasoningEffort: 'high' }, 'task captured with effort')
+  assert.deepEqual(captured.verify, { provider: 'zai-coding-cn', model: 'glm-5.3' }, 'blank effort dropped')
+  assert.deepEqual(captured.triage, { model: 'glm-5.3-flash', reasoningEffort: 'low' }, 'bare model keeps undefined provider')
+  assert.deepEqual(captureCustomRoles({}), {}, 'all-blank capture is empty (never empty strings)')
+  // parseCustomPresets: defensive against corrupt payloads.
+  const entry = { id: 'u1', name: '我的组合', at: '2026-11-07T00:00:00.000Z', roles: captured }
+  assert.deepEqual(parseCustomPresets(serializeCustomPresets([entry])), [entry], 'serialize→parse roundtrip')
+  assert.deepEqual(parseCustomPresets(''), [], 'empty field → no entries')
+  assert.deepEqual(parseCustomPresets('not json'), [], 'corrupt JSON → no entries (never a throw)')
+  assert.deepEqual(parseCustomPresets('{"a":1}'), [], 'non-array → no entries')
+  assert.deepEqual(parseCustomPresets('[{"id":"","name":"x"},{"id":"u2","name":" ","roles":{}},null,{"id":"u3","name":"ok","roles":{"session":{"model":"x"},"task":{"model":"m"}}}]'),
+    [{ id: 'u3', name: 'ok', at: '', roles: { task: { model: 'm' } } }], 'malformed entries dropped; a session role key never becomes an entry role')
+  // Apply ops through the vendor path: the SAME six-field bound as built-ins.
+  const customVendor = customPresetAsVendor(entry)
+  assert.equal(customVendor.status, 'ready', 'custom preset adapts as ready')
+  assert.equal(customVendor.label, '我的组合', 'label = user name')
+  const appliedCustom = vendorPresetApplyOps(customVendor)
+  assert.equal(appliedCustom.ready, true, 'custom preset applies')
+  const findOp2 = (ops, path) => ops.find((op) => op.path[0] === path)
+  assert.equal(findOp2(appliedCustom.ops, 'taskAgentModel').value, 'zai-coding-cn/glm-5.3-flash', 'custom task model op')
+  assert.equal(findOp2(appliedCustom.ops, 'taskAgentReasoningEffort').value, 'high', 'custom task effort op')
+  assert.equal(findOp2(appliedCustom.ops, 'verifyAgentReasoningEffort').op, 'unset', 'blank custom effort → unset (model default)')
+  assert.equal(findOp2(appliedCustom.ops, 'triageAgentModel').value, 'glm-5.3-flash', 'bare-model op value is the bare name (runtime parses it)')
+  for (const op of appliedCustom.ops) assert.ok(ALLOWED_OP_PATHS.has(op.path[0]), 'custom ops stay within the six fields')
+  // The plugin handler resolves custom:<id> against the config field.
+  const flush2 = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)) }
+  const ref2 = (initial) => ({ value: initial, get() { return this.value } })
+  const mkCtx2 = async (config) => {
+    const mutates = []
+    const listeners = {}
+    const settings = { mutate: async (ns, ops) => { mutates.push({ ns, ops }); return true } }
+    const root2 = await mkdtemp(join(tmpdir(), 'cyb-v17-'))
+    apply({
+      tools: { register: () => () => {} },
+      systemPrompt: { section() {}, getSectionOrder: () => 0 },
+      goals: { get: () => null },
+      workingDirectory: { get: () => root2 },
+      agentPresets: { serviceFor: () => undefined },
+      sessionProjections: { register: () => () => {} },
+      get: (name2) => (name2 === 'settings' ? settings : undefined),
+      logger: { warn: () => {} },
+      on: (event, fn) => { (listeners[event] ??= []).push(fn); return () => {} },
+    }, config)
+    return {
+      fire: async () => { for (const fn of listeners['loader/volatile-update'] ?? []) fn(); await flush2(); return mutates },
+      mutates,
+    }
+  }
+  const planRef2 = ref2('')
+  const presetsRef2 = ref2(serializeCustomPresets([entry]))
+  const host2 = await mkCtx2({ presetPlan: planRef2, customPresets: presetsRef2 })
+  planRef2.value = 'custom:u1'
+  await host2.fire()
+  assert.equal(host2.mutates.length, 1, 'custom selection → one settings mutate')
+  const customOps = host2.mutates[0].ops
+  assert.ok(customOps.some((op) => op.path[0] === 'taskAgentModel' && op.value === 'zai-coding-cn/glm-5.3-flash'), 'handler applied the custom task model')
+  const customRecordOp = customOps.find((op) => op.path[0] === 'presetRecommendation')
+  const customRecord = parseRecommendationRecord(customRecordOp.value)
+  assert.equal(customRecord.status, 'ok', 'custom selection wrote an ok record')
+  assert.equal(customRecord.label, '我的组合', 'record label = the user-chosen name')
+  assert.equal(customRecord.picks.task, 'zai-coding-cn/glm-5.3-flash', 'record picks carry the custom combination')
+  // Deleting the entry then re-selecting degrades with an explained record.
+  presetsRef2.value = serializeCustomPresets([])
+  planRef2.value = ''
+  await host2.fire()
+  planRef2.value = 'custom:u1'
+  await host2.fire()
+  const missingRecordOp = host2.mutates.at(-1).ops.find((op) => op.path[0] === 'presetRecommendation')
+  const missingRecord = parseRecommendationRecord(missingRecordOp.value)
+  assert.equal(missingRecord.status, 'degraded', 'missing custom entry → degraded record')
+  assert.match(missingRecord.reason ?? '', /自定义方案不存在/, 'degradation explains the missing entry')
+  console.log('✓ v17 (13) custom presets: capture/parse/apply/handler flows pinned; ops stay within the six fields; built-ins untouched')
 }
 
 console.log('\nALL v17 CHECKS PASSED')
