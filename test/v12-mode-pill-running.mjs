@@ -193,7 +193,10 @@ await import('../lib/client.js')
   // pill passes openChild through). Guarded at runtime: an absent namespace
   // disables click-through only. Everything else still rides the sessions
   // binding, same path the v0.10.0 cyberneticsMode seat uses.
-  assert.equal(factoryResult.inject.length, 9, 'inject list = v0.11.2 set + uiWorkspace (v0.14)')
+  // v0.23 adds exactly ONE further optional inject: `commandUi` (the
+  // /cybernetics popupSelect decoration's namespace — guarded at runtime, a
+  // host without the service keeps the pre-v0.23 behavior). 10 entries now.
+  assert.equal(factoryResult.inject.length, 10, 'inject list = v0.11.2 set + uiWorkspace (v0.14) + commandUi (v0.23)')
   assert.ok(factoryResult.inject.includes('uiWorkspace'), 'goal-agent click-through transport declared')
   console.log('✓ 4 client.js: factory evaluates, inject list = v0.11.2 + uiWorkspace')
 }

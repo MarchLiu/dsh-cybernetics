@@ -126,7 +126,10 @@ const schemaSource = readFileSync(new URL('../src/index.ts', import.meta.url), '
 {
   assert.equal(factoryResult.name, 'dsh-cybernetics', 'client module exports its name')
   assert.equal(typeof factoryResult.apply, 'function', 'client module exports apply')
-  assert.equal(factoryResult.inject.length, 9, 'inject list unchanged (no new transport)')
+  // v0.23 adds the optional `commandUi` inject (popupSelect decoration for
+  // /cybernetics); the hint-location feature itself adds no transport.
+  assert.equal(factoryResult.inject.length, 10, 'inject list = v0.19 set + commandUi (v0.23)')
+  assert.ok(factoryResult.inject.includes('commandUi'), 'v0.23 decoration transport declared')
   assert.equal(typeof factoryResult.readHintLocation, 'function', 'readHintLocation exported for the offline harness')
   console.log('✓ 5 client.js: factory evaluates, exports intact')
 }

@@ -5,8 +5,8 @@
 // plugin's REAL apply() wiring, and asserts against the registry's own
 // `commands.list(agent)` — the exact descriptor surface the Web composer menu
 // renders — that:
-//   1. the advertised input.hint is '[on|status]' while cybernetics is off,
-//   2. /cybernetics on re-advertises '[off|status]' (via the registry's
+//   1. the advertised input.hint is '[on|status|use]' while cybernetics is off,
+//   2. /cybernetics on re-advertises '[off|status|use]' (via the registry's
 //      commands/change invalidation path),
 //   3. redundant on/off stay accepted with kind:'success' (the hint narrows
 //      the display, never the grammar),
@@ -117,19 +117,19 @@ for (let i = 0; !commands.list(agent).some((c) => c.name === 'cybernetics') && i
 const run = (rawInput) => commands.execute(agent, `/cybernetics ${rawInput}`.trim(), [], AbortSignal.timeout(5000))
 
 // 1. global off, no override → hint offers `on`
-assert.equal(hintOf(), '[on|status]', `initial hint (global off) — got ${JSON.stringify(hintOf())}`)
-console.log('✓ 1 initial hint (global off): [on|status]')
+assert.equal(hintOf(), '[on|status|use]', `initial hint (global off) — got ${JSON.stringify(hintOf())}`)
+console.log('✓ 1 initial hint (global off): [on|status|use]')
 
 // 2. on → success + re-advertised hint [off|status]
 const on1 = await run('on')
 assert.equal(on1.result.kind, 'success', 'on succeeds')
-assert.equal(hintOf(), '[off|status]', 'control mode hint: [off|status]')
-console.log('✓ 2 /cybernetics on → registry hint flips to [off|status]')
+assert.equal(hintOf(), '[off|status|use]', 'control mode hint: [off|status|use]')
+console.log('✓ 2 /cybernetics on → registry hint flips to [off|status|use]')
 
 // 3. redundant on → idempotent success, hint stable
 const on2 = await run('on')
 assert.equal(on2.result.kind, 'success', 'redundant on is accepted without error')
-assert.equal(hintOf(), '[off|status]', 'redundant on keeps the hint')
+assert.equal(hintOf(), '[off|status|use]', 'redundant on keeps the hint')
 console.log('✓ 3 redundant on in control mode: success, hint unchanged')
 
 // 4. status works in control mode
@@ -140,19 +140,19 @@ assert.match(st1.result.text, /override：on/, 'status reports the stored overri
 // 5. off → hint returns to [on|status]
 const off1 = await run('off')
 assert.equal(off1.result.kind, 'success', 'off succeeds')
-assert.equal(hintOf(), '[on|status]', 'control-off hint: [on|status]')
+assert.equal(hintOf(), '[on|status|use]', 'control-off hint: [on|status|use]')
 
 // 6. redundant off → idempotent success, hint stable
 const off2 = await run('off')
 assert.equal(off2.result.kind, 'success', 'redundant off is accepted without error')
-assert.equal(hintOf(), '[on|status]', 'redundant off keeps the hint')
+assert.equal(hintOf(), '[on|status|use]', 'redundant off keeps the hint')
 
 // 7. status works without control mode
 const st2 = await run('STATUS')
 assert.equal(st2.result.kind, 'success', 'status usable outside control mode')
 assert.match(st2.result.text, /override：off/, 'status reports the stored override')
 
-console.log('✓ 4 off → [on|status]; redundant off + status fine in both states')
+console.log('✓ 4 off → [on|status|use]; redundant off + status fine in both states')
 
 setAppender(undefined)
 console.log('ALL COMMANDS-HINT REAL-HOST CHECKS PASSED')

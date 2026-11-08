@@ -1,6 +1,6 @@
 {
   "name": "@mars.liu/dsh-cybernetics",
-  "version": "0.21.0",
+  "version": "0.25.0",
   "license": "MIT",
   "private": false,
   "files": [
@@ -35,7 +35,8 @@
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-session",
-        "@deepseek-ai/dsh-client-ui-settings"
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-commands"
       ],
       "platform": "web",
       "immediately": true

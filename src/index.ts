@@ -36,7 +36,7 @@ import { startTeamRound, teamExecutorAvailable, teamExecutorUnavailableError } f
 import { computeSmartSelection, probeCatalogOptions, sessionRouteOf } from './modelSelection.ts'
 import type { SmartSelectionAudit } from './modelSelection.ts'
 import {
-  PRESET_AUTO_ID, PRESET_RECOMMEND_TOOL_NAME, applyRecommendationAnswer, buildRecommendationBrief,
+  PRESET_AUTO_ID, PRESET_IDS, PRESET_RECOMMEND_TOOL_NAME, applyRecommendationAnswer, buildRecommendationBrief,
   customPresetAsVendor, customPresetEntryId, formatRecommendationRecord, isCustomPresetId, parseCustomPresets,
   presetById, presetChoiceLabel, vendorPresetApplyOps,
 } from './modelPresets.ts'
@@ -1807,7 +1807,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
     // recent mode change; a multi-session host may briefly show the other
     // session's hint until that session's own next /cybernetics invocation.
     const commandHint = (session: unknown): string =>
-      enabledFor(session) ? '[off|status]' : '[on|status]'
+      enabledFor(session) ? '[off|status|use]' : '[on|status|use]'
     let commandDisposer: (() => void) | undefined
     const handler = (invocation: any) => {
       const agent = invocation?.agent
@@ -1815,7 +1815,11 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       if (session === undefined || typeof session.append !== 'function') {
         return { kind: 'error' as const, text: 'cybernetics: 会话不可用，无法写入模式事件。' }
       }
-      const arg = (invocation.rawInput ?? '').trim().toLowerCase()
+      // Case-insensitive subcommand dispatch (v0.9.0); the `use` preset id
+      // keeps its original case — custom preset ids are user-chosen and
+      // case-sensitive (`custom:<id>` matches the customPresets entry verbatim).
+      const rawInput = (invocation.rawInput ?? '').trim()
+      const arg = rawInput.toLowerCase()
       const override = modeOverrideOf(ctx, session)
       const globalOn = allGoalsMode()
       if (arg === 'on' || arg === 'off') {
@@ -1840,6 +1844,59 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
             : 'cybernetics 控制已对本会话关闭：不再注入控制 guidance，硬门禁放行，新输入回归 DSH 原生行为。/cybernetics on 可恢复。',
         }
       }
+      // --- `use` subcommand (v0.22.0): switch the role composition (task/
+      // verify/triage model + reasoning effort) to any preset plan — the
+      // built-in registry ids (PRESET_IDS) or a user-saved custom preset
+      // (`custom:<id>`). Reuses the SAME apply pipeline as the settings-card
+      // dropdown (handlePresetSelection, same closure) as fire-and-forget;
+      // lastHandledPresetPlan is kept in sync here so the one-shot volatile
+      // guard stays coherent (a later loader update with the same value is a
+      // no-op) while repeated invocations can re-apply the same plan.
+      if (arg === 'use' || arg.startsWith('use ')) {
+        const planArg = rawInput.slice(3).trim()
+        const listPlans = (): string[] => {
+          const lines = PRESET_IDS.map((id) => `- ${id}：${presetChoiceLabel(id)}`)
+          try {
+            for (const p of parseCustomPresets(readConfigField(config.customPresets, ''))) {
+              lines.push(`- custom:${p.id}：${p.name}（自定义方案）`)
+            }
+          } catch { /* readConfigField face absent → built-ins only */ }
+          return lines
+        }
+        if (planArg === '') {
+          // No argument: plain-text listing (the command channel has no
+          // picker UI); the user confirms with a second invocation.
+          return {
+            kind: 'success' as const,
+            text:
+              'cybernetics 可用预置方案：\n' + listPlans().join('\n') +
+              '\n再次输入 /cybernetics use <id> 应用其中一个方案。',
+          }
+        }
+        const isCustom = isCustomPresetId(planArg)
+        const customEntryExists = isCustom && (() => {
+          try {
+            return parseCustomPresets(readConfigField(config.customPresets, '')).some((p) => p.id === customPresetEntryId(planArg))
+          } catch { return false }
+        })()
+        const known = isCustom ? customEntryExists : (planArg === PRESET_AUTO_ID || presetById(planArg) !== undefined)
+        if (!known) {
+          return {
+            kind: 'error' as const,
+            text:
+              `cybernetics: 未知预置方案 "${planArg}"。可用 id：\n` + listPlans().join('\n') +
+              '\n输入 /cybernetics use <id> 应用其中一个方案。',
+          }
+        }
+        lastHandledPresetPlan = planArg
+        void handlePresetSelection(planArg)
+        return {
+          kind: 'success' as const,
+          text:
+            `cybernetics: 正在应用预置方案 "${planArg}"（${presetChoiceLabel(planArg)}）——` +
+            'task/verify/triage 的模型与思考强度将写入插件配置（全局生效，影响所有并发会话）。结果见设置卡片的结果记录。',
+        }
+      }
       // No argument (or unknown text) = status report.
       const effective = override === null ? globalOn : override
       const overrideText = override === null ? '未设置（遵循全局配置）' : override ? 'on' : 'off'
@@ -1852,7 +1909,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
           `- 硬门禁 hardGate：${hardGate() ? (resolveGateMode(config, true) === 'allowlist' ? 'on（allowlist）' : 'on（denylist）') : 'off'}\n` +
           `- 新输入策略 inputPolicy：${readConfigField(config.inputPolicy, 'insert')}\n` +
           `- 轮完成通知策略 noticePolicy：${readConfigField(config.noticePolicy, 'insert')}\n` +
-          `用法：/cybernetics on | /cybernetics off | 无参数或 status = 显示状态`,
+          `用法：/cybernetics on | /cybernetics off | 无参数或 status = 显示状态 | /cybernetics use [方案id] = 应用预置方案（无参数列出全部可用方案）`,
       }
     }
     const registerCommand = (session: unknown): void => {
@@ -1861,7 +1918,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       } catch { /* a failed unregister must not block the re-register below */ }
       commandDisposer = commandCtx.commands.register({
         name: 'cybernetics',
-        description: 'Toggle cybernetics control loop (ALL-GOALS routing + hard gate) for THIS session; no argument shows status',
+        description: 'Toggle cybernetics control loop (ALL-GOALS routing + hard gate) for THIS session; no argument shows status; `use [id]` applies a preset plan (no id lists all)',
         input: { hint: commandHint(session) },
         handler,
       })

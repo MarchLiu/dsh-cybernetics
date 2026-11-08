@@ -277,7 +277,7 @@ function makeSessionFactoryLocal({ projections, states }) {
     const registry = makeRegistry()
     drive(host, registry)
     assert.equal(registry.commands.length, 1, 'exactly one live registration')
-    assert.equal(registry.commands[0].input.hint, '[on|status]', 'global off: hint = [on|status]')
+    assert.equal(registry.commands[0].input.hint, '[on|status|use]', 'global off: hint = [on|status|use] (v0.22.0 use subcommand)')
   }
   // (2) global on, no override → initial hint offers `off`
   {
@@ -285,7 +285,7 @@ function makeSessionFactoryLocal({ projections, states }) {
     host.rootSession = host.makeSession
     const registry = makeRegistry()
     drive(host, registry)
-    assert.equal(registry.commands[0].input.hint, '[off|status]', 'global on: hint = [off|status]')
+    assert.equal(registry.commands[0].input.hint, '[off|status|use]', 'global on: hint = [off|status|use]')
   }
   // (3) toggling re-advertises the hint; redundant on/off stay accepted
   {
@@ -300,27 +300,27 @@ function makeSessionFactoryLocal({ projections, states }) {
     const on1 = invoke('on')
     assert.equal(on1.kind, 'success')
     assert.equal(registry.commands.length, 1, 're-registration replaces, never duplicates')
-    assert.equal(registry.commands[0].input.hint, '[off|status]', 'control mode: hint = [off|status]')
+    assert.equal(registry.commands[0].input.hint, '[off|status|use]', 'control mode: hint = [off|status|use]')
     // redundant `on` in control mode: accepted, no error, hint unchanged
     const on2 = invoke('on')
     assert.equal(on2.kind, 'success', 'redundant on is idempotent success')
     assert.equal(registry.commands.length, 1)
-    assert.equal(registry.commands[0].input.hint, '[off|status]')
+    assert.equal(registry.commands[0].input.hint, '[off|status|use]')
     // off → hint returns to [on|status]
     const off1 = invoke('off')
     assert.equal(off1.kind, 'success')
-    assert.equal(registry.commands[0].input.hint, '[on|status]', 'control off: hint = [on|status]')
+    assert.equal(registry.commands[0].input.hint, '[on|status|use]', 'control off: hint = [on|status|use]')
     // redundant `off` outside control mode: accepted, no error
     const off2 = invoke('off')
     assert.equal(off2.kind, 'success', 'redundant off is idempotent success')
-    assert.equal(registry.commands[0].input.hint, '[on|status]')
+    assert.equal(registry.commands[0].input.hint, '[on|status|use]')
     // status always available in both states
     assert.equal(invoke('status').kind, 'success')
     invoke('on')
     assert.equal(invoke('STATUS').kind, 'success', 'status usable in control mode too')
     setRecordAppender(undefined)
   }
-  console.log('✓ 4c dynamic input hint: [on|status] ↔ [off|status] follows effective mode; redundant on/off accepted')
+  console.log('✓ 4c dynamic input hint: [on|status|use] ↔ [off|status|use] follows effective mode; redundant on/off accepted')
 }
 
 // --- 5. input-policy relay: queued user input relocated to next-step ---------

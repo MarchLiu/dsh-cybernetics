@@ -4,6 +4,65 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.25.0（2026-11-08）：「输入 `/cybernetics use` 未回车即弹方案选择器」调研结论——协议内不可行；弹层文案与文档明确「按 Enter 唤起」
+
+**背景（用户新诉求）**：v0.24.1 之后用户反馈：当前 `/cybernetics use` 必须**按 Enter** 才弹方案列表；希望输入到「/cybernetics use 」（以空格结尾、尚未回车）时就自动弹出。本轮做只读调研并尽力实现；若协议不支持则明确结论并在文档/弹层文案提示按 Enter。
+
+- **调研结论：协议内不可行**（宿主源码证据，本轮全量复核）：
+  1. **唯一的草稿观察器在遇空白时自杀**：斜杠触发扫描 `detectTrigger`（`@deepseek-ai/dsh-client-ui-input-trigger/lib/client.js` 约 776–810 行）从光标向左扫，`if (WHITESPACE.test(ch)) return null;`——只要光标与 `/` 之间存在任何空白，触发即死、菜单关闭；「/cybernetics use␣」这个草稿态不存在任何活的 `/` 触发。
+  2. **触发管线的回调全部依赖活触发**：`candidates(session, req)` / `header?` / `matchSpace?` 只有在 `track()`（同文件约 1038 行；由 conversation shell 在每次草稿变更时调用，`dsh-client-ui-conversation/lib/client.js` 约 15444 / 15642 行）检出活 hit 时才会被调用——草稿为「token 后带空白」时全部静默。`matchSpace` 更是只在「前导 token 敲完空格」这一瞬间被轮询一次（token = `/cybernetics`），此后继续输入 `use` 无任何回调。
+  3. **会话作用域事件通道是单向请求，不是通知**：`@deepseek-ai/dsh-client-ui-conversation/lib/types/client/contract/input.d.ts` 约 129–154 行——`slash/input-begin-command` / `slash/input-insert-reference` / `slash/input-consume-token` / `slash/input-insert-text` 四个事件全部 `@mode bail`，语义是「插件→shell 的草稿编辑请求」（shell 侧监听实现见 conversation `lib/client.js` 约 16200–16203 行 `actx.on(...)`）；用户打字**不发布**任何事件。`ctx.sessions.scope(sessionId)` 返回的 ClientContext（cordis Context）只暴露这些已声明 bail 事件的订阅，没有 on/subscribe/bus 之外的草稿面。
+  4. **触发源 outcome 无法开弹层**：`PickOutcome`（input.d.ts 约 53–60 行）仅 `{claim} | {insert} | {text} | 'handled' | undefined`——即使借 `registerSource` 造一个触发源，也只能在菜单活着时补全文本，无法经公开契约打开 popupSelect（`popupFor(actx)` 只被 `dispatch()/invoke()` 在真实开层时解析，`dsh-client-ui-commands/lib/types/client/contract.d.ts` 约 135–139 行）。
+  5. **无轮询面**：草稿文本只存在于 composer 输入机私有状态（`this.projection.detectText` / `this.rev`，conversation `lib/client.js` 输入机区域），不在 session scope 的任何公开 face/projection 上——定时轮询 scope 无从读到草稿。
+- **落地（零逻辑改动）**：`lib/client.js` 弹层搜索框占位文案（zh/en）加提示「输入 /cybernetics use 后按 Enter 唤起本列表」；README.md / README.zh-CN.md `use` 段落补全调研证据与显式指引；版本顺延 0.25.0（用户可见文案变更）。
+- **生效手段**：`lib/client.js` + `package.json` 改动需重启宿主并刷新浏览器。
+- **保留路径**：现状三条弹层触发（菜单点选=补全、裸回车=弹层、`use` 清单回执后弹层）全部不变；若宿主未来把 `matchEnter` 的 `line`（完整草稿）类观察能力或草稿变更事件开放为公开契约，可再评估。
+
+
+
+## v0.24.1（2026-11-08）：修复菜单点选后草稿无 token——经 `slash/input-insert-text` 作用域事件补全 `/cybernetics ` 文本
+
+**背景（v0.24.0 活体验证反馈）**：点选 `/` 菜单里的 `\cybernetics`（或列表选中后回车）后，编辑器**什么都没留下**——而点选 skills（如 `\browser-skill`）会留下高亮的完整 token。v0.24.0 的设计假设「菜单已把 token 放进草稿」被证伪。
+
+- **根因（宿主源码证据，dsh-client-ui-commands `lib/client.js`）**：菜单列的 `dispatch()` 对**装饰命令**走 `invoke()` → `popupFor().open()` 并返回 `"handled"`（约 L1523–1528）——宿主在这条路上**从不写 token**；token 的草稿写入只发生在 `dispatch`/`matchEnter` 返回 `{claim}` 时（input-trigger `settle()` → `execute()` → `slash/input-begin-command` → conversation shell `insertCommand`，约 L1364–1374 / L15703）。skills 无装饰，其源返回的是 `{text}`/`{insert}` 类 outcome，走 `slash/input-insert-text`/`insert-reference` 通道，所以留下高亮 token。装饰契约（contract.d.ts `CommandDecoration`）无 onComplete/取消回调，公开面上也没有任何草稿写回 API——v0.24.0 的 skip-open 只是不弹层，草稿停留在用户敲入的部分查询上。
+- **修复（`lib/client.js` menu 守卫）**：skip open 的同时，在插件已持有的会话 scope（`popupFor(actx)` 接受的同一个 actx）上发宿主自己的纯文本插入事件 `slash/input-insert-text`，用菜单段携带的 pick-time token span 做 CAS，替换为完整 `'/cybernetics '` 文本——与 skills 留 token 走的是同一条宿主通道。良性降级：shell 未挂载（监听缺失）、span CAS 落空（点选后草稿被编辑，shell 校验 `span.draftRev`）、`bail` 抛错——一律保持弹层关闭的旧行为，不炸菜单。
+- **不变项**：裸回车弹层（`via:'enter'` 透传）、`\cybernetics use` 清单回执弹层（`command/executed` 路径带 `via:'enter'` 合成段，绕过 menu 守卫）、键入路径与降级兜底全部原样。
+- **测试**：`test/v24-use-popup.mjs` (d3) 更新：menu 守卫断言「不弹层 **且** 恰发出一条 `slash/input-insert-text`（`/cybernetics ` + pick span）」；新增 bail-less scope 降级分支。全仓 16 套件 + commands-hint-probe 全绿；`relay-host-probe` 的 `dsh-user-approval stateOf` 失败仍为**改动前既有**（git stash 复验）。`node --check lib/client.js` 通过。
+- **生效手段**：`lib/client.js` + `package.json` 改动需重启宿主 + 刷新浏览器。
+- **待活体验证**：真实 GUI 中点选菜单项后编辑器是否留下高亮 `/cybernetics` token（span CAS 依赖点选与 settle 同步完成，协议上应必然成立；若宿主版本行为有差，需以真实草稿复验）。
+
+## v0.24.0（2026-11-08）：popupSelect 交互时机修正——菜单点选=补全文本、裸回车=弹层、`use` 无参回执后弹层
+
+**背景（用户活体验证 v0.23 后的三处反馈）**：①/ 菜单点选 `\cybernetics` 时立即弹方案选择器——太早，用户连 `use` 都没输；②方案列表应在表达 `use` 意图后才出现；③手动键入 `\cybernetics use` 回车后没有可操作的方案选择路径。
+
+- **契约复核（dsh-client-ui-commands，contract.d.ts + lib/client.js）**：①`CommandDecoration` 无法区分 menu-pick 与 bare-enter 两条触发——`dispatch()`（菜单列）与 `matchEnter()`（裸回车列）都汇入 `invoke()` 用同一份 ui spec，只有 TokenSegment 携带 `via:'menu'|'enter'`，且永不到达业务 spec（contract.d.ts L106–122）；②装饰只在**裸**调用触发——带空格的 `/cybernetics use` 行落回宿主 leadingInput claim（contract.d.ts L107–110；matchEnter 的 `if (bare)` 守卫）；③**没有**草稿写回 API——唯一能把文本留在输入框的宿主机制就是 claim，而它被装饰抢占。
+- **实现（`lib/client.js`）**：装饰保留（裸回车弹层为 v0.23 原生行为不变），在其上加两道公开契约边界的钩子：①`commandUi.popupFor(actx)` 包装——`invoke()` 正是经同一实例属性解析控制器，包装层对 `via:'menu'` 且命令为 `cybernetics` 的 open **不弹**（菜单点选已放进草稿的 token 文本 `/cybernetics` 原样保留 = 补全；同控制器的其它命令如 `/model` 的 popup 与一切 enter 路径原样透传；安装幂等）；②`ctx.on('command/executed')` 监听（官方 dsh-session-log-export 同款公开事件；仅提交方客户端收到）——收到 `cybernetics` 的**无参 `use` 清单回执**（精确前缀 `cybernetics 可用预置方案：`，服务端 `src/index.ts` use 分支）时，经公开的 `sessions.scope(sessionId)` + `popupFor(actx).open('cybernetics', spec, {sessionId}, {via:'enter', token:'/cybernetics use'})` 弹出同一选择器（选后 consume 的 CAS 落空属契约明示的良性路径；应用/状态/未知 id/其它命令回执一律不触发；scope 已消亡则静默跳过，纯文本回执即兜底）。
+- **交互形态（协议内可达的最优）**：菜单点选 → 编辑器补全 `cybernetics`（不弹层）；键入 Space 或裸回车 → 弹层（裸回车路径不变）；`\cybernetics use` 回车 → 服务端清单回执落地后弹层出现，点选即应用。草稿内 `use ` 之后的 inline 参数补全仍属协议不可达（v0.23 结论不变）。
+- **测试**：`test/v24-use-popup.mjs` 更新至 v0.24（新增 d3/d4/d4b 三组：menu 守卫只拦 `cybernetics`+`via:'menu'`、enter 与其它命令透传、重复 apply 不双重包装；清单回执触发弹层且应用/状态/错误/其它命令/畸形回执全部不触发、scope 消亡静默、子会话门禁；原有 a–f 全保留）。全仓 16 套件 + commands-hint-probe 全绿；`node --check lib/client.js` 通过。
+- **生效手段**：`lib/client.js` + `package.json` 改动需重启宿主 + 刷新浏览器；`src/` 未改动。
+- **待活体验证**：真实 GUI 中确认菜单点选后草稿保留 `/cybernetics` 文本（token 文本的精确拼写由宿主输入侧决定）；`\cybernetics use` 回车后弹层在清单回执节点之上正常出现且点选可用。
+
+## v0.23.0（2026-11-08）：`/cybernetics` 输入侧预置方案选择器——popupSelect 装饰（编辑器下拉选方案）
+
+**背景（用户新需求）**：v0.22 的 `use` 子命令只能靠纯文本回执选方案。用户希望像 @file 那样在编辑器输入 `\cybernetics use` 时弹出可点选的下拉列表。本轮先做只读调研，再按调研结论实现。
+
+- **调研结论（宿主源码证据）**：①斜杠触发扫描从光标向左**遇空白即止**（`@deepseek-ai/dsh-client-ui-input-trigger/lib/client.js` `detectTrigger`，约 763–810 行），因此 `use `（含空格）之后**不可能**由任何 `/` 触发源给出参数级补全——草稿内 inline 参数补全在宿主协议下不存在；②宿主自己为「带可选值的命令」提供的机制是挂在宿主命令上的 **popupSelect 装饰**（`@deepseek-ai/dsh-client-ui-commands/lib/types/client/contract.d.ts` `CommandDecoration`：「the decoration replaces only the bare menu-pick/enter with a popup whose onSelect typically submits a completed line back through command.execute」），`/model` 即官方先例（`dsh-client-ui-model-selection/lib/client.js` 约 2025–2045 行 `command.register` + `ui:{kind:'popupSelect'…}`）；③静态 `input.hint` 只是命令描述符上的一个字符串（`dsh-commands/lib/index.js` 157–166 行仅校验 `hint` 与 `attachments`），无 completion provider。
+- **实现（`lib/client.js` + `package.json`）**：客户端插件经 `ctx.inject(['commandUi'])` 对宿主命令 `/cybernetics` 做 `commandUi.decorate({name:'cybernetics', ui:{kind:'popupSelect'}})`：在 `/` 菜单点选（或裸回车）`/cybernetics` 时弹出可搜索方案选择器（fuzzy-label 搜索、内置/自定义分组、当前方案高亮「当前」角标）；`options` 复用与设置卡片同源的 12 个内置 id + ConfigForm 快照里 `customPresets` 解析出的 `custom:<id>` 行（`usePopupRows` 导出供离线测试）；`onSelect` 经与模式药丸同一条 `remote.commands.execute` 通道提交 `/cybernetics use <id>`——校验/应用管线/回执仍以服务端 `use` 分支为唯一权威，弹层内错误就地展示。`package.json dsh.client.inject` 补 `@deepseek-ai/dsh-client-ui-commands`。**守卫**：宿主无 commandUi 服务 / 无命令通道 / 子会话（available=false）时逐级降级；**键入路径完全不动**——`/cybernetics use <id>` 照旧 claim+submit，v0.22 纯文本清单兜底保留。
+- **与需求的偏差（诚实记录）**：宿主协议下「输入 `use ` 即在草稿内弹参数补全」不可实现（证据 ①）；本版实现的是宿主原生等价体验——输入 `/cybernetics` 触发弹层、搜索过滤、点选**直接应用**方案（而非仅补全草稿文本），效果上跳过了「补全后再回车」一步。
+- **测试**：新增 `test/v24-use-popup.mjs`（6 组：usePopupRows 12 内置 + custom 行 + active 标记 + 坏快照降级；apply 恰注册一个 popupSelect 装饰且 fuzzy-label + 本地化搜索文案；options 实时行；onSelect 经通道提交 `/cybernetics use <id>`、error/失败结果抛出给弹层；三类守卫降级；inject/导出回归）。`test/v12-mode-pill-running.mjs`、`test/v21-hint-location.mjs` inject 清单断言更新为含 `commandUi`（10 项）。全仓离线套件全绿（relay-host-probe 的 `dsh-user-approval stateOf` 失败为**改动前既有**，与本版无关，已用 git stash 复验）。
+- **生效手段**：`lib/client.js` + `package.json` 改动需重启宿主 + 刷新浏览器；`src/` 未改动。
+
+
+## v0.22.0（2026-11-08）：`/cybernetics use` 子命令——命令通道直接应用预置方案（快速切换角色组合）
+
+**背景（用户裁定：子命令名 `use`，早前方案的 `profile` 命名作废）**：预置方案此前只能经设置卡片下拉选择（volatile `presetPlan` + `loader/volatile-update` 一次性解析）；要在会话里快速切换 task/verify/triage 的模型与思考强度，得先打开卡片。本版把同一应用管线开放到 `/cybernetics` 命令通道。
+
+- **命令分支（`src/index.ts` 命令注册块）**：handler 新增 `use` 分支（子命令大小写不敏感，方案 id 大小写保留——自定义 id 逐字匹配）。**无参数**：回执纯文本清单（`PRESET_IDS` 全部 12 个内置 id 的 `presetChoiceLabel` + `customPresets` 已配置的自定义方案 `custom:<id>：名称`），并提示再次输入 `/cybernetics use <id>` 确认——命令通道只有 `{kind:'success'|'error', text}` 纯文本回执，无交互选择器。**带参数**：先同步校验（内置注册表 / `auto` / 自定义条目存在性，未知 id 直接 `error` 回执并列出全部可用 id，不写任何东西），随后以 `void handlePresetSelection(id)` fire-and-forget 走与下拉框完全相同的应用管线（六字段白名单 ops + 结果记录）。
+- **守卫同步与重复应用**：handler 同步维护 `lastHandledPresetPlan`——volatile 一次性守卫保持一致（此后 loader 带同值不会重复应用），同时命令路径刻意绕过该守卫：重复输入同一条 `use <id>` 会再次应用，无需先切「（未选择）」。命令路径**不写** volatile `presetPlan` 字段。`auto` 分支同样经 `handlePresetSelection('auto')`（pending 记录 + session agent 交办，零独立 LLM 调用）。
+- **命令引导**：动态 input hint 更新为 `[on|status|use]` / `[off|status|use]`（`profile` 命名全面移除）；status 用法行与命令 description 补 `use` 说明。
+- **测试**：新增 `test/v23-use-subcommand.mjs`（7 组：hint/用法文本只含 `use` 无 `profile`；无参数列出全部内置+自定义、零写入、确认提示；`use qwen`/`USE glm` 走 handlePresetSelection——恰 6 条角色字段 ops 且全部落在 ALLOWED_OP_PATHS 内 + ok 记录含变体；`custom:` 条目应用保存的组合并携带条目名；未知内置 id / 不存在的自定义 id → error + 清单 + 零写入；重复 `use` 再次应用且 volatile 字段未被命令路径触碰；on/status/未知文本回退不变）。`test/v09-session-mode.mjs` hint 断言更新为 `[on|status|use]` ↔ `[off|status|use]`。全仓 15 个离线套件全绿；`tsc --noEmit` 仅既有基线零新增。
+- **生效手段**：`src/` 改动宿主重载生效。风险：命令应用的方案与卡片写入同路径——**profile 全局生效**，影响所有并发会话；`auto` 分支会向在线顶层 session agent 投递交办消息。
+
 ## v0.21.0（2026-11-07）：轮次生效模型审计——round-cyb-*.json 记录 task/verify/triage 实际调用的 provider/model/effort，board 快照镜像 models 字段
 
 **背景（用户裁定，§7.12.1）**：历史全部 213 个 `round-cyb-*.json` 均无结构化 model/reasoningEffort 字段，board 快照只有 `{goals, savedAt, sessionId, version}`——「每个角色实际跑在什么模型上」跨轮不可审计。插件既有 taskAgentModel/verifyAgentModel/triageAgentModel 配置（v0.8.x 调用级回退、v0.15 思考强度），本轮把生效值落进轮审计与 board 快照。
