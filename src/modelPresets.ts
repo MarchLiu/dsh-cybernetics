@@ -191,8 +191,7 @@ export const PRESET_SESSION_NOTE = 'session agent 由用户自行管理：方案
 
 /** The cross-vendor principles injected into the auto prompt (sub-agents only). */
 export const CROSS_VENDOR_PRINCIPLES: string[] = [
-  'verify 的模型档位不得低于 task（审计岗至少与执行岗同级）。',
-  'verify 与 task 保持跨代际/跨家族独立，避免同一模型自我确认偏误；确需同家族时 verify 升高一档补偿。',
+  'verify 与 task 可灵活配置（允许同款模型或任意档位组合），由使用者按任务需要权衡审计增益与成本。',
   'verify 不能过度自信：优先判断力强、能承认不确定性的模型。',
   '需要省成本时先压缩 task/triage，verify 最后动；成本不应成为降级 verify 的理由。',
   'triage 是轻量收敛分拣，选便宜快速的模型即可。',
@@ -235,7 +234,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       verify: {
         provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'high',
         upgradeTo: 'gpt-6.1-sol (xhigh)',
-        rationale: 'verify 与 task 同模型但高一档 effort，以思考深度补偿同家族独立性损失。',
+        rationale: 'verify 与 task 同模型但高一档 effort，以更强思考深度增强审计判断力。',
       },
       triage: {
         provider: 'openai', model: 'gpt-6-luna', reasoningEffort: 'low',
@@ -248,7 +247,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       label: '标准组合',
       roles: {
         task: { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'medium', upgradeTo: 'gpt-6.1-sol (high/xhigh)', rationale: '主力执行模型，effort 五档可调。' },
-        verify: { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'high', upgradeTo: 'gpt-6.1-sol (xhigh)', rationale: 'verify 高一档 effort 补偿同家族。' },
+        verify: { provider: 'openai', model: 'gpt-6.1-sol', reasoningEffort: 'high', upgradeTo: 'gpt-6.1-sol (xhigh)', rationale: 'verify 高一档 effort 增强审计判断力。' },
         triage: { provider: 'openai', model: 'gpt-6-luna', reasoningEffort: 'low', upgradeTo: 'gpt-6-luna (medium)', rationale: '轻量分拣。' },
       },
       session: { provider: 'openai', model: 'gpt-6-astra', reasoningEffort: 'high', upgradeTo: 'gpt-6-astra (xhigh/max)', rationale: 'session 主脑用旗舰 astra（仅参考）。' },
@@ -264,7 +263,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     status: 'ready',
     roles: {
       task: { provider: 'anthropic', model: 'claude-sonnet-5-5', rationale: '常规档 task 用 Sonnet 5.5（claude-sonnet-5-5）：性价比主力。' },
-      verify: { provider: 'anthropic', model: 'claude-opus-5-5', fallback: 'claude-fable-5-1', rationale: 'verify 高一档（Opus 5.5）补偿单家族独立性损失。' },
+      verify: { provider: 'anthropic', model: 'claude-opus-5-5', fallback: 'claude-fable-5-1', rationale: 'verify 配置更强的模型（Opus 5.5）以增强审计判断力。' },
       triage: { provider: 'anthropic', model: 'claude-haiku-5-5', rationale: '轻量分拣。' },
     },
     variants: [
@@ -273,7 +272,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
         label: '常规',
         roles: {
           task: { provider: 'anthropic', model: 'claude-sonnet-5-5', rationale: '性价比主力执行。' },
-          verify: { provider: 'anthropic', model: 'claude-opus-5-5', fallback: 'claude-fable-5-1', rationale: 'verify 高一档补偿单家族。' },
+          verify: { provider: 'anthropic', model: 'claude-opus-5-5', fallback: 'claude-fable-5-1', rationale: 'verify 高一档增强审计判断力。' },
           triage: { provider: 'anthropic', model: 'claude-haiku-5-5', rationale: '轻量分拣。' },
         },
         session: { provider: 'anthropic', model: 'claude-opus-5-5', rationale: 'session 主脑用 Opus 5.5（仅参考）。' },
@@ -343,7 +342,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
         label: 'verify 外置',
         roles: {
           task: { provider: 'deepseek-official', model: 'deepseek-v4-pro', fallback: 'deepseek-v4-pro (thinking)', rationale: '本家 task 不变。' },
-          verify: { provider: 'anthropic', model: 'claude-opus-5-5', fallback: 'gpt-6-astra / gemini-pro-latest', rationale: 'verify 优先外置旗舰（Claude Opus / GPT 旗舰 / Gemini Pro），跨家族独立性最大化。' },
+          verify: { provider: 'anthropic', model: 'claude-opus-5-5', fallback: 'gpt-6-astra / gemini-pro-latest', rationale: 'verify 优先外置旗舰（Claude Opus / GPT 旗舰 / Gemini Pro），配置更强的模型以增强审计判断力。' },
           triage: { provider: 'deepseek-official', model: 'deepseek-flash', rationale: '轻量分拣。' },
         },
         session: { provider: 'deepseek-official', model: 'deepseek-v4-pro (非 thinking)', fallback: 'deepseek-flash', rationale: 'session 用 deepseek-v4-pro 非思考档或 deepseek-flash（仅参考）。' },
@@ -360,7 +359,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     status: 'ready',
     roles: {
       task: { provider: 'kimi', model: 'kimi-for-coding-highspeed', rationale: '高速执行主力（本部署目录内的高速 coding 档）。' },
-      verify: { provider: 'kimi', model: 'k3', fallback: 'k3-256k', rationale: 'verify 用上一代 k3：代际差异保持审计独立性；最高验收质量可换 k3-256k。' },
+      verify: { provider: 'kimi', model: 'k3', fallback: 'k3-256k', rationale: 'verify 用上一代 k3：配置差异化模型增强审计判断力；最高验收质量可换 k3-256k。' },
       triage: { provider: 'kimi', model: 'kimi-for-coding-highspeed', rationale: '轻量分拣同执行主力（高速版成本低）。' },
     },
     variants: [
@@ -520,7 +519,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
         label: '重活命名角色（frontend 等）',
         roles: {
           task: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'max', rationale: '官方建议复杂 coding 用 max；按需触发，只在难 subgoal 上生效。' },
-          verify: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'max', rationale: 'verify 与 task 同级 max，同家族下以最高档补偿独立性损失。' },
+          verify: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'max', rationale: 'verify 与 task 同级 max，以最高思考档增强审计判断力。' },
           triage: { provider: 'zai-coding-cn', model: 'glm-5.3-flash', reasoningEffort: 'low', rationale: '轻量分拣不变。' },
         },
         session: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'high', rationale: 'session 同标准组合（仅参考）。' },
@@ -536,7 +535,7 @@ export const VENDOR_PRESETS: VendorPreset[] = [
     status: 'ready',
     roles: {
       task: { provider: 'zai-coding-cn', model: 'glm-5.3-flash', rationale: '量最大的角色用 Flash：成本低、速度快。' },
-      verify: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'medium', rationale: 'verify 升到 glm-5.3 中档 effort，以档位差补偿同家族独立性。' },
+      verify: { provider: 'zai-coding-cn', model: 'glm-5.3', reasoningEffort: 'medium', rationale: 'verify 升到 glm-5.3 中档 effort，配置更强的模型以增强审计判断力。' },
       triage: { provider: 'zai-coding-cn', model: 'glm-5.3-flash', reasoningEffort: 'minimal', rationale: '轻量分拣走 minimal effort，压成本与 wall-clock。' },
     },
     variants: [{
@@ -554,11 +553,11 @@ export const VENDOR_PRESETS: VendorPreset[] = [
   {
     id: 'builtin-deepseek-fast',
     label: 'deepseek 快速',
-    description: '用户自定义 DeepSeek 快速组合：task deepseek-official/deepseek-flash / verify deepseek-official/deepseek-flash(effort high) / triage deepseek-account/deepseek-flash(effort low)。全 Flash 档拉满速度，verify 以 high effort 补偿同模型独立性。',
+    description: '用户自定义 DeepSeek 快速组合：task deepseek-official/deepseek-flash / verify deepseek-official/deepseek-flash(effort high) / triage deepseek-account/deepseek-flash(effort low)。全 Flash 档拉满速度，verify 以 high effort 增强审计判断力。',
     status: 'ready',
     roles: {
       task: { provider: 'deepseek-official', model: 'deepseek-flash', rationale: 'Flash 档执行主力：速度优先。' },
-      verify: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high', rationale: 'verify 同模型但开 high effort，以思考深度补偿独立性损失。' },
+      verify: { provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'high', rationale: 'verify 同模型但开 high effort，以更强思考深度增强审计判断力。' },
       triage: { provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: 'low', rationale: '轻量分拣 low 档（deepseek-account 为同款另一计费渠道）。' },
     },
     variants: [{
@@ -681,10 +680,10 @@ export function buildRecommendationPrompt(input: RecommendationRequestInput): Re
     '范围（最高优先）：session agent（主会话 agent）不在推荐范围内，其模型由用户自行管理——输出 JSON 只允许 task/verify/triage 三个键，禁止输出 session 键。',
     '规则：',
     '1. 只能从「可用模型列表」中选择，逐字使用其中的 provider/model；列表外的模型一律禁止推荐。',
-    '2. 通用原则：verify 的模型档位不得低于 task；verify 与 task 保持跨代际/跨家族独立（同一模型时 verify 升高一档补偿）；verify 不能过度自信；省成本先压 task/triage、verify 最后动；成本不是降级 verify 的理由；triage 选便宜快速的模型。',
+    '2. 通用原则：task/verify/triage 三个角色可灵活配置，允许同款模型或任意档位组合，按任务需要权衡；verify 不能过度自信；省成本先压 task/triage、verify 最后动；成本不是降级 verify 的理由；triage 选便宜快速的模型。',
     '3. 某个角色如维持现状更好（例如当前配置已是最优、或列表中没有更好的选择），输出 null 保持现状。',
     '4. 「厂商预置方案」只是参考资料（各家产品思路），不是可选项——目录里没有的模型组合不要采纳。',
-    '5. reasoningEffort 可选：仅当你确知该模型提供该思考强度档位时输出（例如 low/medium/high/xhigh/max 等），否则省略该字段；task 建议 medium/high，verify 至少 high，triage 建议 low。',
+    '5. reasoningEffort 可选：仅当你确知该模型提供该思考强度档位时输出（例如 low/medium/high/xhigh/max 等），否则省略该字段；task 建议 medium/high，verify 建议 high、可按需调整，triage 建议 low。',
     '6. 只输出一个 JSON 对象，不要解释、不要 markdown 代码块之外的文字。格式：',
     '{"task":{"provider":"<provider>","model":"<model>","reasoningEffort":"<可选>"}|null,"verify":...,"triage":...}',
   ].join('\n')

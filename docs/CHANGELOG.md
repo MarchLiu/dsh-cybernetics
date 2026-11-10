@@ -4,6 +4,10 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.25.1（2026-11-10）：去除 verify≥task 且跨家族独立的硬约束，角色配置改为灵活权衡
+
+**变更**：删除「verify 档位不得低于 task 且与 task 保持跨代际/跨家族独立（同家族 verify 升高一档补偿）」这条硬约束。保留的底线仅两条：triage 选便宜快速的模型；verify 不能过度自信（优先判断力强、能承认不确定性的模型）。task/verify/triage 三个角色改为可灵活配置——允许同款模型或任意档位组合，由使用者/推荐者按任务需要权衡审计增益与成本。同步修改：`src/modelPresets.ts` 的 `CROSS_VENDOR_PRINCIPLES` 与推荐 system prompt 规则第 2 条（reasoningEffort 规则第 5 条改为「verify 建议 high，可按需调整」）、绑定被删约束的厂商 rationale 措辞改为中性描述（预置方案本身不变）、`test/v17-model-presets.mjs` 断言更新（新原则存在、旧硬约束与「跨家族独立」不存在）、README 预置方案章节描述同步。
+
 ## v0.25.0（2026-11-08）：「输入 `/cybernetics use` 未回车即弹方案选择器」调研结论——协议内不可行；弹层文案与文档明确「按 Enter 唤起」
 
 **背景（用户新诉求）**：v0.24.1 之后用户反馈：当前 `/cybernetics use` 必须**按 Enter** 才弹方案列表；希望输入到「/cybernetics use 」（以空格结尾、尚未回车）时就自动弹出。本轮做只读调研并尽力实现；若协议不支持则明确结论并在文档/弹层文案提示按 Enter。
@@ -196,7 +200,7 @@
 - **注册表填全 8 家厂商（全 `status: 'ready'`）**：OpenAI（gpt-6.1-sol task/verify + gpt-6-luna triage，effort 五档）、Claude（常规/高要求两变体，verify 恒高一档补偿单家族）、Gemini（家族 + 最新版本运行时解析，不硬编码旧版本号）、DeepSeek（仅本家/verify 外置两变体，verify thinking 档，「成本不应成为降级 verify 的理由」）、Kimi（长期组合/最高验收质量两变体，避开退役 K2）、Qwen（A/B/C 三变体，⚠️ verify 绝不用 Turbo——幻觉共振）、火山 Coding Plan（A/B 两变体，Seed 池 + GLM-5.3 备选边界）、Minimax（M3.1-Flash high/xhigh + M3 verify，缓存读 4 倍差价备注）。每厂商：多变体（`variants`，`roles` 恒为默认变体的同一对象引用）、逐角色 effort token/可升级档/fallback/rationale、厂商 note、session 参考（`variant.session`）+ 常量 `PRESET_SESSION_NOTE`。
 - **session 范围结构性钉死**：`ALLOWED_OP_PATHS` = 恰好六个扁平子 agent 字段（task/verify/triage × model/effort），所有 apply-ops 构建器经 `filterAllowedOps` 过滤；推荐 prompt 明令「输出 JSON 只允许 task/verify/triage 三个键，禁止 session 键」；`parseRecommendation` 对万一直出的 session 键丢弃并置 `ignoredSession`；厂商 session 数据只存 `variant.session`，卡片常驻「session 由用户自行管理」提示——任何代码路径都触不到 session 配置。
 - **effort 全链路**：`SettingsOp` 扩展 `unset`（角色换模型时清掉旧档位回模型默认）；厂商方案按变体配置写入 effort token（异构：五档/thinking/默认），`recommendationApplyOps` 携带 AI 推荐的 effort；自动推荐的 effort 经 `validatePickEfforts` 软校验（`ctx.llm.resolveModelInfo`，不支持 → 丢档保模型 + 注明；调用面缺失/抛错 → 保留不阻断）。
-- **跨厂商通用原则注入推荐 prompt**（仅作用于 task/verify/triage）：verify 档位不低于 task；跨代际/跨家族独立（同家族时 verify 升高一档补偿）；verify 不能过度自信；省成本先压 task/triage、verify 最后动、成本不是降级 verify 的理由；triage 轻量。
+- **跨厂商通用原则注入推荐 prompt**（仅作用于 task/verify/triage，v0.25.1 起为灵活权衡表述）：task/verify/triage 三角色可灵活配置（允许同款模型或任意档位组合）；verify 不能过度自信；省成本先压 task/triage、verify 最后动、成本不是降级 verify 的理由；triage 轻量。
 - **结果记录增润**：`PresetRecommendationRecord` 增加 `efforts`/`variant`/`otherVariants`/`notes`（session 范围声明 + 厂商 ⚠️ 备注 + effort 校验注记），卡片渲染逐角色「模型（effort X | 模型默认）」+ 变体 + 备注。
 - **顺手修复（本轮 typecheck 发现的既有缺口）**：Config 接口补齐 `presetPlan`/自动推荐请求路由字段/`presetRecommendation` 三个字段（schema 有、接口漏）；`controller.ts` 的 `startRound`/`runRound` `parent: unknown` → `Agent`（`@deepseek-ai/dsh-workflow` 的 `WorkflowStartRequest.parent` 本就要求 Agent 类型，types 可解析时 strict 检查暴露）；`tsc --noEmit` 现已零错误（仅存代码库级 TS5097 风格噪声）。
 - **测试**：`test/v17-model-presets.mjs` 全量重写（接替占位版）——注册表完整性（9 id、8 家全 ready、变体数对表、roles===variants[0].roles 同一性、session 仅存 variant.session）、请求构建（session 禁令/原则/effort 契约/目录 200 行上限）、解析（fenced/裸模型/`{"task":42}` 形状容忍/session 键忽略/effort 形状丢弃）、effort 软校验三态、apply-ops 六字段围栏 + `filterAllowedOps`、全注册表变体应用（显式/未知 variantId 回退默认、effort set/unset、session 数据零泄漏）、`recommendModels` 端到端（ok 带 notes/全降级带原因与请求）、插件处理器 7 场景（one-shot、记录增润、降级、未知 id、启动种子不重放、清除零写入、新选择触发）、设置卡片（9+1 选项镜像服务端 id 序、session 提示、记录渲染含 effort 后缀/变体/备注、volatile 写路径、zh/en 26 个 locale key 完整）。复跑 `node test/v17-model-presets.mjs` 全过；v03（75 checks）/v09–v16 全绿。

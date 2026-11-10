@@ -208,7 +208,9 @@ section('(2) brief: session exclusion + principles + effort contract + two-hop p
   assert.match(user, /禁止作为输出/, 'user labels vendor session entries non-selectable')
   // Cross-vendor principles present (sub-agents only).
   for (const principle of CROSS_VENDOR_PRINCIPLES) assert.ok(user.includes(principle), `principle injected: ${principle.slice(0, 18)}…`)
-  assert.match(system, /verify 的模型档位不得低于 task/, 'system carries the verify≥task rule')
+  assert.match(system, /task\/verify\/triage 三个角色可灵活配置/, 'system carries the flexible-config principle')
+  assert.doesNotMatch(system, /不得低于 task/, 'no verify≥task hard rule remains')
+  assert.doesNotMatch(system, /跨家族独立/, 'no cross-family independence rule remains')
   // Effort contract.
   assert.match(system, /reasoningEffort/, 'system explains the optional effort field')
   assert.match(system, /"reasoningEffort":"<可选>"/, 'output contract carries effort')
