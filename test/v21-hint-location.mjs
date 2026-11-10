@@ -72,8 +72,10 @@ const schemaSource = readFileSync(new URL('../src/index.ts', import.meta.url), '
   assert.ok(fn.includes('renderModeRing(running.count > 0, MODE_ON_COLOR)'), 'hint indicator = shared ring (spins while running, static when idle)')
   assert.ok(fn.includes('if (running.count > 0) ensurePillSpinStyle();'), 'spin CSS ensured when a goal runs')
 
-  // Pill-identical label: the same mode.pillCounts counts key.
-  assert.ok(fn.includes("t('mode.pillCounts', { stopped: counts.stopped, total: counts.total })"), 'hint label =「控制模式：{stopped}/{total}」counts label')
+  // v0.25.2: three-segment label「控制模式|{stopped}/{total}|{plan}」 —
+  // same goal counts as the session pill plus the active agent-preset name.
+  assert.ok(fn.includes("t('mode.hintCounts'"), 'hint label = mode.hintCounts (三段式：控制模式|计数|方案名)')
+  assert.ok(fn.includes('resolvePlanName(cfgSnap, t)'), 'third segment resolves the session agent-preset name (未命名 when unset)')
   assert.ok(fn.includes('const counts = countGoals(goalsRaw)'), 'counts come from the shared countGoals reducer')
   assert.ok(fn.includes('const running = countRunningGoals(goalsRaw)'), 'running state comes from the shared countRunningGoals reducer')
 
