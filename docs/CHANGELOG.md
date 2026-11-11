@@ -4,6 +4,26 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.25.5（2026-11-11）：`/cybernetics use` 改为仅当前会话生效——零 settings 写入（用户裁定，推翻 v0.25.4 方向）
+
+**用户裁定（2026-11-11，最高优先级）**：`use` 一律实现为**仅当前会话生效**——完全不调用 settings mutate（不写六角色字段、不写 `presetPlan`、不写 `presetRecommendation`），不做「先全局再降级」。背景：宿主存在写闸门缺陷（v0.7.10：dsh-app-boot 双模块实例 → WeakMap miss → 所有 settings 写入被拒 "profile reload requires the root Include entry"），某些启动方式下 v0.22–v0.25.4 的全局写路径完全无效。
+
+- **实现**：新增 `src/sessionRoles.ts`——进程内存中的按会话角色覆盖表（`{preset, label, roles: {task/verify/triage: {provider, model, reasoningEffort}}, appliedAt}`），参考 `sessionMode.ts` 的会话级覆盖模式但不做任何持久化（随宿主进程/会话生命周期消失）。`use <id>` 解析方案（内置 id / `custom:<id>`）后把 picks 存入覆盖表；轮次派工读取点（src/index.ts 平铺字段折叠处）按「会话覆盖 > 全局字段」逐角色逐字段合并（`mergeSessionRolesOverride`）。
+- **auto**：`use auto` 走会话管道——标记会话 pending 并把 brief 交给本会话 agent，`preset_recommend` 工具第二跳校验后把推荐落为**会话覆盖**（strip 到 provider/model/reasoningEffort），全程零 settings 写入；设置卡片自身的 auto 全局路径（下拉框 → pending 记录 → 全局写）完全不动。
+- **清除**：`/cybernetics use off` 清除覆盖回到全局字段；status 回执新增「会话预置方案覆盖」行（无覆盖显示「无（跟随全局配置）」，有覆盖显示 label + picks + 清除指令）。
+- **回执**：`已在本会话应用预置方案 "<label>"：task=... verify=... triage=...；仅本会话生效（会话结束失效），不修改全局配置`。无参数清单、未知方案报错行为保留。
+- **清理**：`writePresetRecord` / `handlePresetSelection` 的 `extraOps` 参数与 use 分支的 `presetPlan` 同步 op 一并移除（v0.25.4 的全局同步属于被推翻方向）；卡片路径行为不变；`ALLOWED_OP_PATHS` 未放宽。
+- **诊断**：`presetDiag` 新增 `event:'use-session-apply'`（preset、label、picks、cleared），use 路径不再出现任何 `write-*` 事件。
+- **测试**：`test/v23-use-subcommand.mjs` 重写为会话语义——use 后零 settings mutate（pin）、覆盖含 effort 被 merge 语义取到（pin）、重复 use 更新、`use off` 恢复、status 含覆盖行、`use auto` 落会话不落全局（含 degraded/rejected 也零写入）。全部通过；`tsc --noEmit` 真实错误 0（TS5097 基线噪音除外）。
+
+## v0.25.4（2026-11-11，已被 v0.25.5 推翻）：`/cybernetics use` 应用后同步设置卡片「预置方案」下拉框
+
+**变更**：`/cybernetics use <id>` 之前只把 task/verify/triage 的模型与思考强度字段写入 settings（模型配置已生效并持久化），但不写 volatile 选择器 `presetPlan`，导致配置界面的预置方案下拉框停留在旧方案。现在 `use` 分支给 `handlePresetSelection`（→ `writePresetRecord` 新增可选 `extraOps` 参数）传入一条 `{op:'set', path:['presetPlan'], value:<id>}`，与六字段 ops + 结果记录在**同一次 mutate** 中原子写入（内置 id、`auto`、`custom:<id>` 均同步）。失败/degraded/placeholder 结果不经过 extraOps 调用点——下拉框保持原值；未知方案在命令层即报错、零写入。one-shot 守卫保持一致：写入触发的 loader volatile-update 回环中 `plan === lastHandledPresetPlan` → `willHandle=false`，不会重复应用（测试 6/6b 已 pin）；重复 `use` 同一方案仍可重复应用；设置卡片自身选择路径不变；`ALLOWED_OP_PATHS` 六字段白名单未放宽。测试 `test/v23-use-subcommand.mjs` 更新并新增 6/6b/6c 三个断言组，全部通过。
+
+## v0.25.3（2026-11-10）：消除 dshmarket 静态巡检对 `custom:` 自定义方案选择器的误报（纯代码形态修正，无功能变化）
+
+**变更**：`lib/client.js` 两处形态修正——①方案选择器 `custom:` 前缀拼接改为数组 `join`（行为等价），②设置卡片注释改写，消除 `configForms.get(id)` 字样。目的为避免 dshmarket 静态巡检把 `custom:` 自定义方案选择器的 `custom:<id>` 字符串误报为配置条目 id。无功能变化；`node --check` 通过。
+
 ## v0.25.1（2026-11-10）：去除 verify≥task 且跨家族独立的硬约束，角色配置改为灵活权衡
 
 **变更**：删除「verify 档位不得低于 task 且与 task 保持跨代际/跨家族独立（同家族 verify 升高一档补偿）」这条硬约束。保留的底线仅两条：triage 选便宜快速的模型；verify 不能过度自信（优先判断力强、能承认不确定性的模型）。task/verify/triage 三个角色改为可灵活配置——允许同款模型或任意档位组合，由使用者/推荐者按任务需要权衡审计增益与成本。同步修改：`src/modelPresets.ts` 的 `CROSS_VENDOR_PRINCIPLES` 与推荐 system prompt 规则第 2 条（reasoningEffort 规则第 5 条改为「verify 建议 high，可按需调整」）、绑定被删约束的厂商 rationale 措辞改为中性描述（预置方案本身不变）、`test/v17-model-presets.mjs` 断言更新（新原则存在、旧硬约束与「跨家族独立」不存在）、README 预置方案章节描述同步。

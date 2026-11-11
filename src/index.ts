@@ -44,6 +44,10 @@ import type { CustomPreset, PresetRecommendationRecord, SettingsOp } from './mod
 import { linkRunToGoal, noteWorkflowAgent, setBoardSource, unlinkRun } from './agents.ts'
 import { cyberneticsGoalsProjection, goalsFromBoard, publishGoals, setPublishDebugRoot, appendModeRecord } from './projection.ts'
 import {
+  clearSessionRolesOverride, formatSessionRolesOverride, getSessionRolesOverride, mergeSessionRolesOverride,
+  peekSessionAutoPending, sessionRolesKeyOf, setSessionAutoPending, setSessionRolesOverride, takeSessionAutoPending,
+} from './sessionRoles.ts'
+import {
   MODE_EVENT_TYPE, MODE_LEGACY_EVENT_TYPE, cyberneticsModeProjection, effectiveEnabled, modeOverrideOf, planWanted,
 } from './sessionMode.ts'
 
@@ -1512,6 +1516,14 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       logger?.warn?.(message, error)
     } catch { /* logging must never throw */ }
   }
+  /**
+   * (v0.25.5) writePresetRecord: ONE atomic settings mutate — the six-field
+   * ops (or none for record-only outcomes) plus the outcome record. This is
+   * the settings-CARD path only: the `/cybernetics use` subcommand no longer
+   * routes through here at all (v0.25.5 user ruling: use is session-only,
+   * zero settings writes — see src/sessionRoles.ts), so no extraOps channel
+   * remains and no presetPlan op is ever written from the plugin.
+   */
   const writePresetRecord = async (ops: SettingsOp[], record: PresetRecommendationRecord): Promise<boolean> => {
     const mutate = settingsMutate()
     if (mutate === undefined) {
@@ -1844,16 +1856,20 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
             : 'cybernetics 控制已对本会话关闭：不再注入控制 guidance，硬门禁放行，新输入回归 DSH 原生行为。/cybernetics on 可恢复。',
         }
       }
-      // --- `use` subcommand (v0.22.0): switch the role composition (task/
-      // verify/triage model + reasoning effort) to any preset plan — the
-      // built-in registry ids (PRESET_IDS) or a user-saved custom preset
-      // (`custom:<id>`). Reuses the SAME apply pipeline as the settings-card
-      // dropdown (handlePresetSelection, same closure) as fire-and-forget;
-      // lastHandledPresetPlan is kept in sync here so the one-shot volatile
-      // guard stays coherent (a later loader update with the same value is a
-      // no-op) while repeated invocations can re-apply the same plan.
+      // --- `use` subcommand (v0.22.0; v0.25.5 session-only, user ruling
+      // 2026-11-11): switch the role composition (task/verify/triage model +
+      // reasoning effort) for THIS SESSION to any preset plan — the built-in
+      // registry ids (PRESET_IDS) or a user-saved custom preset
+      // (`custom:<id>`), or `use off` to clear. ZERO settings writes: the
+      // resolved picks land in the in-memory per-session override store
+      // (src/sessionRoles.ts), which the round-dispatch read point folds in
+      // with "session override > global fields" precedence. The host's
+      // write-gate defect (v0.7.10, dual-module Include instance) is therefore
+      // irrelevant here, and the settings-card dropdown / global fields stay
+      // exactly where the card left them.
       if (arg === 'use' || arg.startsWith('use ')) {
         const planArg = rawInput.slice(3).trim()
+        const sessionKey = sessionRolesKeyOf(agent)
         const listPlans = (): string[] => {
           const lines = PRESET_IDS.map((id) => `- ${id}：${presetChoiceLabel(id)}`)
           try {
@@ -1866,11 +1882,24 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         if (planArg === '') {
           // No argument: plain-text listing (the command channel has no
           // picker UI); the user confirms with a second invocation.
+          const current = getSessionRolesOverride(sessionKey)
           return {
             kind: 'success' as const,
             text:
               'cybernetics 可用预置方案：\n' + listPlans().join('\n') +
-              '\n再次输入 /cybernetics use <id> 应用其中一个方案。',
+              (current ? `\n当前会话覆盖：${current.label}（${formatSessionRolesOverride(current)}）` : '') +
+              '\n再次输入 /cybernetics use <id> 应用其中一个方案；/cybernetics use off 清除会话覆盖。',
+          }
+        }
+        // Clear: back to the global fields for this session.
+        if (planArg === 'off') {
+          const had = clearSessionRolesOverride(sessionKey)
+          presetDiag({ event: 'use-session-apply', preset: '', label: '', cleared: true, had })
+          return {
+            kind: 'success' as const,
+            text: had
+              ? 'cybernetics: 已清除本会话的预置方案覆盖，回到全局配置（下一轮 goal 生效）。'
+              : 'cybernetics: 本会话当前没有预置方案覆盖（一直跟随全局配置）。',
           }
         }
         const isCustom = isCustomPresetId(planArg)
@@ -1888,28 +1917,107 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
               '\n输入 /cybernetics use <id> 应用其中一个方案。',
           }
         }
-        lastHandledPresetPlan = planArg
-        void handlePresetSelection(planArg)
+        if (planArg === PRESET_AUTO_ID) {
+          // Session-only auto: mark this session pending and hand the brief to
+          // THIS session's agent (the preset_recommend tool hop 1), whose hop-2
+          // answer lands in the session override instead of the global fields.
+          // The settings card path (dropdown auto) is untouched.
+          setSessionAutoPending(sessionKey)
+          try {
+            const target = agent as { status?: string; steer?: (m: unknown) => void; followup?: (m: unknown) => void }
+            const message = {
+              id: randomUUID(),
+              role: 'user',
+              content: [{
+                type: 'text',
+                text:
+                  '<cybernetics_preset>\n用户通过 /cybernetics use auto 请求本会话的预置方案自动推荐（仅本会话生效，不修改全局配置）。\n' +
+                  '请直接调用 preset_recommend 工具（不带 recommendation 参数）获取实时模型目录与推荐要求，' +
+                  '在自己的上下文中给出 task/verify/triage 的选择，然后再次调用 preset_recommend 并把推荐 JSON 传入 recommendation 参数提交。\n' +
+                  '本次提交将应用为本会话的角色覆盖。\n</cybernetics_preset>',
+              }],
+              source: { kind: 'cybernetics', preset: 'auto', scope: 'session' },
+            }
+            if (target?.status === 'running' && typeof target.steer === 'function') target.steer(message)
+            else if (typeof target.followup === 'function') target.followup(message)
+          } catch { /* best-effort: the tool remains callable from context */ }
+          presetDiag({ event: 'use-session-apply', preset: PRESET_AUTO_ID, label: presetChoiceLabel(PRESET_AUTO_ID), phase: 'pending-handoff' })
+          return {
+            kind: 'success' as const,
+            text:
+              `cybernetics: 已交办本会话的预置方案自动推荐（${presetChoiceLabel(PRESET_AUTO_ID)}）。` +
+              'preset_recommend 的推荐结果将仅应用为本会话的 task/verify/triage 覆盖；不修改全局配置。',
+          }
+        }
+        // Built-in vendor plan or user-saved custom plan: resolve the roles
+        // and store them as the session override (no settings mutate at all).
+        let overrideRoles: Partial<Record<'task' | 'verify' | 'triage', { provider?: string; model?: string; reasoningEffort?: string }>> = {}
+        let overrideLabel = planArg
+        let placeholder = false
+        if (isCustom) {
+          const entryId = customPresetEntryId(planArg)
+          let entry
+          try {
+            entry = parseCustomPresets(readConfigField(config.customPresets, '')).find((p) => p.id === entryId)
+          } catch { entry = undefined }
+          if (entry === undefined) {
+            return { kind: 'error' as const, text: `cybernetics: 自定义方案 "${planArg}" 不存在（可能已被删除），未应用任何更改。` }
+          }
+          const appliedCustom = vendorPresetApplyOps(customPresetAsVendor(entry))
+          overrideRoles = (appliedCustom.variant !== undefined ? appliedCustom.variant.roles : entry.roles) as typeof overrideRoles
+          overrideLabel = entry.name
+        } else {
+          const preset = presetById(planArg)!
+          const applied = vendorPresetApplyOps(preset)
+          if (!applied.ready) placeholder = true
+          else overrideRoles = (applied.variant !== undefined ? applied.variant.roles : preset.roles) as typeof overrideRoles
+          overrideLabel = presetChoiceLabel(planArg)
+        }
+        if (placeholder) {
+          return {
+            kind: 'error' as const,
+            text: `cybernetics: 预置方案 "${planArg}" 为占位条目（模型组合待填充），本次未应用任何更改。`,
+          }
+        }
+        setSessionRolesOverride(sessionKey, {
+          preset: planArg,
+          label: overrideLabel,
+          roles: overrideRoles,
+          appliedAt: new Date().toISOString(),
+        })
+        presetDiag({
+          event: 'use-session-apply',
+          preset: planArg,
+          label: overrideLabel,
+          picks: overrideRoles,
+          cleared: false,
+        })
         return {
           kind: 'success' as const,
           text:
-            `cybernetics: 正在应用预置方案 "${planArg}"（${presetChoiceLabel(planArg)}）——` +
-            'task/verify/triage 的模型与思考强度将写入插件配置（全局生效，影响所有并发会话）。结果见设置卡片的结果记录。',
+            `已在本会话应用预置方案 "${overrideLabel}"：${formatSessionRolesOverride({ preset: planArg, label: overrideLabel, roles: overrideRoles, appliedAt: '' })}；` +
+            '仅本会话生效（会话结束失效），不修改全局配置。/cybernetics use off 可清除覆盖、回到全局配置。',
         }
       }
       // No argument (or unknown text) = status report.
       const effective = override === null ? globalOn : override
       const overrideText = override === null ? '未设置（遵循全局配置）' : override ? 'on' : 'off'
+      const sessionOverride = getSessionRolesOverride(sessionRolesKeyOf(agent))
+      const sessionOverrideText = sessionOverride === undefined
+        ? '无（跟随全局配置）'
+        : `${sessionOverride.label}（${formatSessionRolesOverride(sessionOverride)}）— 清除：/cybernetics use off` +
+          (peekSessionAutoPending(sessionRolesKeyOf(agent)) ? '；auto 推荐待提交（preset_recommend）' : '')
       return {
         kind: 'success' as const,
         text:
           `cybernetics 本会话状态：${effective ? '生效' : '关闭'}\n` +
           `- 会话 override：${overrideText}\n` +
+          `- 会话预置方案覆盖：${sessionOverrideText}\n` +
           `- 全局 allGoalsMode：${globalOn ? 'on' : 'off'}\n` +
           `- 硬门禁 hardGate：${hardGate() ? (resolveGateMode(config, true) === 'allowlist' ? 'on（allowlist）' : 'on（denylist）') : 'off'}\n` +
           `- 新输入策略 inputPolicy：${readConfigField(config.inputPolicy, 'insert')}\n` +
           `- 轮完成通知策略 noticePolicy：${readConfigField(config.noticePolicy, 'insert')}\n` +
-          `用法：/cybernetics on | /cybernetics off | 无参数或 status = 显示状态 | /cybernetics use [方案id] = 应用预置方案（无参数列出全部可用方案）`,
+          `用法：/cybernetics on | /cybernetics off | 无参数或 status = 显示状态 | /cybernetics use [方案id] = 应用预置方案（仅本会话生效；无参数列出全部可用方案；use off 清除覆盖）`,
       }
     }
     const registerCommand = (session: unknown): void => {
@@ -2233,6 +2341,13 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       if (verifyEffort) roleOverrides.verify = { ...roleOverrides.verify, reasoningEffort: verifyEffort }
       const triageEffort = sanitizeReasoningEffort(readConfigField(config.triageAgentReasoningEffort, ''))
       if (triageEffort) roleOverrides.triage = { ...roleOverrides.triage, reasoningEffort: triageEffort }
+      // v0.25.5 (user ruling 2026-11-11): a `/cybernetics use <id>` session
+      // override wins over the global fields above — applied LAST, per role
+      // and per field, so uncovered roles/fields keep the global value and a
+      // session without `use` behaves exactly as before. In-memory only; the
+      // global fields (and the settings card) are never read-modified here.
+      const sessionOverride = getSessionRolesOverride(sessionRolesKeyOf(parent))
+      const effectiveRoleOverrides = mergeSessionRolesOverride(roleOverrides, sessionOverride)
 
       // The session's durable objective, as a classification-input fallback
       // for targets that carry none (v0.16 smart selection reads it).
@@ -2243,7 +2358,7 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         // start so a settings-panel edit governs the next round (0/undefined
         // falls back to the controller's built-in default).
         roundsPerSubgoal: Math.max(1, Math.floor(readConfigField(config.roundsPerSubgoal, 3))),
-        roles: roleOverrides,
+        roles: effectiveRoleOverrides,
       }
       /**
        * v0.16 smart agent model selection — per LAUNCH, not per call. A
@@ -2272,15 +2387,15 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
             depth: target.depth ?? 'full',
             executor: target.executor ?? 'ephemeral',
             taskRoleKey: target.role ?? 'default',
-            explicit: roleOverrides,
+            explicit: effectiveRoleOverrides,
             options: catalog.options,
             session: sessionRouteOf(parent),
           })
           // The pure merge only produces rows for roles without explicit
           // provider/model, so spreading them over the folded config cannot
           // clobber an explicit value; a merged COPY keeps controllerConfig
-          // (and roleOverrides) untouched for the next launch.
-          const roles: RolesConfig = { ...roleOverrides }
+          // (and effectiveRoleOverrides) untouched for the next launch.
+          const roles: RolesConfig = { ...effectiveRoleOverrides }
           for (const [roleKey, spec] of Object.entries(overrides)) {
             if (spec) roles[roleKey] = { ...roles[roleKey], ...spec }
           }
@@ -2615,9 +2730,13 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         return [{ type: 'text', text: `推荐未应用（${value?.status}）：${String(value?.reason ?? 'unknown')}` }]
       },
     },
-    async execute(args: { recommendation?: string }, _exec: any) {
+    async execute(args: { recommendation?: string }, exec: any) {
       const llmFace = resolveLlmFace()
       const llmCtx = llmFace !== undefined ? { llm: llmFace } : ctx
+      // v0.25.5 session-only auto: when THIS session carries a `use auto`
+      // pending marker, the tool's second hop lands as the session role
+      // override (zero settings writes) instead of the global card path.
+      const sessionKey = sessionRolesKeyOf(exec?.agent)
       const answer = typeof args?.recommendation === 'string' ? args.recommendation.trim() : ''
       if (answer === '') {
         // Hop 1: hand the material over (pure probe + render, zero LLM calls).
@@ -2631,14 +2750,21 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       const probe = await probeCatalogOptions(llmCtx)
       if (!Array.isArray(probe.options) || probe.options.length === 0) {
         const reason = '当前系统模型目录不可用或为空，无法校验推荐'
-        await writePresetRecord([], recordOf(PRESET_AUTO_ID, { status: 'degraded', catalogSize: 0, reason }))
+        if (!takeSessionAutoPending(sessionKey)) {
+          await writePresetRecord([], recordOf(PRESET_AUTO_ID, { status: 'degraded', catalogSize: 0, reason }))
+        } else {
+          presetDiag({ event: 'use-session-apply', preset: PRESET_AUTO_ID, phase: 'degraded-catalog' })
+        }
         return { status: 'degraded', catalogSize: 0, reason }
       }
       const outcome = await applyRecommendationAnswer(llmCtx, answer, probe.options)
+      // Consume the pending marker exactly once (before any early return).
+      const sessionAutoApply = takeSessionAutoPending(sessionKey)
       presetDiag(outcome.ok ? {
         event: 'preset-tool-apply',
         status: 'applied',
         catalogSize: probe.options.length,
+        ...(sessionAutoApply ? { sessionScope: true } : {}),
         picks: Object.fromEntries((['task', 'verify', 'triage'] as const).filter((k) => outcome.picks[k] !== undefined).map((k) => [k, `${outcome.picks[k]!.provider}/${outcome.picks[k]!.model}`])),
         ignoredSession: outcome.ignoredSession,
         notes: outcome.notes,
@@ -2649,8 +2775,11 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         reason: outcome.reason,
       })
       if (!outcome.ok) {
-        // Rejected: the card learns why, the caller gets a correctable error.
-        await writePresetRecord([], recordOf(PRESET_AUTO_ID, { status: 'degraded', catalogSize: probe.options.length, reason: outcome.reason }))
+        // Rejected: the card learns why (card path only), the caller gets a
+        // correctable error. The session-only path writes nothing anywhere.
+        if (!sessionAutoApply) {
+          await writePresetRecord([], recordOf(PRESET_AUTO_ID, { status: 'degraded', catalogSize: probe.options.length, reason: outcome.reason }))
+        }
         return { status: 'rejected', catalogSize: probe.options.length, reason: outcome.reason }
       }
       const picks: Record<string, string> = {}
@@ -2660,6 +2789,31 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         if (!pick) continue
         picks[roleKey] = `${pick.provider}/${pick.model}`
         efforts[roleKey] = pick.reasoningEffort ?? ''
+      }
+      if (sessionAutoApply) {
+        // v0.25.5 session-only landing: store the validated picks as THIS
+        // session's role override; no settings.mutate, no card record.
+        setSessionRolesOverride(sessionKey, {
+          preset: PRESET_AUTO_ID,
+          label: presetChoiceLabel(PRESET_AUTO_ID),
+          // Keep only the dispatch-relevant fields (the catalog rows carry
+          // display metadata like `name` that roles consumers never read).
+          roles: Object.fromEntries(
+            (['task', 'verify', 'triage'] as const).filter((k) => outcome.picks[k]).map((k) => {
+              const { provider, model, reasoningEffort } = outcome.picks[k]!
+              return [k, { provider, model, ...(reasoningEffort ? { reasoningEffort } : {}) }]
+            }),
+          ),
+          appliedAt: new Date().toISOString(),
+        })
+        presetDiag({ event: 'use-session-apply', preset: PRESET_AUTO_ID, label: presetChoiceLabel(PRESET_AUTO_ID), picks, cleared: false })
+        return {
+          status: 'applied',
+          catalogSize: probe.options.length,
+          picks,
+          ...(outcome.notes.length > 0 ? { notes: outcome.notes } : {}),
+          reason: '已应用为本会话的角色覆盖（仅本会话生效，会话结束失效；不修改全局配置）',
+        }
       }
       const written = await writePresetRecord(outcome.ops, recordOf(PRESET_AUTO_ID, {
         catalogSize: probe.options.length,
