@@ -17,7 +17,8 @@ globalThis.window.__ModuleLoader__ = {
   load(def) {
     const require = (id) => {
       if (id === 'react') return { useState: () => [undefined, () => {}], useEffect: () => {}, useSyncExternalStore: () => undefined }
-      if (id === 'react/jsx-runtime') return { jsx: () => null, jsxs: () => null }
+if (id === 'react/jsx-runtime') return { jsx: () => null, jsxs: () => null }
+      if (id === '@deepseek-ai/dsh-client-ui-primitives') return { MarkdownText: null }
       throw new Error('unexpected require: ' + id)
     }
     factoryResult = def.factory(require)

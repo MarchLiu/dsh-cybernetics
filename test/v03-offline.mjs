@@ -694,7 +694,8 @@ async function loadClientTab() {
   }
   const mod = loaded.factory((req) => {
     if (req === 'react') return react
-    if (req === 'react/jsx-runtime') return jsx
+if (req === 'react/jsx-runtime') return jsx
+    if (req === '@deepseek-ai/dsh-client-ui-primitives') return { MarkdownText: null }
     throw new Error('unexpected require: ' + req)
   })
   const dict = {}

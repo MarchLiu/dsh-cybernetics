@@ -96,7 +96,8 @@ const locale = {
 
 const mod = loadedModule.factory((id) => {
   if (id === 'react') return react
-  if (id === 'react/jsx-runtime') return jsxRuntime
+if (id === 'react/jsx-runtime') return jsxRuntime
+  if (id === '@deepseek-ai/dsh-client-ui-primitives') return { MarkdownText: null }
   throw new Error('unexpected require: ' + id)
 })
 

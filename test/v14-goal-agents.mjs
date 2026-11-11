@@ -41,6 +41,7 @@ globalThis.window.__ModuleLoader__ = {
           jsxs: (type, props) => record(type, props),
         }
       }
+      if (id === '@deepseek-ai/dsh-client-ui-primitives') return { MarkdownText: null }
       throw new Error('unexpected require: ' + id)
     }
     factoryResult = def.factory(require)
