@@ -26,7 +26,7 @@
 //     via popupFor(actx).open() with a synthetic enter segment.
 //
 // Covers:
-//   (a) usePopupRows: 12 built-in ids in registry order with zh labels;
+//   (a) usePopupRows: 11 built-in ids in registry order with zh labels;
 //       custom presets parsed from the ConfigForm snapshot appended with
 //       the `custom:` selector prefix; active/badge marking from the
 //       current presetPlan; garbage snapshot degrades to built-ins only;
@@ -121,9 +121,9 @@ const t = locale.bind('cybernetics')
 const rowsBuiltinsOnly = mod.usePopupRows(t, undefined)
 const EXPECTED_BUILTINS = [
   'auto', 'openai', 'claude', 'gemini', 'deepseek', 'kimi', 'qwen',
-  'volcano-coding-plan', 'minimax', 'glm', 'builtin-glm-light', 'builtin-deepseek-fast',
+  'minimax', 'glm', 'builtin-glm-light', 'builtin-deepseek-fast',
 ]
-assert.deepEqual(rowsBuiltinsOnly.map((r) => r.id), EXPECTED_BUILTINS, '12 built-in ids in registry order, garbage snapshot → built-ins only')
+assert.deepEqual(rowsBuiltinsOnly.map((r) => r.id), EXPECTED_BUILTINS, '11 built-in ids in registry order, garbage snapshot → built-ins only')
 assert.equal(rowsBuiltinsOnly[0].label, dicts.zh['settings.preset.optAuto'], 'labels come from the zh dict')
 assert.ok(rowsBuiltinsOnly.every((r) => r.group.name === 'builtin'), 'built-ins share one group')
 
@@ -138,14 +138,14 @@ const snap = {
   },
 }
 const rows = mod.usePopupRows(t, snap)
-assert.equal(rows.length, 14, 'two custom presets appended')
-assert.deepEqual(rows.slice(12).map((r) => r.id), ['custom:u123', 'custom:u456'], 'custom ids carry the selector prefix')
-assert.equal(rows[12].label, '我的组合', 'custom label = saved name')
-assert.ok(rows[12].active && rows[12].badge === dicts.zh['popup.badge.current'], 'current presetPlan (custom:u123) marked active')
-assert.ok(!rows[0].active && !rows[13].active, 'non-current rows unmarked')
+assert.equal(rows.length, 13, 'two custom presets appended')
+assert.deepEqual(rows.slice(11).map((r) => r.id), ['custom:u123', 'custom:u456'], 'custom ids carry the selector prefix')
+assert.equal(rows[11].label, '我的组合', 'custom label = saved name')
+assert.ok(rows[11].active && rows[11].badge === dicts.zh['popup.badge.current'], 'current presetPlan (custom:u123) marked active')
+assert.ok(!rows[0].active && !rows[12].active, 'non-current rows unmarked')
 // malformed customPresets JSON → built-ins only, no throw
-assert.equal(mod.usePopupRows(t, { status: 'ready', value: { customPresets: 'not-json' } }).length, 12, 'malformed customPresets degrades')
-console.log('✓ (a) usePopupRows: 12 built-ins + custom:<id> rows, active marking, degrade paths')
+assert.equal(mod.usePopupRows(t, { status: 'ready', value: { customPresets: 'not-json' } }).length, 11, 'malformed customPresets degrades')
+console.log('✓ (a) usePopupRows: 11 built-ins + custom:<id> rows, active marking, degrade paths')
 
 // --- fake host ctx with a commandUi capture ---------------------------------
 const LISTING_RECEIPT = {

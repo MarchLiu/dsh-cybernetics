@@ -4,6 +4,17 @@
 > 当下的功能与使用方式以 [README.md](../README.md) 为准；协议细节见 [protocol.md](protocol.md)。
 > 约定：`src/` 改动需宿主重载生效；`lib/client.js` 改动需重启宿主（客户端模块图在宿主启动时构建）并刷新浏览器；`workflows/round.js` 改动热生效。
 
+## v0.25.7（2026-11-13）：移除机构定制内置方案「火山 Coding Plan」——回归用户自定义方案机制（用户裁定）
+
+**用户裁定**：火山引擎 Coding Plan 是机构定制方案，外部部署永远看不到对应 provider（bza-plan），不应再作为内置厂商方案随代码发布；该组合改由现有「自定义方案」（customPresets）机制承载。
+
+- **注册表（`src/modelPresets.ts`）**：`PRESET_IDS` 移除 `'volcano-coding-plan'`（12→11 项），`VENDOR_PRESETS` 删除整条 ready 条目（provider `bza-plan`、A/B 两变体、doubao-seed 系模型、火山方舟文档来源）。刻意**不做** `builtin-*` 内置化副本——那会把机构组合继续随每次安装全局发布，正是本次裁定要避免的。
+- **迁移/保留路径（实际结论）**：角色配置是扁平 volatile 字段（`*AgentModel` / `*AgentReasoningEffort`），内置条目删除不影响任何已应用的组合——本部署现有 Coding Plan 配置原样保留；如需命名存档，用设置卡片既有「保存为自定义方案」按钮把当前组合写入本部署私有的 `customPresets` 字段。**代码不做自动写入用户私有配置的迁移**（那等于伪造全局数据）；A/B 变体中仅已应用（variants[0]）的组合被角色字段承载，变体 B 如需保留可手动按 B 组合改字段后再保存自定义方案。
+- **旧选择器优雅降级（`src/index.ts`）**：`handlePresetSelection` 新增 legacy 守卫——`presetPlan = 'volcano-coding-plan'` 时 warn + 写一条 degraded `presetRecommendation` 记录（说明已移除、指向自定义方案保留路径），**零角色字段 ops**：不 throw、不覆盖任何现有模型配置。`/cybernetics use volcano-coding-plan` 走既有未知 id 校验，直接 error 回执并列出可用方案，零写入。
+- **客户端（`lib/client.js`）**：`PRESET_CHOICES` 移除该条目；zh/en 删除 `settings.preset.optVolcanoCodingPlan`；两处 hint「九家厂商」改「八家厂商」并注明移除与保留方式。
+- **文档**：README.md / README.zh-CN.md 预置方案章节计数与厂商清单同步更新。
+- **测试（`test/v17-model-presets.mjs`、`test/v24-use-popup.mjs`）**：注册表计数 12→11、厂商 9→8、expectedVariants 移除火山项；新增负断言（`presetById('volcano-coding-plan') === undefined`、注册表不含 bza-plan/doubao 组合）；原「volcano 应用变体 A」用例改为 legacy 降级用例（一条 degraded 记录、零角色字段 ops）；卡片选项 14→13、popup 行计数同步。全量离线测试通过（relay-host-probe 的失败为宿主 approval 服务环境问题，基线（改动前）同样失败，与本变更无关）；`tsc --noEmit` 无新增错误。
+
 ## v0.25.5（2026-11-11）：`/cybernetics use` 改为仅当前会话生效——零 settings 写入（用户裁定，推翻 v0.25.4 方向）
 
 **用户裁定（2026-11-11，最高优先级）**：`use` 一律实现为**仅当前会话生效**——完全不调用 settings mutate（不写六角色字段、不写 `presetPlan`、不写 `presetRecommendation`），不做「先全局再降级」。背景：宿主存在写闸门缺陷（v0.7.10：dsh-app-boot 双模块实例 → WeakMap miss → 所有 settings 写入被拒 "profile reload requires the root Include entry"），某些启动方式下 v0.22–v0.25.4 的全局写路径完全无效。

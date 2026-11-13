@@ -197,7 +197,18 @@ section1: {
   assert.equal(reply2.kind, 'error')
   assert.equal(host.mutates.length, 0)
   assert.equal(getSessionRolesOverride(host.key), undefined)
-  console.log('✓ (5) unknown built-in / missing custom id → error + id listing, zero writes/stores')
+  // v0.25.7: the exact removed legacy builtin id gets a targeted migration
+  // hint; other unknown ids must NOT carry it.
+  const legacy = host.run('use volcano-coding-plan')
+  assert.equal(legacy.kind, 'error')
+  assert.ok(legacy.text.includes('保存为自定义方案'), 'legacy id gets a targeted migration hint')
+  assert.ok(!/nope/.test(legacy.text))
+  const plain = host.run('use nope2')
+  assert.equal(plain.kind, 'error')
+  assert.ok(!plain.text.includes('保存为自定义方案'), 'generic unknown id has NO migration hint')
+  assert.equal(host.mutates.length, 0)
+  assert.equal(getSessionRolesOverride(host.key), undefined)
+  console.log('✓ (5) unknown built-in / missing custom id → error + id listing, zero writes/stores; legacy id hint only on exact match')
 }
 
 // (6) repeated use updates the override; use off clears back to global; the

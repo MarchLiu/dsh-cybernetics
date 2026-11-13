@@ -311,7 +311,7 @@ export const Config = z.object({
    * the union became a free string — the handler validates ids itself
    * (unknown ids are ignored with a warn, exactly like before).
    */
-  presetPlan: z.string().default('').volatile().description('预置方案选择（v0.17，缺省空）：设置卡片下拉框的当前选择。选「根据现有配置自动推荐」(auto) 时，插件把实时模型目录、分配原则与当前角色配置直接交给 session agent（通过 preset_recommend 工具，不发起任何独立 LLM 调用、不新起子 agent），由 session agent 在自己的上下文中给出 task/verify/triage 推荐并回传，插件校验后写入下方各角色字段（已显式配置的角色会被覆盖，请以推荐结果为准复核）；选某厂商方案时应用其默认变体的组合（OpenAI/Claude/Gemini/DeepSeek/Kimi/Qwen/火山 Coding Plan/Minimax/GLM，数据见 src/modelPresets.ts）；选「custom:<id>」时应用 customPresets 字段中对应自定义方案的组合。作用范围仅 task/verify/triage 三个子 agent 角色——session agent 由用户自行管理，方案与自动推荐都不应用 session 项（厂商 session 推荐仅作参考展示）。每次选择的结果记录在 presetRecommendation 字段（pending=已交办 session agent 等待作答）。'),
+  presetPlan: z.string().default('').volatile().description('预置方案选择（v0.17，缺省空）：设置卡片下拉框的当前选择。选「根据现有配置自动推荐」(auto) 时，插件把实时模型目录、分配原则与当前角色配置直接交给 session agent（通过 preset_recommend 工具，不发起任何独立 LLM 调用、不新起子 agent），由 session agent 在自己的上下文中给出 task/verify/triage 推荐并回传，插件校验后写入下方各角色字段（已显式配置的角色会被覆盖，请以推荐结果为准复核）；选某厂商方案时应用其默认变体的组合（OpenAI/Claude/Gemini/DeepSeek/Kimi/Qwen/Minimax/GLM，数据见 src/modelPresets.ts）；选「custom:<id>」时应用 customPresets 字段中对应自定义方案的组合。已移除的旧内置选择器不受影响：已应用的角色字段保持不变，可另存为自定义方案。作用范围仅 task/verify/triage 三个子 agent 角色——session agent 由用户自行管理，方案与自动推荐都不应用 session 项（厂商 session 推荐仅作参考展示）。每次选择的结果记录在 presetRecommendation 字段（pending=已交办 session agent 等待作答）。'),
   /**
    * v0.17: the card-visible outcome of the last preset selection. The server
    * writes a compact JSON record ({status: ok|pending|placeholder|degraded,
@@ -1682,6 +1682,23 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         }))
         return
       }
+      // v0.25.7 legacy guard: `volcano-coding-plan` was an institutional
+      // preset removed from the registry (external deployments could never
+      // route its provider). A stale selector value must NOT throw and must
+      // NOT touch any config — the already-applied flat role fields stay
+      // exactly as they are; the record only explains the removal and how to
+      // keep the combination (save it as a custom preset). No ops are built
+      // from the removed data, so the institutional combination is never
+      // re-published through this path.
+      if (plan === 'volcano-coding-plan') {
+        warnOf('cybernetics: preset plan "volcano-coding-plan" was removed (institutional plan, no longer shipped as a built-in) — no changes applied')
+        await writePresetRecord([], recordOf(plan, {
+          status: 'degraded',
+          label: '火山 Coding Plan',
+          reason: '该内置方案已移除（机构定制方案，不再随代码发布），未应用任何更改；已应用的角色配置不受影响——如需保留这套组合，请在设置卡片把当前配置「保存为自定义方案」。',
+        }))
+        return
+      }
       const preset = presetById(plan)
       if (preset === undefined) {
         warnOf(`cybernetics: unknown preset plan "${plan}" — ignored`)
@@ -1910,10 +1927,17 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
         })()
         const known = isCustom ? customEntryExists : (planArg === PRESET_AUTO_ID || presetById(planArg) !== undefined)
         if (!known) {
+          // v0.25.7: only the exact removed legacy builtin id gets a targeted
+          // migration hint; generic unknown ids keep the plain listing.
+          const legacyHint =
+            planArg === 'volcano-coding-plan'
+              ? '\n该内置方案已移除（机构定制，不再随代码发布）。如需保留这套组合，请在设置卡片用「保存为自定义方案」存档后再选择 custom:<id>。'
+              : ''
           return {
             kind: 'error' as const,
             text:
               `cybernetics: 未知预置方案 "${planArg}"。可用 id：\n` + listPlans().join('\n') +
+              legacyHint +
               '\n输入 /cybernetics use <id> 应用其中一个方案。',
           }
         }

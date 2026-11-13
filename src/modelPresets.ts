@@ -19,13 +19,13 @@
  *    validatePickEfforts → recommendationApplyOps), it never calls an LLM
  *    and never spawns an agent.
  *  - vendor entries (OpenAI / Claude / Gemini / DeepSeek / Kimi / Qwen /
- *    火山 Coding Plan / Minimax) — per-vendor recommended combinations with
+ *    Minimax) — per-vendor recommended combinations with
  *    full data: per-role model + reasoning effort (heterogeneous tokens:
  *    OpenAI/Minimax five-level low/medium/high/xhigh/max, DeepSeek thinking
  *    switch, others model default), upgrade tier, availability fallback,
  *    per-role rationale, per-vendor note (⚠️ caveats), and VARIANTS (Claude
- *    常规/高要求, Qwen A/B/C, DeepSeek 仅本家/verify 外置, Kimi 长期/最高验收,
- *    火山 A/B). Selecting a preset applies its DEFAULT variant (variants[0]);
+ *    常规/高要求, Qwen A/B/C, DeepSeek 仅本家/verify 外置, Kimi 长期/最高验收).
+ *    Selecting a preset applies its DEFAULT variant (variants[0]);
  *    the outcome record discloses the variant applied and the remaining ones.
  *
  * SESSION SCOPE (user ruling 2026-11-06, highest priority): the session agent
@@ -110,7 +110,6 @@ export const PRESET_IDS = [
   'deepseek',
   'kimi',
   'qwen',
-  'volcano-coding-plan',
   'minimax',
   'glm',
   'builtin-glm-light',
@@ -202,8 +201,8 @@ export const CROSS_VENDOR_PRINCIPLES: string[] = [
  * The vendor registry (v0.17: the vendors' published combinations, collected
  * 2026-11-06; v0.19.1 naming audit 2026-11-07). The audit re-grounded every
  * `model` id against (a) the vendors' official API model lists and (b) THIS
- * deployment's live catalog: catalog-covered families (DeepSeek, Kimi, 火山
- * Coding Plan, GLM) use verbatim catalog ids (provider+model both hit);
+ * deployment's live catalog: catalog-covered families (DeepSeek, Kimi, GLM)
+ * use verbatim catalog ids (provider+model both hit);
  * off-catalog vendors (OpenAI / Anthropic / Google / Qwen / MiniMax) keep
  * their vendor provider id with officially confirmed API ids (Anthropic's
  * product-name forms — Sonnet-5.5/Opus-5.5/… — became the lowercase-hyphen
@@ -214,9 +213,21 @@ export const CROSS_VENDOR_PRINCIPLES: string[] = [
  * Selecting a READY preset applies its DEFAULT variant's task/verify/triage
  * roles (model + effort) to the flat volatile fields; the session suggestion
  * travels with the variant as reference data only. DeepSeek deliberately
- * publishes two variants (in-house stack vs external verify); Kimi/Qwen/火山
+ * publishes two variants (in-house stack vs external verify); Kimi/Qwen
  * carry the multi-variant ladders. Gemini resolves 「家族 + 最新版本」 at
  * runtime, so its ids are family-latest tokens rather than pinned versions.
+ *
+ * v0.25.7 (user ruling): the former `volcano-coding-plan` entry (火山引擎
+ * Coding Plan, provider bza-plan) was an INSTITUTIONAL plan that external
+ * deployments can never see, so it is no longer shipped as a built-in
+ * registry entry. It was removed entirely — deliberately NOT re-added as a
+ * `builtin-*` built-in (that would keep publishing the institutional
+ * combination with every install). Users of this deployment keep their
+ * already-applied task/verify/triage flat fields (untouched by the removal)
+ * and can re-archive the combination via the existing 「保存为自定义方案」
+ * custom-preset mechanism (customPresets config field, per-deployment user
+ * data). A stale `presetPlan = 'volcano-coding-plan'` selector degrades
+ * gracefully (see the LEGACY_REMOVED_PRESET handler note in src/index.ts).
  */
 export const VENDOR_PRESETS: VendorPreset[] = [
   {
@@ -431,42 +442,6 @@ export const VENDOR_PRESETS: VendorPreset[] = [
       },
     ],
     note: '⚠️ verify 绝不用 Flash 档（qwen3.8-flash/qwen-flash；幻觉共振：轻模型审计重模型输出会互相放大幻觉）；verify 档恒 ≥ task。v0.19.1 命名核对：qwen-turbo 已从官方目录下架（由 flash 系接替），qwen-plus/qwen-max 转入旧版（qwen-max 32k 且无思考档），故整表换用官方当前推荐的 qwen3.7-plus / qwen3.8-max / qwen3.8-flash。本部署目录未含 qwen，需部署侧具备对应 provider 方可应用。',
-    sessionNote: PRESET_SESSION_NOTE,
-  },
-  {
-    id: 'volcano-coding-plan',
-    label: '火山 Coding Plan',
-    description: '火山引擎 Coding Plan 组合（可用池 doubao-seed-2.1-pro / doubao-seed-evolving / doubao-seed-2.1-lite / doubao-seed-2.0-mini，另有 deepseek-v4 系与 glm 系）：A = task lite（复杂重构自动切 pro）/ verify lite（高危 fallback pro）/ triage mini；B = task mini（复杂强制 lite）/ verify lite / triage mini。',
-    source: 'https://ark.volcengine.com/region:cn-beijing/docs/model-list',
-    status: 'ready',
-    roles: {
-      task: { provider: 'bza-plan', model: 'doubao-seed-2.1-lite', upgradeTo: 'doubao-seed-2.1-pro', rationale: 'A 档：lite 执行，复杂重构自动切 pro。' },
-      verify: { provider: 'bza-plan', model: 'doubao-seed-2.1-lite', fallback: 'doubao-seed-2.1-pro', rationale: 'verify 用 lite，高危任务 fallback pro；备选可换 zai-coding-cn/glm-5.3。' },
-      triage: { provider: 'bza-plan', model: 'doubao-seed-2.0-mini', rationale: '最轻分拣。' },
-    },
-    variants: [
-      {
-        id: 'a',
-        label: 'A（均衡）',
-        roles: {
-          task: { provider: 'bza-plan', model: 'doubao-seed-2.1-lite', upgradeTo: 'doubao-seed-2.1-pro', rationale: 'lite 执行，复杂重构自动切 pro。' },
-          verify: { provider: 'bza-plan', model: 'doubao-seed-2.1-lite', fallback: 'doubao-seed-2.1-pro', rationale: 'lite 审计，高危 fallback pro；备选 zai-coding-cn/glm-5.3。' },
-          triage: { provider: 'bza-plan', model: 'doubao-seed-2.0-mini', rationale: '最轻分拣。' },
-        },
-        session: { provider: 'bza-plan', model: 'doubao-seed-evolving', fallback: 'doubao-seed-2.1-pro', rationale: 'session 首选 doubao-seed-evolving，退 pro（仅参考）。' },
-      },
-      {
-        id: 'b',
-        label: 'B（成本优先）',
-        roles: {
-          task: { provider: 'bza-plan', model: 'doubao-seed-2.0-mini', upgradeTo: 'doubao-seed-2.1-lite', rationale: 'mini 执行，复杂任务强制 lite。' },
-          verify: { provider: 'bza-plan', model: 'doubao-seed-2.1-lite', fallback: 'doubao-seed-2.1-pro', rationale: 'lite 审计不变（成本再压也不降 verify）。' },
-          triage: { provider: 'bza-plan', model: 'doubao-seed-2.0-mini', rationale: '最轻分拣。' },
-        },
-        session: { provider: 'bza-plan', model: 'doubao-seed-evolving', fallback: 'doubao-seed-2.1-pro', rationale: 'session doubao-seed-evolving（仅参考）。' },
-      },
-    ],
-    note: 'v0.19.1 命名核对：provider 用本部署的 bza-plan 渠道（火山系模型在本部署的唯一入口），模型 id 逐字对齐部署目录（doubao-seed-2.1-pro / doubao-seed-2.1-lite / doubao-seed-2.0-mini / doubao-seed-evolving；旧文案的 Seed-2.1-lite 等商品名形式已更正）；官方方舟 Doubao-Seed-2.1 系列提供 pro/turbo/lite 三档。verify/复杂 task 的 fallback 可换 zai-coding-cn/glm-5.3（外部家族），但禁给 triage/普通 task；session 首选 doubao-seed-evolving（持续演化档）。',
     sessionNote: PRESET_SESSION_NOTE,
   },
   {

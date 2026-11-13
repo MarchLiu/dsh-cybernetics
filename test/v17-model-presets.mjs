@@ -84,14 +84,14 @@ import {
 const section = (label) => console.log(`\n— ${label}`)
 
 // (1) registry completeness ------------------------------------------------------
-section("(1) registry: 12 options (auto + 9 vendors + 2 built-in user presets), full data, session reference-only")
+section("(1) registry: 11 options (auto + 8 vendors + 2 built-in user presets), full data, session reference-only")
 {
-  assert.equal(PRESET_IDS.length, 12, 'dropdown ids: auto + 9 vendors + 2 built-in user presets')
+  assert.equal(PRESET_IDS.length, 11, 'dropdown ids: auto + 8 vendors + 2 built-in user presets')
   assert.equal(PRESET_IDS[0], PRESET_AUTO_ID, 'auto first')
   const ids = PRESET_IDS.slice(1)
   assert.deepEqual([...new Set(ids)].sort(), [...ids].sort(), 'vendor ids unique')
   const vendors = allVendorPresets()
-  assert.equal(vendors.length, 11, '11 entries (9 vendors + 2 built-in user presets)')
+  assert.equal(vendors.length, 10, '10 entries (8 vendors + 2 built-in user presets)')
   assert.deepEqual(vendors.map((v) => v.id), ids, 'registry order mirrors the dropdown ids')
   assert.equal(presetById('auto'), undefined, 'auto is not a vendor entry')
   const ROLE_KEYS = new Set(['task', 'verify', 'triage'])
@@ -101,8 +101,8 @@ section("(1) registry: 12 options (auto + 9 vendors + 2 built-in user presets), 
     assert.ok(vendor.description?.length > 0, `${vendor.id}: description (scope note)`)
     assert.ok(Array.isArray(vendor.variants) && vendor.variants.length >= 1, `${vendor.id}: at least one variant`)
     // Multi-variant vendors from the brief: Claude 常规/高要求, DeepSeek 仅本家/verify外置,
-    // Kimi 长期/最高验收, Qwen A/B/C, 火山 A/B.
-    const expectedVariants = { openai: 1, claude: 2, gemini: 1, deepseek: 2, kimi: 2, qwen: 3, 'volcano-coding-plan': 2, minimax: 1, glm: 2, 'builtin-glm-light': 1, 'builtin-deepseek-fast': 1 }
+    // Kimi 长期/最高验收, Qwen A/B/C.
+    const expectedVariants = { openai: 1, claude: 2, gemini: 1, deepseek: 2, kimi: 2, qwen: 3, minimax: 1, glm: 2, 'builtin-glm-light': 1, 'builtin-deepseek-fast': 1 }
     assert.equal(vendor.variants.length, expectedVariants[vendor.id], `${vendor.id}: variant count matches the brief`)
     // roles mirrors the DEFAULT variant (first) for old readers.
     assert.equal(vendor.roles, vendor.variants[0].roles, `${vendor.id}: roles === default variant roles (mirror invariant)`)
@@ -159,9 +159,11 @@ section("(1) registry: 12 options (auto + 9 vendors + 2 built-in user presets), 
   assert.equal(presetById('kimi').roles.task.model, 'kimi-for-coding-highspeed', 'Kimi high-speed execution → kimi-for-coding-highspeed')
   assert.equal(presetById('kimi').roles.verify.model, 'k3', 'Kimi previous-gen verify stays k3')
   assert.equal(presetById('kimi').variants[1].roles.verify.model, 'k3-256k', 'Kimi max-acceptance verify → k3-256k (nearest substitution)')
-  assert.equal(presetById('volcano-coding-plan').roles.task.provider, 'bza-plan', 'Volcano provider bza-plan')
-  assert.equal(presetById('volcano-coding-plan').roles.task.model, 'doubao-seed-2.1-lite', 'Volcano task model doubao-seed-2.1-lite')
-  assert.equal(presetById('volcano-coding-plan').variants[0].session.model, 'doubao-seed-evolving', 'Volcano session reference doubao-seed-evolving')
+  // v0.25.7: the institutional volcano-coding-plan preset was removed from
+  // the registry — no built-in may expose it, not even as a placeholder.
+  assert.equal(presetById('volcano-coding-plan'), undefined, 'removed institutional preset: not in the registry')
+  assert.ok(!PRESET_IDS.includes('volcano-coding-plan'), 'removed institutional preset: not in PRESET_IDS')
+  assert.ok(!allVendorPresets().some((p) => p.provider === 'bza-plan' || JSON.stringify(p).includes('doubao')), 'no registry entry carries the institutional bza-plan/doubao combination')
   assert.equal(presetById('claude').roles.task.model, 'claude-sonnet-5-5', 'Claude task model claude-sonnet-5-5')
   assert.equal(presetById('claude').roles.verify.model, 'claude-opus-5-5', 'Claude verify model claude-opus-5-5')
   assert.equal(presetById('claude').roles.triage.model, 'claude-haiku-5-5', 'Claude triage model claude-haiku-5-5')
@@ -176,8 +178,8 @@ section("(1) registry: 12 options (auto + 9 vendors + 2 built-in user presets), 
   }
   assert.ok(presetVariant(presetById('qwen')), 'presetVariant resolves the default')
   assert.equal(presetChoiceLabel(PRESET_AUTO_ID), '根据现有配置自动推荐', 'auto label')
-  assert.equal(presetChoiceLabel('volcano-coding-plan'), '火山 Coding Plan', 'vendor label')
-  console.log('✓ v17 (1) registry complete: 9 READY vendors, variants/efforts/notes/rationale filled, session reference-only')
+  assert.equal(presetChoiceLabel('glm'), 'GLM', 'vendor label')
+  console.log('✓ v17 (1) registry complete: 8 READY vendors, variants/efforts/notes/rationale filled, session reference-only')
 }
 
 // (2) recommendation brief --------------------------------------------------------
@@ -568,16 +570,21 @@ section('(8) apply(): one-shot presetPlan resolve, record enrichment, session sc
     assert.equal(host.mutates.length, 1, 'same value → no re-apply')
   }
   {
-    // Explicit vendor: volcano default variant A (task lite, effort-less roles → unset).
+    // v0.25.7 legacy selector: the removed institutional preset degrades
+    // gracefully — one degraded record, ZERO model/effort ops (the flat role
+    // config a user already applied is never touched or overwritten).
     const planRef2 = ref('')
     const host2 = await mkCtx({ llm: catalogLlm, config: { presetPlan: planRef2 } })
     planRef2.value = 'volcano-coding-plan'
     await host2.fire()
+    assert.equal(host2.mutates.length, 1, 'legacy removed preset writes exactly one mutate (the record)')
     const ops2 = host2.mutates.at(-1).ops
-    const taskOp = ops2.find((op) => op.path[0] === 'taskAgentModel')
-    assert.equal(taskOp.value, 'bza-plan/doubao-seed-2.1-lite', 'volcano default variant A: task lite')
+    assert.equal(ops2.find((op) => op.path[0] === 'taskAgentModel'), undefined, 'no task model op for the removed preset')
+    assert.equal(ops2.find((op) => op.path[0]?.endsWith('AgentModel') || op.path[0]?.endsWith('ReasoningEffort')), undefined, 'no role field touched by the removed preset')
     const record2 = parseRecommendationRecord(ops2.find((op) => op.path[0] === 'presetRecommendation').value)
-    assert.equal(record2.variant, 'A（均衡）', 'record names variant A')
+    assert.equal(record2.status, 'degraded', 'legacy removed preset → degraded record')
+    assert.match(record2.reason, /已移除/, 'record explains the removal')
+    assert.match(record2.reason, /自定义方案/, 'record points at the custom-preset retention path')
   }
   {
     // Auto path (v0.18.2): a PENDING handoff record, NO model field touched,
@@ -868,7 +875,7 @@ section('(9) preset_recommend tool: hop 1 brief / hop 2 apply / rejection / gate
 }
 
 // (12) settings card -------------------------------------------------------------------
-section("(12) settings card: 10-option select, session callout, record rendering (incl. pending), write path")
+section("(12) settings card: 11-option select, session callout, record rendering (incl. pending), write path")
 {
   const client = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
   // v0.18.2 acceptance criterion (1)+(2): the removed input row is gone from
@@ -907,7 +914,7 @@ section("(12) settings card: 10-option select, session callout, record rendering
   for (const key of [
     'settings.presetPlan', 'settings.presetPlanHint', 'settings.presetNone',
     'settings.preset.optAuto', 'settings.preset.optOpenai', 'settings.preset.optClaude', 'settings.preset.optGemini',
-    'settings.preset.optDeepseek', 'settings.preset.optKimi', 'settings.preset.optQwen', 'settings.preset.optVolcanoCodingPlan',
+    'settings.preset.optDeepseek', 'settings.preset.optKimi', 'settings.preset.optQwen',
     'settings.preset.optMinimax', 'settings.preset.optGlm',
     'settings.preset.sessionScope', 'settings.preset.applied', 'settings.preset.effortSuffix', 'settings.preset.effortDefaultSuffix',
     'settings.preset.variant', 'settings.preset.otherVariants', 'settings.preset.notes',
@@ -961,13 +968,13 @@ section("(12) settings card: 10-option select, session callout, record rendering
   const presetSelect = rendered.find((n) => n.type === 'select' && n.props['aria-label'] === t('settings.presetPlan'))
   assert.ok(presetSelect, 'preset select rendered')
   const options = flatten(presetSelect.props.children).filter((n) => n.type === 'option')
-  // v0.19 + built-in user presets: (none) + 12 built-ins + the custom-divider
+  // v0.19 + built-in user presets: (none) + 11 built-ins + the custom-divider
   // (no custom presets in this snapshot yet) — custom entries would render
   // after the divider.
-  assert.equal(options.length, 14, "(none) + 12 built-ins + divider")
+  assert.equal(options.length, 13, "(none) + 11 built-ins + divider")
   assert.equal(options[0].props.value, '', 'leading (none) option')
-  assert.deepEqual(options.slice(1, 13).map((o) => o.props.value), [...PRESET_IDS], 'the 12 built-in options in registry order')
-  const divider = options[13]
+  assert.deepEqual(options.slice(1, 12).map((o) => o.props.value), [...PRESET_IDS], 'the 11 built-in options in registry order')
+  const divider = options[12]
   assert.equal(divider.props.disabled, true, 'custom divider option is disabled (separator only)')
   assert.equal(divider.props.children, t('settings.preset.customDivider'), 'divider label renders')
   assert.equal(options[1].props.children, t('settings.preset.optAuto'), 'first scheme option = auto-recommend')
@@ -1083,7 +1090,7 @@ section("(12) settings card: 10-option select, session callout, record rendering
   globalThis.window.prompt = realPrompt
   globalThis.window.confirm = realConfirm
   globalThis.window.alert = realAlert
-  console.log('✓ v17 (12) card: 10 options + (none), session callout, enriched + pending records, volatile write path, no input row')
+  console.log('✓ v17 (12) card: 11 options + (none), session callout, enriched + pending records, volatile write path, no input row')
 }
 
 // (13) v0.19 custom presets (自定义方案) ----------------------------------------------
