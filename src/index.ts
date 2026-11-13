@@ -1689,7 +1689,9 @@ export function apply(ctx: any, config: Partial<Config> = {}) {
       // exactly as they are; the record only explains the removal and how to
       // keep the combination (save it as a custom preset). No ops are built
       // from the removed data, so the institutional combination is never
-      // re-published through this path.
+      // re-published through this path. Re-adding a Volcano Engine preset is
+      // only conceivable once a publicly accessible account/provider
+      // directory exists — an open option, not a committed feature.
       if (plan === 'volcano-coding-plan') {
         warnOf('cybernetics: preset plan "volcano-coding-plan" was removed (institutional plan, no longer shipped as a built-in) — no changes applied')
         await writePresetRecord([], recordOf(plan, {

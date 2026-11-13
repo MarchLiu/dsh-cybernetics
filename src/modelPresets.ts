@@ -228,6 +228,9 @@ export const CROSS_VENDOR_PRINCIPLES: string[] = [
  * custom-preset mechanism (customPresets config field, per-deployment user
  * data). A stale `presetPlan = 'volcano-coding-plan'` selector degrades
  * gracefully (see the LEGACY_REMOVED_PRESET handler note in src/index.ts).
+ * A future public preset for Volcano Engine would only be assessed from a
+ * publicly accessible account/provider directory — an open option, not a
+ * committed feature.
  */
 export const VENDOR_PRESETS: VendorPreset[] = [
   {
