@@ -128,7 +128,7 @@ node effort-patch/apply-ptc.mjs verify      # 确认 live 含全部接缝锚点
 1. Web 设置 → 插件 → dsh-cybernetics：三个模型字段下方各出现「思考强度」下拉。
 2. 选 glm-5.3（reasoningEfforts: off/minimal/low/medium/high/max）→ 下拉出现全部档位
    （含 off；有真实档位的模型不做 off 去重）；
-   选无强度模型（如 ollama/qwen3.8:latest、doubao-seed-2.1-pro）→ 下拉**仍可点击**，
+   选无强度模型（如 ollama/qwen3.8:latest，或任一未声明 reasoningEfforts 的模型）→ 下拉**仍可点击**，
    仅一项「跟随模型默认」，**无黄色警告**；
    若该模型上配置里存了旧档位 token（off/high…）→ 仍然**无任何提示**
    （模型没声明任何档位，不存在可回退的声明列表）；

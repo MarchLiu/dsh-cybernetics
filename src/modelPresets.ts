@@ -217,20 +217,17 @@ export const CROSS_VENDOR_PRINCIPLES: string[] = [
  * carry the multi-variant ladders. Gemini resolves 「家族 + 最新版本」 at
  * runtime, so its ids are family-latest tokens rather than pinned versions.
  *
- * v0.25.7 (user ruling): the former `volcano-coding-plan` entry (火山引擎
- * Coding Plan, provider bza-plan) was an INSTITUTIONAL plan that external
- * deployments can never see, so it is no longer shipped as a built-in
- * registry entry. It was removed entirely — deliberately NOT re-added as a
- * `builtin-*` built-in (that would keep publishing the institutional
- * combination with every install). Users of this deployment keep their
- * already-applied task/verify/triage flat fields (untouched by the removal)
- * and can re-archive the combination via the existing 「保存为自定义方案」
- * custom-preset mechanism (customPresets config field, per-deployment user
- * data). A stale `presetPlan = 'volcano-coding-plan'` selector degrades
- * gracefully (see the LEGACY_REMOVED_PRESET handler note in src/index.ts).
- * A future public preset for Volcano Engine would only be assessed from a
- * publicly accessible account/provider directory — an open option, not a
- * committed feature.
+ * Registry policy (v0.25.7 user ruling): the built-in registry ships only
+ * presets a public deployment can actually use — entries whose provider and
+ * model combination is generally accessible from the vendors' public API.
+ * Any deployment- or user-specific combination does not belong here: it is
+ * served by the existing custom-preset mechanism (「保存为自定义方案」,
+ * customPresets config field, per-deployment user data) instead. Preset ids
+ * that were removed in the past keep safe no-write degradation via the
+ * LEGACY_REMOVED_PRESET handler in src/index.ts, and already-applied
+ * flat fields are never touched by a registry change. A future preset for
+ * any vendor would only be assessed from a publicly accessible
+ * account/provider directory — an open option, not a committed feature.
  */
 export const VENDOR_PRESETS: VendorPreset[] = [
   {
